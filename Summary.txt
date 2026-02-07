@@ -1,0 +1,455 @@
+Executive Summary
+We propose a React Native (Expo) mobile app MVP for safer walking routes in London. The app finds 3–5 walking route alternatives, scores each on safety using multiple data signals, and visually color-codes route segments by risk. Key features include real-time user location, destination input (address or map pin), multiple route generation via a Directions API, integration of crime data, street lighting, road type, and open business activity as safety signals, and community safety report submissions. An LLM (OpenAI) generates a brief, explainable safety summary for each route. The 12-hour build will focus on core functionality: walking routes, safety scoring (crime + lighting proxy + road type + “open shops” + user reports), basic UI (map with colored routes, route list with safety scores), a simple report form, and an LLM-based insights panel. Non-essentials like advanced UI polish, user auth, and comprehensive datasets are out of scope. We prioritize a low-ops stack (Expo app + public APIs + minimal backend as a service) to move fast. Privacy is addressed by doing analysis on-device and not storing sensitive location data persistently. A clear safety disclaimer (“no guarantee of safety”) will be shown to users
+. The plan below details API/tool choices (with London coverage, costs, rate limits), architecture, data models, scoring formulas, implementation steps with AI prompt examples, testing approach, and risk mitigations.
+API/Tooling Decisions
+Functionality	Selected Tool/API	Rationale & Key Points
+Maps & Routing	Google Maps Platform (Directions API; use via fetch + react-native-maps for display)	Fast integration: Expo-friendly; react-native-maps uses Google Maps on Android and Apple MapKit on iOS with no extra native setup
+. Directions: Google’s Routes API returns up to 4 total walking routes (1 default + 3 alternatives)
+ which meets our “3–5 options” need. Routing data: High-quality coverage in London. Dev speed: Simple HTTP call (no self-hosting). Cost: Essentially free for MVP – first 10k directions calls/month are free under new pricing
+, then ~$5 per 1000 calls
+ (pay-as-you-go). No throttling issues (up to 3k req/min allowed)
+. Alternative Mapbox was considered (also offers walking routes and Map SDK), but it returns only up to 3 routes (default+2 alts)
+ and integration would require adding the Mapbox RN SDK (extra config). Given the 12-hr limit, we choose Google for convenience.
+Current Location	Expo Location (expo-location)	Simplifies permission handling and geolocation in Expo. Provides high-accuracy GPS coordinates on both platforms with one API call. No separate API key required.
+Map Display	React Native Maps (Expo SDK)	Renders interactive maps with markers/polylines. Uses Apple Maps by default on iOS and Google Maps on Android
+. Well-supported, and we can overlay colored polylines for route segments. We’ll draw each route’s polyline in small segments to apply color per risk level (supported by splitting the route into multiple Polyline components)
+.
+Destination Search	Google Places API (Autocomplete & Geocoding)	Allows address/place search for destination input. High coverage in London. We’ll use the Places Autocomplete for a smooth UX and then geocode the selection to coordinates. Cost: Autocomplete and Geocoding have free allowance (10k/month each) and then ~$17 per 1000 (Places) and ~$5 per 1000 (Geocoding)
+. The Places API provides business status (operational/closed) in search results
+, useful for identifying “open” POIs.
+Crime Data (UK)	UK Police Public API (data.police.uk)	Provides street-level crime incidents for England/Wales. Free and open with no API key required
+. Supports querying crimes within a radius or polygon area
+ – we’ll use a buffered route polygon to get all crimes along each route in one call. Rate limit is very generous (15 requests/sec, bursts to 30)
+, which we won’t exceed. Data is updated monthly and includes crime category and approximate location. This will serve as our primary safety signal (recent crime density along the route).
+Lighting & Road Data	OpenStreetMap (via Overpass API)	OSM contains tags for road type and lighting. We plan to query OSM for route segments: e.g., if a segment runs on a residential street vs. main road, or if a footpath is unlit. The OSM key lit indicates presence of street lighting on ways
+. We’ll use the Overpass API to fetch features within the route corridor (e.g., highway segments with lit=no, or footpaths). Feasibility: Overpass is free; usage guidelines suggest staying under ~10k queries/day
+ which is fine for MVP. We must parse OSM responses (XML/JSON) to extract attributes. Given time constraints, if implementing Overpass fully is heavy, we’ll approximate lighting/road type by other means (e.g., assume major roads are lit). This is an area for immediate post-MVP improvement.
+POIs / “Open shops”	Google Places API (Nearby Search) and/or OSM Overpass	To gauge activity along the route, we check for businesses open along the way. Google Places: can search for places along the route’s vicinity and return if they are open (via opening_hours.open_now in details). However, direct “open now” filtering was deprecated in the legacy API
+; the new Places API returns each place’s business hours or status, which we can filter in our code
+. We’ll likely sample a few points on the route and do a Nearby Search for convenience stores, cafes, etc. Cost: Places API calls count toward the quota mentioned (10k free monthly). Alternative: OSM + Overpass can list amenities/shops and their opening_hours tags, but determining “open now” would require parsing those hours against current time, which is complex for 12 hours. Given unlimited API budget, we’ll use Google’s data for now due to ease of integration and up-to-date info. (Foursquare’s Places API is another option with ~10k free calls
+ and an open_now filter, but using Google keeps our stack simpler.)
+User Reports Backend	Firebase Firestore (NoSQL DB)	We need a quick, serverless backend to store user-submitted safety reports (with location and text). Firebase is ideal: it requires minimal setup and has generous free limits (e.g. 20k writes/day)
+. We’ll use the client SDK to write/read a reports collection (each entry: type, description, lat, lng, timestamp, etc.). Firestore’s Spark plan covers our MVP usage (and Firebase Auth could be added later if needed for login). Supabase (Postgres) was considered for its geo querying, but Firebase’s offline-friendly SDK and zero-ops approach fit the 12-hr timeline better. Basic moderation (like removing a report or filtering content) can be done via the Firebase Console for now.
+LLM for Insights	OpenAI API (GPT-3.5)	To generate route safety explanations, we use OpenAI’s GPT-3.5-turbo model via its API. It’s developer-friendly (REST JSON), with low cost (only ~$0.002 per 1k tokens)
+ for short prompts/responses – effectively pennies per hundred route summaries. We will prompt the model with route-specific data (e.g., “Route A has 3 unlit segments and 5 recent crimes…”) and ask for a concise JSON with fields like summary and warnings. The model’s output will be verified in-app (we’ll constrain it to use provided facts, avoiding any sensitive or biased content). Note: The OpenAI key will be kept out of the app bundle (during MVP we might store it in a cloud function or secure store).
+Geospatial Utils	Turf.js (JavaScript library)	Turf provides convenient geospatial calculations on the client. We’ll use it to decode polylines, compute distances, and create a buffer polygon around a route. For example, we can generate a 50m radius corridor polygon with turf.buffer(line, 0.05, {units: 'kilometers'})
+ to query crime and OSM data within that area. Turf will also help in segmenting the route (e.g., sampling points along the line at regular intervals). This avoids writing complex math from scratch under time pressure.
+Dev Framework	Expo (React Native) + TypeScript	Expo accelerates setup (one command to start) and handles build/config for both iOS and Android. It supports fast testing on device/emulator and provides modules for location, etc. Given 12 hours, we prefer Expo managed workflow over bare React Native to skip native configuration hassles. TypeScript will be used for reliability and clarity in API responses and data models.
+Architecture Diagram (ASCII)
+[Mobile App (React Native: Expo)] 
+  |--(GPS)--> Device location (lat,lng via Expo) 
+  |--(HTTP)--> Google Directions API (walking, alternatives=true):contentReference[oaicite:24]{index=24}
+  |            ↳ returns polyline routes (3-5) + ETA/distance.
+  |--(compute)--> Turf: decode polyline, segment route (50m chunks).
+  |--(HTTP)--> Police UK API (crime by polygon):contentReference[oaicite:25]{index=25}
+  |            ↳ returns crime incidents near route.
+  |--(HTTP)--> Overpass API (OSM) 
+  |            ↳ returns road/lighting POIs in route buffer.
+  |--(HTTP)--> Google Places API (nearby search along route)
+  |            ↳ returns count of open shops/venues.
+  |--(compute)--> Safety Scoring Module (combine signals per segment & route).
+  |--(HTTP)--> OpenAI API (GPT) 
+  |            ↳ returns JSON summary of route safety.
+  |--(UI render)--> Map View (react-native-maps):
+  |                 - current location marker
+  |                 - color-coded route polylines by segment risk
+  |                 - route list (ETA + safety score)
+  |                 - route safety summary (LLM output)
+  |                 - “Report issue” button.
+  |--(User action: submit report)--> Firebase Firestore 
+               ↳ stores report (with user’s location, type, note, timestamp).
+  |--(Firestore sync)--> App can fetch recent reports near route (to factor into scoring).
+Data Model
+Route: { routeId: string (if needed), origin: {lat, lng}, destination: {lat, lng, name}, distance: number (m), duration: number (sec), segments: Segment[], safetyScore: number (0–100), crimeCountTotal: number, unlitSegments: number, openShopsCount: number, userReportsCount: number, summaryText: string (from LLM) }
+(Note: We might not store all this persistently in MVP; this is an in-memory model to pass to components and LLM.)
+Segment: { index: number, startCoord: {lat, lng}, endCoord: {lat, lng}, length: number (m), crimeCount: number, crimeRisk: number (0–1), isLit: boolean (or lightingRisk: 0 or 1), roadType: string (e.g., "primary" or "residential"), roadRisk: number, openPlacesNearby: number, activityRisk: number, userReports: number, reportRisk: number, riskScore: number (0–1) }
+(Each ~50–100m segment of a route holds the localized risk factors. E.g., if isLit=false => lightingRisk=1 for that segment.)
+UserReport: { reportId: string, type: string (category, e.g. "Harassment", "Poor Lighting", "Other"), description: string, latitude: number, longitude: number, timestamp: Date, userId: string (if logged in, not in MVP), status: string (e.g., "active" or "removed" if moderated) }.
+(User reports are stored in Firestore. In MVP, all reports are public and immediately active. No complex threading or comments.)
+User (future/optional): For MVP, users are anonymous (or identified by device ID). If we add auth later, a User model would include an ID and possibly reputation to prevent spam.
+SafetyScoreWeights (config): { wCrime: number, wLighting: number, wRoad: number, wActivity: number, wReports: number } – defaults used in scoring formula. Stored as constants or in remote config for easy tuning.
+Safety Scoring Model
+Segment Risk Calculation: We compute a risk score per segment (higher = more dangerous) based on a weighted sum of normalized factors: 
+∗
+∗
+r
+i
+s
+k
+_
+s
+e
+g
+m
+e
+n
+t
+∗
+∗
+=
+w
+c
+r
+i
+m
+e
+∗
+(
+c
+r
+i
+m
+e
+R
+i
+s
+k
+)
++
+w
+l
+i
+g
+h
+t
+∗
+(
+l
+i
+g
+h
+t
+i
+n
+g
+R
+i
+s
+k
+)
++
+w
+r
+o
+a
+d
+∗
+(
+r
+o
+a
+d
+R
+i
+s
+k
+)
++
+w
+a
+c
+t
+i
+v
+i
+t
+y
+∗
+(
+a
+c
+t
+i
+v
+i
+t
+y
+R
+i
+s
+k
+)
++
+w
+r
+e
+p
+o
+r
+t
+s
+∗
+(
+r
+e
+p
+o
+r
+t
+R
+i
+s
+k
+)
+.
+∗∗risk_segment∗∗=w 
+crime
+​
+ ∗(crimeRisk)+w 
+light
+​
+ ∗(lightingRisk)+w 
+road
+​
+ ∗(roadRisk)+w 
+activity
+​
+ ∗(activityRisk)+w 
+reports
+​
+ ∗(reportRisk). Each component is scaled 0–1:
+crimeRisk: 0 if 0 crimes near this segment, up to 1 for high crime count. (E.g., we normalize by considering >5 incidents in ~50m as max risk 1.0, 1 incident might be ~0.2, etc, or use min-max from all route segments.)
+lightingRisk: 1 if segment is unlit and it’s nighttime (after dusk/before dawn), else 0
+. (In daytime, we set lightingRisk=0 for all segments since darkness isn’t a factor when the sun is up.)
+roadRisk: 1 for isolated footpaths/alleys, 0 for main roads with good visibility. We can map OSM road types: e.g., "primary" road = 0 (safe, well-trafficked), "residential" = 0.5, "footway/alley" = 1.0 risk. (If OSM data not fully integrated, we approximate: if Google route step has no road name (implying a footpath) then treat as high risk.)
+activityRisk: 1 if no open businesses or foot traffic likely; 0 if there are open shops or it’s a busy area. We will count open POIs within ~50m of the segment. If ≥1 open venue at present, set activityRisk low (e.g., 0.0–0.2), if none, set to 1. (At 2am, likely higher activityRisk for all segments due to closed shops.)
+reportRisk: 1 if there are recent user reports indicating danger on that segment, else 0. (E.g., if any active report within ~50m tagged “unsafe” in last 24h, we elevate that segment’s risk significantly.)
+Weights (initial): For MVP we use equal-ish weights since we lack data to tune precisely: e.g., w_crime=0.30, w_light=0.20, w_road=0.20, w_activity=0.15, w_reports=0.15. This means recent crime and lack of lighting are the strongest factors by default. We’ll refine these based on user feedback or known data (weights can be adjusted easily in one config place). Segment to Route Score: Once each segment has a risk score (0–1), we compute the route’s overall safety score. We define route risk as a length-weighted average of segment risks: 
+r
+i
+s
+k
+_
+r
+o
+u
+t
+e
+=
+∑
+(
+r
+i
+s
+k
+_
+s
+e
+g
+m
+e
+n
+t
+i
+∗
+s
+e
+g
+m
+e
+n
+t
+L
+e
+n
+g
+t
+h
+i
+)
+∑
+s
+e
+g
+m
+e
+n
+t
+L
+e
+n
+g
+t
+h
+i
+.
+risk_route= 
+∑segmentLength 
+i
+​
+ 
+∑(risk_segment 
+i
+​
+ ∗segmentLength 
+i
+​
+ )
+​
+ . Then convert to a user-friendly Safety Score = (1 - risk_route) * 100, to get 0–100 (where 100 is perfectly safe). For example, if a route’s average risk is 0.3, its safety score = 70. We’ll label routes with scores and possibly qualitative levels (e.g., >80 “Mostly Safe”, 50–80 “Some Risk”, <50 “Higher Risk”). Importantly, we will also surface if even one short segment is very risky (e.g., a dark alley): the segment will be colored red on the map and the LLM summary will warn about it, even if the overall score is moderated by other safe parts. Normalization & Tuning: We are normalizing each factor to avoid any one metric dominating due to scale differences. As more data comes in, we can adjust scaling – e.g., if crime counts in London are typically 0–3 per segment at worst, we set 3= risk1.0. We’ll gather a few example routes to sanity-check the scoring and adjust weights. Future iterations (post-MVP) may use a more sophisticated model (e.g., logistic regression or ML on historical incident outcomes) to calibrate these weights, but a weighted sum is transparent and explainable for now. The LLM explanations will be checked to ensure they align with the numeric scoring (to avoid user confusion).
+Build Plan (12-hour Schedule with AI Prompts)
+Hour 0-1: Project Setup
+Initialize Expo project: expo init safe-walk-app -t tabs (or blank). Install core packages: expo install react-native-maps expo-location firebase (and if needed: yarn add @react-native-firebase/app @react-native-firebase/firestore or use web SDK for Firestore). Also install any lightweight polyline decoding or turf: yarn add @turf/turf polyline.
+Configure Google Maps API keys: in app.json (Expo config) add android.config.googleMaps.apiKey (for Android Maps SDK)
+. For iOS, the default Apple Maps will be fine for dev (no key needed). Also secure an OpenAI API key and a Police API doesn’t need one.
+Verify app runs on device/simulator. Commit a baseline.
+AI Prompt (for code generation): “Set up an Expo React Native app with TypeScript. Install react-native-maps and expo-location. Write a basic App.tsx that asks for location permission and logs the current location coordinates.”
+Hour 1-2: Location & Map UI
+Implement Onboarding & Permissions: On first launch, explain the safety concept briefly (could be a simple screen or alert) and request location permission via ExpoLocation.requestForegroundPermissionsAsync(). Show a disclaimer that we use location only for routing and do not guarantee safety
+.
+Once permission granted, fetch current position via Location.getCurrentPositionAsync(). Save it in state (this is the origin for routes).
+Set up the Map screen: Use <MapView> covering the screen
+. Center it on user’s location. Add a <Marker> for user location.
+Add a search input for destination. For MVP, simplest is a plain TextInput and a “Go” button. (If time permits, integrate Google Places Autocomplete component for a better experience; if it proves too time-consuming, we fallback to using Google’s Geocoding API on an entered address string.) The user can also long-press on the map to drop a destination pin (as a quick alternative to typing).
+AI Prompt: “Implement a React Native Maps view centered on the user’s current location (latitude, longitude stored in state). Overlay a Marker at that location. Below the map, add a TextInput for destination address and a Button to trigger route fetch.”
+Hour 2-3: Destination Geocoding & Route Fetching
+When user sets a destination (either selected from autocomplete or via map pin), obtain its coordinates. If using Places Autocomplete, we get coords directly; if using a text input, call Google Geocoding API (simple fetch to maps.googleapis.com/maps/api/geocode/json?address=...). Parse out lat/lng.
+Call Google Directions API (the new v2 Routes endpoint) with origin and destination. We’ll use travelMode=’WALK’ and computeAlternativeRoutes=true
+. The API returns a JSON with up to 4 routes. Alternatively, use legacy Directions API via GET (e.g., directions/json?origin=lat,lng&destination=lat,lng&mode=walking&alternatives=true). Parse the response to extract: polyline points for each route, distance, duration. We’ll decode each overview_polyline into an array of lat-lng coordinates (using a small polyline utility or implement manually).
+Store routes in state (an array of Route objects). For now, no safety info yet – we’ll add that next. Render the routes on the map with basic styling to ensure we have multiple routes visible. Perhaps color them differently (e.g., all in blue or grey) initially, and maybe slightly transparent for alt routes. The user can tap a route polyline to select it (or we’ll default select the first).
+AI Prompt: “Using fetch, call the Google Directions API for walking directions from origin (latA,lngA) to destination (latB,lngB) with alternatives. Write a function to parse the JSON and return an array of routes, each with an array of coordinate [lat,lng] points (decoded from polyline) and the total distance and duration.”
+Hour 3-4: Safety Data Fetch (Crime & OSM)
+For each route obtained, prepare to fetch safety-related data. Use Turf to create a polygon around the route: take the route’s coordinate array, make a LineString GeoJSON, and turf.buffer() it by ~50–100m. Convert that polygon to the format needed by Police API (poly=lat1,lng1:lat2,lng2:...). Ensure it’s not too many points (the API GET limit is 4096 chars; if polygon is very detailed, we can reduce points or use POST)
+.
+Call Police API: e.g., GET https://data.police.uk/api/crimes-street/all-crime?poly=.... This returns a list of crime incidents (with lat, lng, category, month). This might include crimes slightly outside our buffer due to how they anonymize, but it’s fine. Parse the JSON into an array of points or categories. We might also directly call the radius endpoint multiple times (e.g., every 500m along route) as an alternative if the polygon approach is problematic – but polygon is preferred to get all in one call.
+Process crimes for segments: For each route’s segments (we will segment the route next hour), we can assign crimes by nearest segment or simply use density along entire route as one factor for now. However, for more granularity: we can later split crimes by segment (e.g., for each crime point, find the closest route coordinate or segment index and increment a count).
+Call Overpass API (OSM): Construct a query focusing on the route area. For MVP, we might do two separate queries for simplicity: (a) street lighting – query ways in the area with lit=no (or highway=footway without lit=yes), and (b) road types – query ways with tags like highway=* to infer major vs minor. Overpass QL example for lighting: way(poly:"lat lng lat lng ...")[highway][!lit]; out tags; to find unlit highways in polygon. Or query all highways and check tags in code. Given 12h, we might simplify: just query all highways in the polygon: way(poly:“...")[highway]; out tags;. Parse the result, build a map of way id -> highway type + lit tag. Then when segmenting route, we can attempt to match each segment to a road (perhaps by nearest OSM node or name matching). This is complex, so if time is short, we may skip precise matching and instead rely on Google step info: e.g., if a Google Directions step has maneuver “onto footpath” or has no road name, mark segment as likely unlit.
+Call Google Places (Nearby): For each route, pick a few evenly spaced points (e.g., every 500m or each segment) and call Places NearbySearch with a radius (e.g., 100m) for type “store” or “restaurant”, with business_status=OPERATIONAL. Count how many results have business_status: "OPERATIONAL" (meaning not permanently closed) and maybe check opening_hours.open_now=true in the response if available. Alternatively, use the Places Text Search with keyword filter (like “open now”) – but likely we will do multiple small nearby searches. To minimize calls, perhaps do 3 calls per route (start, mid, end). This is approximate but should indicate whether there are open establishments along the route. We’ll sum these or produce an “open shop count” per route (and possibly roughly localize per segment if one segment has a cluster). If out of time, we might omit Places and assume main roads have shops open in evenings. But ideally, include it since user specifically wanted “open shops” signal.
+AI Prompt: “Use the data.police.uk API to get crimes within a polygon. Given a list of lat/lng for the route polyline, generate a polygon string for the API (50m buffer) and fetch the crime data. Provide a function that returns count of crimes and possibly a list of crime points.”
+AI Prompt: “Construct an Overpass API query to retrieve OSM ways within a given polygon. For example, get all highways in the area. Show how to parse the XML/JSON to find if they have ‘lit’ tag and the highway classification.”
+Hour 4-5: Route Segmentation & Scoring Computation
+Now that we can retrieve external data, implement the segmentation of each route polyline. Convert each route’s coordinate array into ~50–100m segments: We can iterate through the polyline points cumulatively, creating a new segment whenever ~60m distance is accumulated (to ensure uniform segment lengths). Use Turf’s distance() to measure between points. Alternatively, use each polyline leg (point to next point) as a segment – but those might be variable length; better to subdivide long stretches. We’ll create Segment objects for each piece.
+Attach data to segments:
+Crime: Using crime points fetched, assign a crime count to each segment (e.g., count incidents whose lat,lng fall within ~30m of that segment’s centerline). This could be done by checking distance from crime point to each segment (since number of segments is not huge, a simple loop is fine). Compute segment.crimeRisk = min(1, count/ someThreshold).
+Lighting: If we have OSM data or heuristic, mark segment.isLit. If OSM indicated this road is lit or if it’s a primary/secondary road assume lit; if it’s a footpath or explicitly unlit in OSM, mark not lit. At night, lightingRisk = 1 if unlit, else 0
+. By day, lightingRisk = 0 for all.
+Road type risk: If segment corresponds to a certain highway type (e.g., from OSM or by inferring from step instructions), set roadRisk (e.g., motorway/trunk (though not applicable to walking) = 0, primary = 0.1, secondary = 0.2, residential = 0.5, service alley = 0.7, footway = 1.0).
+Activity (shops) risk: If our Places data found any open venue near this segment’s coordinates, set activityRisk lower. We could also simply take the route’s total open count and distribute it: e.g., if a segment is in a commercial area (maybe identified by road name like “High Street” or by having a POI in proximity) then activityRisk = 0. Otherwise 1.
+User reports: We will query Firestore for any reports within, say, 50m of the route (we can do this by pulling all reports from the last X days and filtering client-side by distance, since volume will be low in MVP). For each segment, if a report’s location lies near it, set reportRisk = 1 (or higher if multiple). Optionally weight by recency (reports in last day matter more than older).
+With all segment factors, apply the weighted formula to compute each segment.riskScore. Then compute route’s overall safetyScore as described. Attach that to the Route object. Also, determine a color for each segment for map display: for simplicity, use green (safe), yellow (moderate), red (high risk) – e.g., if riskScore <0.3 (safe) => green, 0.3–0.6 => yellow, >0.6 => red. These thresholds can be adjusted after a few tests.
+AI Prompt: “Write a function to split a polyline (array of lat-lng) into ~50m segments. Return an array of segment objects with start/end coordinates. Each segment should calculate its length in meters.”
+AI Prompt: “Given a list of crime incident points (lat,lng), and a list of route segments (each with start/end coords), assign each segment a crimeCount (number of incidents within 30m). Provide code to compute this.”
+AI Prompt: “Implement the safety score calculation for a segment: inputs are {crimeCount, isLit, roadType, hasOpenShop, hasReport}. Use weights (e.g., 0.3,0.2,0.2,0.15,0.15) to compute a risk score 0-1. Then compute a route’s overall safety score (0-100) from its segments.”
+Hour 5-6: Map Visualization of Safe Routes
+Update the Map display to show colored segments. Instead of drawing one polyline per route, we now draw one polyline per segment with its specific color. This means iterating through route.segments and rendering a <Polyline coordinates={[start,end]} strokeColor={color} strokeWidth={3} /> for each. This effectively shows a multi-colored line. We do this for the selected route in full color. For alternative routes that are not selected, we might show them in gray or thin outline for context. Or we can show all with colors, but that may be confusing; better to emphasize one route at a time for detailed coloring. Perhaps display non-selected routes as single-color (e.g., blue or gray) until the user taps one.
+Add an interactive way to select an alternate route: e.g., tapping on a route polyline sets it as selected, or provide a small list UI. We’ll implement a Route List/Selector at the bottom: a scrollable row or list with each route’s info ( “Route 1: 12 min, 0.8 mi, Score 72” etc ). Selecting an item highlights that route on the map (we can hide others or deemphasize them). This way, the user can compare and choose.
+Ensure that the safety score is shown in the UI (e.g., a badge or colored text). Possibly use a shield icon with green/yellow/red background. Include travel time and distance from the Directions data for user convenience.
+AI Prompt: “Render multiple polylines on a React Native MapView. Each segment of the selected route should be a separate Polyline with its own strokeColor. Given a selectedRoute state, map over selectedRoute.segments to render colored polylines (e.g., red, yellow, green). Render other routes’ polylines in gray with lower opacity.”
+AI Prompt: “Create a RouteOption component in React Native that displays a route’s duration, distance, and safety score. Use green/yellow/red styling based on the score. Implement a FlatList to show all route options and handle onPress to select a route.”
+Hour 6-7: LLM Route Explanation
+Now integrate the OpenAI API to generate an explanation for the selected route’s safety. Construct a prompt that includes key facts: e.g., “Route A: 2.4 km, ~30 min. Safety Score 72. Notable factors: 1 segment with no streetlights, low crime history (2 incidents in past month), goes through busy area with shops open late. Another route B is safer/slower... [We might include comparative info if we want the AI to comment on alternatives.] Provide a short summary for the user explaining the safety of this route and any warnings, in 2-3 sentences. Respond in JSON with fields 'summary' and 'warnings'.”
+We will call openai.createChatCompletion (or fetch POST to the API) with this prompt and get a response. Parse the JSON. For MVP, we keep it simple and do this for the selected route only (trigger when route selected or on-demand via a “Why?” button to avoid delaying UI). Since the user specifically wants the app to “explain why a route is scored the way it is,” this LLM output will be shown in a panel. We can have an expandable bottom sheet that reveals “Route Safety Insights”. This might say, e.g., “Summary: This route is moderately safe. It stays on main roads that are well-lit except for a short alley near the end. Warnings: Be cautious in the alley behind the station – it’s dark at night and has lower foot traffic
+.”
+Important: We instruct the LLM not to overcommit or guarantee safety, just state facts and maybe suggestions (“prefer this route at night due to more activity”). The prompt will emphasize using the data provided and avoiding any subjective or biased language about neighborhoods or demographics. We will double-check its output during testing for compliance. If needed, add a clause like “Do not mention any sensitive attributes or guarantee safety. Do not introduce new information beyond the provided data.”
+Basic error handling: if the LLM API fails (no response or error due to rate limiting, etc.), we will fallback to a simple rule-based message like “Route has some potential risks (dark segments or recent incidents). Stay alert.” so the user isn’t left with nothing.
+AI Prompt: “Given: route length, duration, safety score, and details (e.g., 2 crimes on segment 3, segment 5 is unlit, etc.), craft a system prompt for GPT-3.5 to output a JSON with a 'summary' and 'warnings'. The tone should be cautious, factual, and non-biased. Also include a user prompt example.”
+AI Prompt (for integration): “Use fetch to call OpenAI’s chat completion API. Model: gpt-3.5-turbo. Prompt it with route safety data and get a response. Parse the JSON fields and display the summary and warnings in the app’s UI (e.g., in a Text component).”
+Hour 7-8: Report Submission Feature
+Implement a “Report a Safety Issue” button on the main screen (perhaps floating on the map or in a menu). When tapped, it opens a modal or new screen for submitting a report. The form contains: a dropdown or set of buttons for report type (e.g., “Suspicious activity”, “Area not lit”, “Harassment”, “Other”), a text field for additional details, and a submit button. We use the device’s current location for the report (the assumption is user reports what’s happening around them at that moment). If we wanted to allow dropping a pin for location, that’s extra UI we might skip for MVP. A timestamp is recorded automatically.
+On submit, write the report to Firestore: e.g., firestore.collection("reports").add({...}). Ensure Firestore is initialized with our config (likely using Firebase web SDK in Expo or the @react-native-firebase if configured). Without auth, all writes are public; we should set Firestore rules to allow writes with some basic validation (maybe not in 12h, but at least note it).
+After submission, maybe show a thank-you and incorporate that report into our app state (so it can immediately be considered in scoring if the user is on a route). We won’t implement heavy moderation for MVP, but we’ll include a rate-limit: e.g., client-side prevent more than 1 report per minute per device to reduce spam, and perhaps limit description length.
+Also implement fetching reports: When computing route safety, query Firestore for reports within a certain bounding box of the route and within recent times (e.g., last 7 days). Firestore doesn’t support geo queries natively, but we can fetch all reports in the city (if volume small) or do a crude range query on lat and lng if we know the route bounds. Given MVP scope and low usage, pulling all recent London reports (which might be just those that have been submitted via our app) and filtering in JS by distance is fine. We integrate any such report into the scoring as above (reportRisk).
+AI Prompt: “Create a React Native modal with a form for a safety report. Fields: type (use a Picker with options ‘Dark area’, ‘Suspicious activity’, etc.), description (TextInput). On submit, get current location from Expo Location and write to Firestore (use addDoc from firestore). Validate that a user can’t submit more than one report in 60 seconds.”
+AI Prompt: “Using Firestore JS SDK, write a function to query all reports from the past 7 days (you can store timestamp in each report). Then filter those within X meters of a given route (you can approximate by bounding box or distance function). Return the count or details of nearby reports.”
+Hour 8-9: Testing & Fixes
+At this point, do a run-through test on both iOS and Android (via simulators or a physical device with Expo Go). Test scenarios:
+Enter a nearby destination (within a short distance) to see if multiple routes appear. Check map rendering of colored segments – ensure polyline splitting works and colors make sense.
+Test the safety score outputs for sanity (e.g., if you choose a route through a park vs a route along streets, see that the park route gets a lower score due to “unlit” and “no shops”). If something seems off (like all routes scoring the same), adjust weighting or bugfix data integration.
+Trigger the OpenAI summary and read it – verify it mentions the key points and is not giving any unsafe advice or hallucinating. If needed, adjust the prompt.
+Submit a test report and then plan a route near that location to see if the app picks it up (this might be hard to simulate exactly, but at least verify the report is saved in Firestore).
+Try edge cases: no internet (the app should handle errors from API calls gracefully – perhaps show a message “Network error, unable to fetch routes” and not crash). Permissions denied (if user denies location, we should handle by either asking again or instructing them to enable it – for MVP a simple alert and default to a fallback location like central London could be done).
+Fix any crashes or UI layout issues observed. For example, ensure the map doesn’t get covered by other views, ensure the list of routes is scrollable if many routes, etc.
+AI Prompt (debugging): “The polylines on the map aren’t showing. What could be wrong?” (We’d look if the coordinates are in correct format and if we set proper region).
+AI Prompt (testing automation): “Write a small Jest test for the computeSafetyScore(route) function that feeds in a crafted route with known segment risks and expects the correct overall score.” (We likely won’t actually set up Jest in 12h, but noting this as a possible prompt if time allows unit testing core logic.)
+Hour 9-10: UI Polish & UX Improvements
+Refine UI elements: e.g., color-code the route list items themselves (perhaps a colored dot or icon next to each with green/yellow/red). Add a legend on the map explaining the colors (e.g., a small overlay: “Route segment safety: 🟢 Safer, 🟡 Caution, 🔴 Higher risk”). Keep it subtle but available (maybe a small “?” info button that toggles legend visibility).
+Add an in-app disclaimer screen or modal (since safety is sensitive): e.g., in the About or as a one-time popup: “This app provides safety-related information but cannot guarantee your safety. Stay aware of your surroundings and take care while traveling
+.” Also mention data sources and that user location is not shared except for retrieving route data. This is important legally and ethically.
+Improve error handling: e.g., if Police API returns 503 (too large area)
+, we can catch that and retry with smaller queries (split route). Or if any API fails, ensure the app still shows routes (maybe without some safety overlays) rather than failing completely. Perhaps default to showing crime data only if available and skipping if not.
+If time, implement caching of results: e.g., store last fetched crime results in a global cache keyed by route endpoints, so if user repeatedly toggles between two destinations we don’t re-fetch. Or cache geocoding results for places the user searched. This is micro-optimization, but could help if user is re-evaluating same route multiple times. Firestore could also cache reports locally via its SDK; enable offline persistence if easy.
+AI Prompt: “Add a legend on the map to indicate what the polyline colors mean (safe/caution/danger). Use a small View with colored dots and labels, positioned at the bottom-right corner of the map.”
+AI Prompt: “Show an Alert in React Native on first launch with a safety disclaimer message. Include an ‘I Understand’ button to dismiss.”
+Hour 10-11: Final Testing and Pseudo-Deployment
+Conduct a thorough test with a realistic scenario: e.g., origin: “King’s Cross Station”, destination: “Camden Market” at night. See if it offers a route along main roads (likely well-lit) vs a shortcut along a canal (darker). Verify the scoring reflects that (can manually anticipate: canal route should be flagged darker). If not, adjust logic (maybe our lighting detection missed that – possibly manually mark paths near water as unlit if needed, but that’s too specific; instead, maybe the OSM footway would show no lighting).
+Test some edge cases: long routes (across the city) – the Police API polygon might have too many crimes (>10k) and fail. If a route is very long, we might instead query crimes in chunks or limit to recent incidents. Document this limitation in Next Steps rather than solving fully now.
+Make sure the app runs in production mode (Expo build) without debug flags, and that all keys (Google, OpenAI) are properly configured. We should put API keys in a .env (and use expo’s app.config.js to inject them, or use directly in app.json for Google as required). Ensure not to leak keys in any logs.
+If time and available, create basic unit tests for the scoring function and segmenter using Jest or simple assertion, to validate weight logic. And run through a quick manual test script (written below).
+AI Prompt: “List test cases for the SafeRoute app: e.g., 1) Daytime short route, 2) Night route through park, 3) Submit report and ensure it shows on route, etc.” (This is to ensure we thought of various scenarios.)
+Hour 11-12: Documentation & Next Steps Planning
+Write a concise README or in-app help summarizing functionality and data privacy: e.g., note that location stays on device except for calls to third-party APIs, and that those calls (Google, Police API) are over HTTPS. Note that the app is an MVP and data like crime is not real-time. Encourage feedback. This documentation will help if another dev picks up after 12h.
+Outline immediate next steps (we’ll also list them in “Next Steps” section): e.g., incorporate more granular lighting data via OSM, improve the destination search UI, integrate user authentication if needed, etc.
+Do a final code cleanup (remove any debug logs, ensure types are well-defined, comments for clarity especially around our scoring so future devs or ourselves can understand).
+Final run through the app to ensure nothing broke during last changes.
+AI Prompt: “Generate a short README for the project describing the problem, solution, how to run the app, and current limitations.”
+UI/UX Screens & Flow
+Onboarding & Permissions: On first open, user sees a brief welcome (“Find safer walking routes in London”) and a disclaimer that this app assists but does not guarantee safety. User is prompted to allow location access. If denied, we explain we need location to show routes from your position; the user can still manually set a start point if they refuse (not fully implemented in MVP – in MVP we might just insist on location or exit).
+Main Map Screen: After permission, the main screen is a map centered on the user’s location (blue dot marker). At the top, a search bar (or address input field) lets the user enter a destination. Alternatively, they can long-press on the map to drop a destination pin (we’ll then reverse-geocode for display or just use coordinates). We may also support selecting a suggestion from autocomplete if implemented. Once a destination is set, the app automatically fetches routes and zooms/frames them on the map.
+Route Alternatives List: At the bottom, a panel shows each route option in a compact card: e.g., “Route 1 – 1.2 mi, 24 min – Safety 85/100 (Green)”. The card might have an icon or colored bar to reflect safety (green/yellow/red). The user can tap a card to select that route, which will highlight it on the map (e.g., increase polyline width and show segment colors). The other routes might dim or show as dashed lines. If the user taps a different card, the map updates to highlight that one.
+Route Detail (Map & Info): When a route is selected, the map shows that route in segments colored from green to red. We might also show small caution icons on the map at segments that are high risk (for example, a “!” icon at a red segment – not required, but could be useful). Above the route cards (or on the selected card), a button or info line says “Why is this route scored this way?” – tapping it opens the Safety Insights panel.
+Safety Insights Panel: This can be a bottom sheet or modal that presents the OpenAI-generated summary. For example:
+“Route 1 Safety Insights”
+Summary: “This route is mostly along well-lit main roads with shops (especially around Oxford St.), making it generally safe. It has one short detour through a quiet residential street.”
+Warnings: “Be cautious on the residential segment at night – lighting is limited there. Otherwise, expect moderate foot traffic even in the evening.”
+This panel also reiterates the disclaimer (“Always stay alert – data and scores are for guidance, not guarantees.”). The user can close this panel to return to the map.
+User Report Flow: On the main screen (perhaps as a floating action button with an alert icon), user can tap “Report an Issue”. This opens a form screen: Title “Report a safety issue”. It shows current location (maybe as address if we reverse geocode it, or just lat/lng), a dropdown for type (with icons: e.g., 🚨 for incident, 💡 for lighting issue, etc.), and a text box for details (“What happened or what’s the hazard?”). There’s a submit button. After submitting, we simply thank the user (“Thank you. Your report helps others.”) and return to map. (We won’t display reports on the map in MVP to avoid clutter, but this could be a next step – e.g., small pins or heatmap of reports.)
+Other UI elements: Possibly a settings or info button (maybe top-right) that shows an “About” dialog with sources (Police data, OSM, etc.) and an option to contact developers or view privacy policy. In MVP, this can be just a simple Alert listing these.
+The overall flow: Open app → allow location → enter destination → view multiple routes and their safety → pick one route → read safety tips → start journey (externally we’re not doing navigation turn-by-turn in MVP, but user can keep the app open as they walk). During the walk, if they encounter an issue, they can quickly submit a report.
+Key Engineering Details
+Route Segmentation (50–100m): We ensure each route polyline is cut into roughly uniform lengths so that safety attributes (crime, lighting, etc.) can be more granular. Using Turf, we can either iterate along the line and interpolate points at fixed distances or leverage a function like turf.segment if available. We choose ~50m as a segment length target: small enough to catch local changes (e.g., one block might be darker), but not so small as to overload the map with too many segments. If a route is 2 km, 50m segments yield ~40 segments, which is manageable for drawing and computation. We will implement a function segmentRoute(polylineCoords, 50) that returns an array of segments. Each segment knows its start/end coordinates (which we might later use to correlate with specific road or area). This segmentation also helps when matching with crime data: instead of just overall counts, we can mark specific segments as having incidents.
+Corridor Buffer for Data Queries: To efficiently query external data (crime, OSM POIs) for an entire route, we create a corridor polygon along the route. The buffer distance (~50m each side) is a trade-off: wide enough to include relevant nearby features (e.g., a crime on a parallel street 20m away might still affect perception of safety), but narrow enough to exclude unrelated areas. We use Turf’s buffer (which creates a somewhat detailed polygon geometry) and simplify it if needed. That polygon goes into Police API’s poly parameter
+. For OSM Overpass, we’ll convert the polygon to a bounding box or use a poly query as well. One concern: if a route is long, the polygon string could be long. The Police API can handle up to ~4094 chars in GET
+. If our polygon is more complex, we’ll switch to POST (the API supports POST with same params). Also, for very long routes, the crime count could be >10k, which the API won’t return (it gives 503)
+; in such cases, we may need to break the route into sections (e.g., if route > ~5km, split into two polygon queries). For MVP, we assume urban routes typically < 5km, but we document this as a limitation.
+Data Caching Strategy: To avoid hitting rate limits or latencies:
+Crime data: The Police API is free and fairly fast, but if user requests routes repeatedly in same area, we can cache the last polygon query results (key by a hash of poly coords). We could also pre-fetch crime data for the user’s vicinity when app loads (e.g., 1-mile radius) and reuse it for any short routes inside that area. But to keep it simple, we do on-demand fetch per route.
+OSM Overpass: We must be careful not to flood it with queries. Overpass has no fixed rate limit but heavy use can get 429 or slow responses
+. We will only query it for the selected route, not all alternatives, to minimize calls. Also, we might combine queries (get roads and amenities in one query) to reduce calls. Caching: we could store the result per route if user toggles selection back and forth. Since our routes are small and user likely won’t fetch dozens of routes in one session, this is acceptable.
+Google APIs: Directions and Places have usage quotas but our usage is low. Still, we avoid repeated calls: e.g., when the user selects a different route alternative, we already have all routes from the initial Directions response, so we won’t call Directions API again (just reuse data). For Places, if we called for route A and then route B which overlaps a lot with A, we might be double querying the same area. We won’t optimize that in MVP given time, but note it for later (e.g., could cache open places by area or just not double-call if done recently).
+OpenAI: Each route explanation call costs a bit of time (maybe 1-2 seconds). We’ll call it only on user request or when route selected, not for all routes automatically (to save time and cost). If user switches selection, we can cache the last explanation so we don’t call the API repeatedly for the same route unless something changed.
+API Key Security: We keep keys out of the repo: use environment variables for OpenAI and Google. Expo allows embedding Google Maps key in app config (which ends up in the binary; we restrict it via Google Cloud to our app’s package name and SHA-1 to mitigate misuse
+). For OpenAI, exposing the key on the client is risky (someone could decompile and steal it). Given the time constraint, in MVP we might include it for simplicity but will plan to move OpenAI calls server-side ASAP (e.g., via a simple Cloud Function that the app requests without exposing the key). The Firebase Firestore uses secret config in app which is fine because Firebase rules protect writes/reads. Police and OSM APIs need no auth, so no secret to hide there.
+Privacy Considerations: Location data: we do not send user’s exact location to any third party except for routing and data queries. Google Directions and Places get origin/dest – that’s necessary and covered under Google’s privacy terms. The Police and OSM queries we do are about areas, not tied to user identity. We do not store user location on our servers at all, except if they volunteer a point in a safety report. Those reports are stored in Firestore without personal info. In the future, we might implement optional login for accountability of reports, but MVP keeps it anonymous. We also inform users that submitting a report will share that location and text publicly (within app) for the benefit of others.
+Offline / Poor Network Behavior: Since this app is very network-dependent (needs API calls), offline support is limited. If the device is offline or APIs fail, we’ll detect that (catch fetch errors) and show an error banner “Some data could not be loaded. Please check your connection.” For routing, we could attempt to use a cached route or at least allow the user to manually navigate using the base map. But in MVP, if no connection, the app can’t do much – we’ll just handle it gracefully (no crashes, just user feedback). We won’t implement downloading maps or crime data offline due to time. However, if network is slow, we should show a loading indicator (e.g., a spinner while routes load, and maybe one while safety data loads if it’s noticeably slow). We will decouple the UI: show the route lines as soon as Directions returns, then perhaps overlay the safety colors a moment later when ready so the user sees something quickly. We must ensure that if safety scoring isn’t ready, we don’t show misleading info – maybe gray lines until scoring done, then apply colors.
+Testing Checklist
+Unit Tests (Logic):
+Test the polyline decoding against known polyline strings (Google gives sample encoded polylines). Ensure our decoder returns correct coordinates.
+Test segmentRoute function: feed a simple line (e.g., 200m straight line) and see that it returns ~4 segments of ~50m. Edge cases: if route length <50m (should return 1 segment).
+Test the computeSegmentRisk formula: create a fake segment with various combinations: e.g., crimeCount=0, isLit=true, etc., and verify the risk output matches expected logic (like all safe inputs => low risk). Also test an extreme (crimeCount high, unlit, etc.) => risk ~1.
+Test route aggregation: given segments with known risks, check that route safety score is correctly averaged and scaled to 0–100.
+(These can be done with a simple script or mental calculation since time might not allow full Jest setup).
+Manual Testing (App flows):
+Basic Route Fetch: Start at a known location (simulate GPS or use device’s). Enter a nearby destination by address. Verify multiple routes show up. Check that the durations make sense and the map lines connect the points properly.
+Safety Coloring: For a test, choose a destination that allows one route through a park vs one via roads (e.g., in London: Green Park area or through residential vs main road). Check that the park route has at least one red/yellow segment (due to footway and presumably unlit at night). If it’s daytime, temporarily simulate night by forcing lightingRisk on such segments to test coloring. Confirm colors display correctly and legend is correct.
+LLM Summary: Select a route and open Safety Insights. Ensure the summary text corresponds to what we see (if the model says “one dark segment” it should indeed be true from our data). If not, our prompt might be too vague. Also check it doesn’t output anything alarming or discriminatory. If the response is too long or not JSON, adjust prompt formatting and retry.
+User Report Submission: Go to Report screen, fill it, submit. In Firestore console, verify the new document exists with correct fields. Back in app, maybe plan a route that goes through that location: if our logic picks it up, perhaps log or highlight that segment in code. (Manual verification can be logging segment.reportRisk).
+Error Cases: Turn off internet and try to get a route – app should show an error (we’ll simulate by providing a fallback UI or alert “No connection”). Deny location permission: app should not crash – ideally, it should either request again or allow user to input a start point manually. (MVP might just keep asking permission or show a message to enable it).
+Performance: With 3–5 routes and maybe up to 50 segments each, map rendering ~150 polylines is okay on modern devices. Test on an older or low-end device via emulator to ensure it’s not too slow. If it is, we could reduce segment detail (maybe segment by step rather than fixed length, but lose granularity). Probably fine.
+UI responsiveness: Test that the route list can scroll (if many routes or long text) and that tapping route cards reliably switches the map highlight. Also test the map gestures (zoom, pan) after routes loaded – ensure polyline stays in sync (should be static points anyway).
+Data Freshness: Change destination a few times to ensure the state resets properly (old route lines cleared, etc.). Ensure no leftover polyline if new query fails.
+We will prepare a simple manual test script for a colleague (or ourselves) to follow:
+Test 1: From London Bridge to Trafalgar Square at 9pm. Expect at least 2 routes (north bank vs south bank of Thames). North bank route goes through busy areas (score higher, likely green segments), south bank might be quieter in parts (some yellow). Check summary mentions which is safer.
+Test 2: A short local route at midnight (simulate by toggling an “night mode” variable if needed) that goes through a park (e.g., through Russell Square Gardens). Expect that segment flagged red for unlit.
+Test 3: Use Report: stand at a certain street, submit “Dark street here”. Then plan a route that passes there; ensure some indicator (if not UI, then internal risk increased).
+Test 4: Stress: pick a far destination (10km). The app might still give routes, but check if any part fails (e.g., Police API might return 503 if area huge). If it does, we catch it and perhaps just use available partial data. Document that for improvement.
+Risks & Mitigations
+Data Accuracy & Bias: The app relies on crime data (monthly) and other proxies. There’s a risk it might label an area as “unsafe” due to high reported crime, which could correlate with certain neighborhoods, inadvertently causing bias/stigmatization. We mitigate this by focusing on objective data points (lighting, crime counts) and not attributing it to any demographic or using charged language. The LLM will be instructed to be factual and non-biased. All scoring is transparent (we can show which factors contributed). We include a disclaimer that “Safety scores are estimates based on limited data and do not reflect personal or cultural characteristics of an area.” Future work: involve local community input and regularly update data to avoid outdated info.
+False Sense of Security: Users might misinterpret a high safety score as a guarantee. To mitigate, we explicitly state “No route is 100% safe. Use this as guidance, not absolute truth.”
+ in the app. We could also deliberately cap the maximum displayed score at, say, 95/100 or label it “Safest” rather than “Safe” to avoid implication of perfect safety. The LLM summary will avoid phrases like “this route is completely safe” – instead, “relatively safer”.
+LLM Hallucinations or Harmful Output: GPT-3.5 might embellish if not controlled (e.g., “This area is known for crime” even if our data only said 2 incidents). We solve this by giving it structured data and asking for JSON output, minimizing room for deviation. We’ll also review the prompts and possibly add a few example completions to set style. If it still oversteps, we may post-process (e.g., if it outputs any content not supported by data or any sensitive attributes, we drop those parts). Because the summary is important, a developer should QA this output initially and adjust prompt until it’s reliable. In an app update, we could even replace the LLM with a rule-based explanation to avoid unpredictability, but the LLM is used here for rapid development.
+Time Constraint Trade-offs: In 12 hours, some features are rudimentary. For example, lighting and POI data integration may be incomplete – this could lead to incorrect safety scores (e.g., maybe a street is lit but our data didn’t capture it, causing an underrated score). This is acceptable in MVP with proper messaging. We list these as known issues and prioritize them for immediate fixes. We also ensure the app doesn’t crash if some data is missing – e.g., if Overpass query fails, we assume worst-case for that factor or ignore it, rather than breaking the app.
+Spam/Abuse of Reports: Without auth, someone could spam false reports which might skew route scoring or annoy users. Mitigation: client-side rate limiting (one report/min) and basic filtering (no excessively long text, maybe no profanity – we can implement a simple word blacklist or use OpenAI content filter in future). In Firebase, we could enable moderation where we manually flag/remove obviously fake or malicious reports (since initial user base small, this is manageable). If needed, we could require login for reporting in the future to add accountability. For now, we also do not show user-generated reports prominently in the UI (we only use them to adjust scores subtly), so the risk of panic from a fake report is low.
+API Limit/Costs: With our usage, it’s unlikely to hit limits during demo (few calls). But if many users or extended usage, Google API costs could accumulate. With “no price limit” given, we proceed, but we include in next steps to explore cheaper data sources (e.g., using OSM routing if we build our own, caching frequent queries, etc.). Also, Overpass could throttle if usage grows. Next step might be to use a cached dataset of OSM for London offline, or restrict queries to when needed (we already do on selection). For now, one dev testing should be fine.
+Map Polyline Rendering Issues: There is a slight risk that drawing many segments might have performance issues or minor gaps between segments. We use an overlap or share end/start point to avoid gaps. If performance on older devices lags, we might reduce segment count by merging some or only highlighting high risk segments explicitly (like draw green as one long polyline and just break where risk changes to yellow/red). For MVP, we assume modern devices can handle ~50 polylines.
+Legal Considerations: We must ensure using Police API and OSM data is within their terms. Both are open data (UK Police data is open under OGL, OSM under ODbL). Google Places/Directions we have proper API key and billing. We will display no Google map imagery outside their MapView (we comply by using the SDK). We should credit the data sources somewhere (e.g., in About: “Crime data © Police.uk, Map data © OpenStreetMap contributors, etc.”). This compliance is part of ethics too, giving attribution. We include a section in the app info for that.
+Next 1-2 Days Upgrades: After MVP, immediate tasks would be:
+Robust OSM integration: Implement a proper Overpass query for lighting: e.g., actually find segments with lit=no and directly flag those route sections. Similarly, use OSM’s pedestrian path info to catch alleyways. Possibly integrate directly with a library or service like OpenRouteService that could give “way IDs” for route steps to cross-reference OSM tags.
+Dynamic weighting by context: e.g., if time is night, increase weight of lighting and activity factors; if day, decrease them. Currently, we partly do that by making lightingRisk 0 in daytime, but we can refine (twilight, etc.).
+Turn-by-turn or live mode: Provide navigation assistance so that as user walks, the app could alert when approaching a high-risk segment (“Entering a low-light area – stay alert”). This might involve background location updates and maybe voice or vibration alerts. 12 hours was too short for this, but it’s a compelling next feature.
+Enhanced reporting & moderation: Add the ability to view community reports on the map (with filters by recent/time). Add upvote/downvote or trust system to assess report reliability. Implement an admin view to remove inappropriate content. Possibly tie-in with authorities (like allow user to easily call emergency or notify local community watch if a serious incident reported – but that’s beyond our scope initially).
+User accounts and preferences: Let users adjust safety weighting to their preference (e.g., someone might be more concerned about lighting than crime, etc.), or toggle “avoid unlit areas even if longer”. Also, allow login to track their own reports or to get push notifications if a new hazard is reported on their usual route.
+Scaling to other cities: If expanding beyond London, integrate data sources for those (Police API covers all England/Wales; for other countries, different sources needed – e.g., crime data in US city might come from city open data portals). OSM and Google APIs are global, so mostly crime data and local safety data sources are the bottleneck.
+Performance and cost optimizations: Batch multiple API calls into one where possible (e.g., use Google’s new combined Routes Preferred API which can give routes and also info like speed limits, but that might not give safety info directly). Possibly implement our own simple routing with OSM data offline for frequent queries to reduce Google calls (likely not needed until large user base).
+UI improvements: e.g., better destination search with autosuggest (if not done), more intuitive way to compare routes (maybe a side-by-side comparison screen), and possibly a dark mode (especially since app deals with night safety – a dark theme might be apt).
+Security: Move the OpenAI API key to a cloud function ASAP. Also, restrict Firestore rules so that writing reports is authenticated or at least limit creation rate server-side, to prevent someone writing a script to spam our DB. If we see abuse, we’ll enable Firebase App Check or require login.
+In conclusion, while the MVP can be delivered in 12 hours with the above plan, the developer should be mindful of these risks and communicate them. The user is always informed that this is a tool to assist in safer travel, not a guarantee or a replacement for personal vigilance and judgment.
