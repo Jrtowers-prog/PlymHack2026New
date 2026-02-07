@@ -25,6 +25,10 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Environment variables
+
+- `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`: Required for Google Maps features (map preview + navigation). Add it to a `.env` file (see `.env.example`).
+
 ## Get a fresh project
 
 When you're ready, run:
