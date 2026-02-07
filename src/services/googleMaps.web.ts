@@ -6,7 +6,7 @@ import type {
     PlaceDetails,
     PlacePrediction,
 } from '@/src/types/google';
-import type { GoogleMapsApi } from '@/src/types/googleMapsWeb';
+import type { AutocompleteRequest, GoogleMapsApi } from '@/src/types/googleMapsWeb';
 import { encodePolyline } from '@/src/utils/polyline';
 
 type GoogleMapsWindow = Window & {
@@ -66,7 +66,7 @@ export const fetchPlacePredictions = async (
 
   const googleMaps = await loadGoogleMapsApi();
   const service = new googleMaps.maps.places.AutocompleteService();
-  const request = {
+  const request: AutocompleteRequest = {
     input: trimmedInput,
   };
 
