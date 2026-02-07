@@ -1,6 +1,9 @@
-export type Coordinates = {
+export type LatLng = {
   latitude: number;
   longitude: number;
+};
+
+export type Coordinates = LatLng & {
   accuracyMeters: number | null;
 };
 

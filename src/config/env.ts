@@ -1,4 +1,6 @@
 const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() ?? '';
+const navDestinationRaw = process.env.EXPO_PUBLIC_NAV_DESTINATION?.trim() ?? '';
+const navDestinationLabel = process.env.EXPO_PUBLIC_NAV_DESTINATION_LABEL?.trim() ?? '';
 
 const hasGoogleMapsApiKey = googleMapsApiKey.length > 0;
 
@@ -12,4 +14,6 @@ if (!hasGoogleMapsApiKey && process.env.NODE_ENV === 'production') {
 export const env = {
   googleMapsApiKey: hasGoogleMapsApiKey ? googleMapsApiKey : null,
   hasGoogleMapsApiKey,
+  navDestinationRaw,
+  navDestinationLabel,
 };

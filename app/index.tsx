@@ -10,12 +10,21 @@ import {
 } from 'react-native';
 
 import { ActionButton } from '@/src/components/ActionButton';
+import { MapPreview } from '@/src/components/MapPreview';
 import { SectionCard } from '@/src/components/SectionCard';
 import { env } from '@/src/config/env';
+import { useNavigation } from '@/src/hooks/useNavigation';
 import { useUserLocation } from '@/src/hooks/useUserLocation';
 
 export default function HomeScreen() {
   const { state, refreshLocation, requestPermissionAndFetch } = useUserLocation();
+  const {
+    destination,
+    destinationError,
+    previewUrl,
+    state: navigationState,
+    startNavigation,
+  } = useNavigation({ origin: state.coords });
 
   const openSettings = useCallback(() => {
     if (Platform.OS === 'web') {
@@ -70,6 +79,50 @@ export default function HomeScreen() {
   const onPrimaryAction =
     state.permission === 'granted' ? refreshLocation : requestPermissionAndFetch;
 
+  const canNavigate = Boolean(destination) && !destinationError && state.permission === 'granted';
+  const navigationDisabled = !canNavigate || navigationState.status === 'loading';
+
+  const renderNavigationStatus = () => {
+    if (navigationState.status === 'loading') {
+      return (
+        <View style={styles.statusRow}>
+          <ActivityIndicator size="small" color="#111827" />
+          <Text style={[styles.statusText, styles.statusTextWithIcon]}>
+            Opening navigation...
+          </Text>
+        </View>
+      );
+    }
+
+    if (destinationError) {
+      return <Text style={styles.statusError}>{destinationError}</Text>;
+    }
+
+    if (!destination) {
+      return (
+        <Text style={styles.statusError}>Navigation destination is not configured.</Text>
+      );
+    }
+
+    if (state.permission !== 'granted') {
+      return (
+        <Text style={styles.statusError}>
+          Enable location access above to start navigation.
+        </Text>
+      );
+    }
+
+    if (state.status === 'loading') {
+      return <Text style={styles.statusText}>Waiting for location...</Text>;
+    }
+
+    if (navigationState.status === 'error') {
+      return <Text style={styles.statusError}>{navigationState.errorMessage}</Text>;
+    }
+
+    return <Text style={styles.statusText}>Ready to open directions.</Text>;
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}>
@@ -107,6 +160,40 @@ export default function HomeScreen() {
           ) : null}
         </View>
       </SectionCard>
+
+      <SectionCard
+        title="Navigation"
+        description="Launch Google Maps directions to the configured destination."
+        footer={
+          destination
+            ? `Destination: ${destination.label} (${destination.latitude.toFixed(
+                5
+              )}, ${destination.longitude.toFixed(5)})`
+            : undefined
+        }
+      >
+        <MapPreview
+          uri={previewUrl}
+          accessibilityLabel="Map preview"
+          fallbackText={
+            env.hasGoogleMapsApiKey
+              ? 'Map preview unavailable.'
+              : 'Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to show a map preview.'
+          }
+        />
+
+        <View style={styles.navigationStatus}>{renderNavigationStatus()}</View>
+
+        <View style={styles.actionsRow}>
+          <View style={styles.actionItem}>
+            <ActionButton
+              label="Start navigation"
+              onPress={() => startNavigation(state.coords ?? undefined)}
+              disabled={navigationDisabled}
+            />
+          </View>
+        </View>
+      </SectionCard>
     </ScrollView>
   );
 }
@@ -142,6 +229,9 @@ const styles = StyleSheet.create({
   statusError: {
     fontSize: 14,
     color: '#b91c1c',
+  },
+  navigationStatus: {
+    marginTop: 12,
   },
   coordsText: {
     marginTop: 6,
