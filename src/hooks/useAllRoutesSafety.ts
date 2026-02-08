@@ -5,7 +5,10 @@ import type { DirectionsRoute } from '@/src/types/google';
 
 export interface RouteScore {
   routeId: string;
+  /** 1-100 full safety score (crime + lighting + road type + activity) — shown to user */
   score: number;
+  /** 1-100 pathfinding score (road type + lighting ONLY) — used to pick best route */
+  pathfindingScore: number;
   label: string;
   color: string;
   mainRoadRatio: number;
@@ -27,7 +30,7 @@ export interface UseAllRoutesSafetyState {
 // Module-level cache so scores survive re-renders & re-mounts.
 // Key = first 6 coords of the path (fingerprint), value = score result.
 // ---------------------------------------------------------------------------
-const scoreCache = new Map<string, { score: number; label: string; color: string; mainRoadRatio: number; dataConfidence: number }>();
+const scoreCache = new Map<string, { score: number; pathfindingScore: number; label: string; color: string; mainRoadRatio: number; dataConfidence: number }>();
 
 /** Cheap fingerprint: first + last coord + distance – unique enough per route */
 const routeFingerprint = (route: DirectionsRoute): string => {
@@ -72,6 +75,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
         initial[r.id] = {
           routeId: r.id,
           score: cached.score,
+          pathfindingScore: cached.pathfindingScore,
           label: cached.label,
           color: cached.color,
           mainRoadRatio: cached.mainRoadRatio,
@@ -82,6 +86,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
         initial[r.id] = {
           routeId: r.id,
           score: 0,
+          pathfindingScore: 0,
           label: '',
           color: '#94a3b8',
           mainRoadRatio: 0,
@@ -110,6 +115,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
 
         const result = {
           score: data.safetyScore,
+          pathfindingScore: data.pathfindingScore,
           label: data.safetyLabel,
           color: data.safetyColor,
           mainRoadRatio: data.mainRoadRatio,
@@ -175,20 +181,19 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
     }
 
     /**
-     * Composite rank: raw score + up to 8 bonus points for main-road usage
-     *                 + up to 4 bonus points for being shorter.
-     * Routes with low data-confidence are penalised so they don't win
-     * over routes we actually have data for.
+     * Pathfinding rank — picks the best route to WALK.
+     * Uses pathfindingScore (road type + lighting ONLY, no crime) as the
+     * primary signal, with a small bonus for shorter distance.
+     * Crime is shown to the user but does NOT steer route selection.
      */
     const effectiveScore = (s: RouteScore): number => {
       // If this route specifically lacks data, heavily penalise it
       if (s.dataConfidence < 0.3) return -1;
-      const mainRoadBonus = s.mainRoadRatio * 8;  // 0-8
       const dist = distMap.get(s.routeId) ?? 0;
       const shortestDist = Math.min(...done.map((d) => distMap.get(d.routeId) ?? Infinity));
       const distRatio = shortestDist > 0 && dist > 0 ? shortestDist / dist : 1;
-      const distBonus = distRatio * 4; // shorter route → closer to 4
-      return s.score + mainRoadBonus + distBonus;
+      const distBonus = distRatio * 10; // shorter route → closer to 10
+      return s.pathfindingScore + distBonus;
     };
 
     const best = done.reduce((a, b) =>

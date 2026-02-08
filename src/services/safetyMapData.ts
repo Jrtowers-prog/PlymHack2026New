@@ -82,6 +82,9 @@ export interface SafetyMapResult {
   safetyLabel: string;        // e.g. "Safe"
   safetyColor: string;        // hex colour for the score
   mainRoadRatio: number;      // 0-1 fraction of route on main roads
+  /** 1-100 pathfinding score based on road type + lighting ONLY (no crime).
+   *  Used to pick the best route — higher = more main roads + better lit. */
+  pathfindingScore: number;
   /** 0-1 how much real data we had to base the score on.
    *  Below ~0.3 the score is unreliable → prefer fastest route. */
   dataConfidence: number;
@@ -120,7 +123,7 @@ const computeSafetyScore = (
   openPlaces: number,
   routeDistanceKm: number,
   mainRoadRatio: number,
-): { score: number; label: string; color: string; dataConfidence: number } => {
+): { score: number; label: string; color: string; pathfindingScore: number; dataConfidence: number } => {
   // Normalise per-km so short and long routes are comparable
   const km = Math.max(routeDistanceKm, 0.3); // avoid divide-by-zero
 
@@ -169,6 +172,16 @@ const computeSafetyScore = (
   // Map to 1–100
   const score = Math.round(Math.max(1, Math.min(100, raw * 100)));
 
+  // ── Pathfinding score: road type + lighting ONLY (no crime) ──
+  // Used to pick the BEST route. Crime informs the user but should
+  // not steer pathfinding — road quality and lighting determine safety
+  // for the route selection algorithm.
+  const pathfindingRaw =
+    mainRoadFactor * 0.45 +  // heavily favour main roads
+    lightFactor    * 0.30 +  // well-lit is important
+    roadLitFactor  * 0.25;   // lit roads ratio
+  const pathfindingScore = Math.round(Math.max(1, Math.min(100, pathfindingRaw * 100)));
+
   // Label & colour — if we lack data, be honest about it
   let label: string;
   let color: string;
@@ -190,7 +203,7 @@ const computeSafetyScore = (
     color = '#ef4444'; // red-500
   }
 
-  return { score, label, color, dataConfidence };
+  return { score, label, color, pathfindingScore, dataConfidence };
 };
 
 // ---------------------------------------------------------------------------
@@ -874,7 +887,7 @@ export const fetchSafetyMapData = async (
   routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, dataConfidence: 0 };
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
   }
 
   // Return cached result if we already analysed this exact route
@@ -936,7 +949,7 @@ export const fetchSafetyMapData = async (
   const mainRoadRatio = totalSamples > 0 ? mainSamples / totalSamples : 0.5;
 
   const distKm = (routeDistanceMeters ?? 1000) / 1000;
-  const { score, label, color, dataConfidence } = computeSafetyScore(
+  const { score, label, color, pathfindingScore, dataConfidence } = computeSafetyScore(
     crimes.length,
     roadsData.lights.length,
     roadsData.litCount,
@@ -960,6 +973,7 @@ export const fetchSafetyMapData = async (
     safetyLabel: label,
     safetyColor: color,
     mainRoadRatio,
+    pathfindingScore,
     dataConfidence,
   };
 
