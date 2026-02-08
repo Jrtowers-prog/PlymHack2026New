@@ -65,7 +65,10 @@ export const useRouteSafety = (route: DirectionsRoute | null): UseRouteSafetySta
     requestIdRef.current = requestId;
 
     try {
-      const data = await withTimeout(fetchSafetyMapData(route.path, onProgress), 20000);
+      const data = await withTimeout(
+        fetchSafetyMapData(route.path, onProgress, route.distanceMeters),
+        20000,
+      );
       if (requestIdRef.current !== requestId) {
         return;
       }

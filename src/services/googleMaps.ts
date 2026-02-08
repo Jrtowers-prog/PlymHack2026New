@@ -145,48 +145,121 @@ export const fetchPlaceDetails = async (placeId: string): Promise<PlaceDetails> 
   };
 };
 
+// ---------------------------------------------------------------------------
+// Helpers – generate diverse walking routes
+// ---------------------------------------------------------------------------
+
+/** Small perpendicular nudges so extra API calls explore nearby parallel streets.
+ *  Kept small (10 %) so routes stay close to the direct path. */
+const generateOffsetWaypoints = (origin: LatLng, dest: LatLng): LatLng[] => {
+  const midLat = (origin.latitude + dest.latitude) / 2;
+  const midLng = (origin.longitude + dest.longitude) / 2;
+  const dLat = dest.latitude - origin.latitude;
+  const dLng = dest.longitude - origin.longitude;
+  const len = Math.sqrt(dLat * dLat + dLng * dLng);
+  if (len < 0.0001) return [];
+  // 10 % offset — enough to find a parallel main road, not enough for a detour
+  const scale = len * 0.10;
+  const pLat = (-dLng / len) * scale;
+  const pLng = (dLat / len) * scale;
+  return [
+    { latitude: midLat + pLat, longitude: midLng + pLng },
+    { latitude: midLat - pLat, longitude: midLng - pLng },
+  ];
+};
+
+/** Drop routes whose distance AND duration are within 5 %/8 % of an already-kept route */
+const deduplicateRoutes = (routes: DirectionsRoute[]): DirectionsRoute[] => {
+  const unique: DirectionsRoute[] = [];
+  for (const r of routes) {
+    const dup = unique.some((u) => {
+      const avgD = (u.distanceMeters + r.distanceMeters) / 2 || 1;
+      const avgT = (u.durationSeconds + r.durationSeconds) / 2 || 1;
+      return (
+        Math.abs(u.distanceMeters - r.distanceMeters) / avgD < 0.05 &&
+        Math.abs(u.durationSeconds - r.durationSeconds) / avgT < 0.08
+      );
+    });
+    if (!dup) unique.push(r);
+  }
+  return unique;
+};
+
+/** Score a route summary – named / numbered roads rank higher (main roads) */
+const mainRoadScore = (summary?: string): number => {
+  if (!summary) return 0;
+  let score = 0;
+  // A-roads, B-roads, M-roads, numbered routes (e.g. A386, B3214)
+  if (/\b[ABM]\d/i.test(summary)) score += 3;
+  // Named "Road", "Street", "Avenue" etc. – indicates an actual named road vs footpath
+  if (/\b(road|street|ave|avenue|boulevard|blvd|highway|hwy|drive|lane|way)\b/i.test(summary)) score += 2;
+  // Penalise paths/trails/footways
+  if (/\b(path|trail|footpath|footway|alley|steps|track)\b/i.test(summary)) score -= 3;
+  return score;
+};
+
+/** Parse one Directions REST response into route objects */
+const parseDirectionsResponse = (
+  data: GoogleDirectionsResponse,
+  idOffset: number,
+): DirectionsRoute[] => {
+  if (data.status !== 'OK') return [];
+  return data.routes.map((route, i) => {
+    const encodedPolyline = route.overview_polyline?.points ?? '';
+    if (!encodedPolyline) return null!;
+    const legs = route.legs ?? [];
+    return {
+      id: `route-${idOffset + i}`,
+      distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
+      durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
+      encodedPolyline,
+      path: decodePolyline(encodedPolyline),
+      summary: route.summary,
+    };
+  }).filter(Boolean);
+};
+
 export const fetchDirections = async (
   origin: LatLng,
   destination: LatLng
 ): Promise<DirectionsRoute[]> => {
   const apiKey = requireGoogleMapsApiKey();
-  const url = `${GOOGLE_DIRECTIONS_BASE_URL}/json?key=${apiKey}&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=walking&alternatives=true`;
+  const base = `${GOOGLE_DIRECTIONS_BASE_URL}/json?key=${apiKey}&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=walking&alternatives=true&avoid=indoor`;
 
-  const data = await fetchJson<GoogleDirectionsResponse>(url);
-
-  if (data.status !== 'OK') {
+  // 1. Primary request – gets up to ~3 alternatives
+  const baseData = await fetchJson<GoogleDirectionsResponse>(base);
+  if (baseData.status !== 'OK') {
     throw new AppError(
       'google_directions_error',
-      data.error_message ?? `Google Directions failed: ${data.status}`
+      baseData.error_message ?? `Google Directions failed: ${baseData.status}`
     );
   }
+  const baseRoutes = parseDirectionsResponse(baseData, 0);
 
-  return data.routes.slice(0, 4).map((route, index) => {
-    const encodedPolyline = route.overview_polyline?.points ?? '';
+  // 2. Extra requests with offset waypoints for more diversity
+  const offsets = generateOffsetWaypoints(origin, destination);
+  const extras = await Promise.all(
+    offsets.map((wp, i) =>
+      fetchJson<GoogleDirectionsResponse>(
+        `${base}&waypoints=via:${wp.latitude},${wp.longitude}`
+      )
+        .then((d) => parseDirectionsResponse(d, (i + 1) * 10))
+        .catch(() => [] as DirectionsRoute[])
+    )
+  ).then((arr) => arr.flat());
 
-    if (!encodedPolyline) {
-      throw new AppError('google_directions_error', 'Missing route polyline');
-    }
-
-    const legs = route.legs ?? [];
-    const distanceMeters = legs.reduce(
-      (total, leg) => total + (leg.distance?.value ?? 0),
-      0
-    );
-    const durationSeconds = legs.reduce(
-      (total, leg) => total + (leg.duration?.value ?? 0),
-      0
-    );
-
-    return {
-      id: `route-${index}`,
-      distanceMeters,
-      durationSeconds,
-      encodedPolyline,
-      path: decodePolyline(encodedPolyline),
-      summary: route.summary,
-    };
+  // 3. Merge, deduplicate, drop routes that detour too far, sort sensibly
+  const merged = deduplicateRoutes([...baseRoutes, ...extras]);
+  const shortest = Math.min(...merged.map((r) => r.distanceMeters));
+  // Drop anything more than 50 % longer than the shortest option
+  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.5);
+  // Sort: shortest first, then prefer main-road names as tiebreaker
+  reasonable.sort((a, b) => {
+    const distDiff = a.distanceMeters - b.distanceMeters;
+    if (Math.abs(distDiff) > shortest * 0.05) return distDiff; // >5 % difference → prefer shorter
+    return mainRoadScore(b.summary) - mainRoadScore(a.summary); // similar length → prefer main road
   });
+  return reasonable.slice(0, 7).map((r, i) => ({ ...r, id: `route-${i}` }));
 };
 
 export const buildStaticMapUrl = (params: {

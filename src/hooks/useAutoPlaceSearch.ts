@@ -1,0 +1,114 @@
+/**
+ * useAutoPlaceSearch
+ *
+ * Replaces the old usePlaceAutocomplete + manual prediction selection.
+ * When the user types a query and pauses (600 ms debounce), the hook
+ * automatically fetches predictions and selects the first result.
+ * No dropdown needed.
+ */
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { fetchPlacePredictions } from '@/src/services/openStreetMap';
+import { AppError } from '@/src/types/errors';
+import type { LatLng, PlaceDetails } from '@/src/types/google';
+
+export type AutoSearchStatus = 'idle' | 'searching' | 'found' | 'error';
+
+export interface UseAutoPlaceSearchReturn {
+  query: string;
+  setQuery: (q: string) => void;
+  place: PlaceDetails | null;
+  status: AutoSearchStatus;
+  error: AppError | null;
+  /** Clear selected place (e.g. user taps ✕) */
+  clear: () => void;
+}
+
+export const useAutoPlaceSearch = (
+  locationBias?: LatLng | null,
+): UseAutoPlaceSearchReturn => {
+  const [query, setQuery] = useState('');
+  const [place, setPlace] = useState<PlaceDetails | null>(null);
+  const [status, setStatus] = useState<AutoSearchStatus>('idle');
+  const [error, setError] = useState<AppError | null>(null);
+
+  // Track whether the user is actively editing (vs. programmatic set)
+  const skipAutoRef = useRef(false);
+
+  const setQueryWrapped = useCallback((q: string) => {
+    skipAutoRef.current = false;
+    setPlace(null);
+    setError(null);
+    setStatus('idle');
+    setQuery(q);
+  }, []);
+
+  const clear = useCallback(() => {
+    skipAutoRef.current = true;
+    setQuery('');
+    setPlace(null);
+    setError(null);
+    setStatus('idle');
+  }, []);
+
+  useEffect(() => {
+    if (skipAutoRef.current) return;
+
+    const trimmed = query.trim();
+    if (trimmed.length < 3) {
+      setStatus('idle');
+      return;
+    }
+
+    // If we already resolved this query, skip
+    if (place) return;
+
+    setStatus('searching');
+    setError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const results = await fetchPlacePredictions(trimmed, {
+          locationBias: locationBias ?? undefined,
+          radiusMeters: locationBias ? 5000 : undefined,
+        });
+
+        if (results.length === 0) {
+          setStatus('error');
+          setError(new AppError('no_results', 'No places found'));
+          return;
+        }
+
+        const top = results[0];
+        if (!top.location) {
+          setStatus('error');
+          setError(new AppError('no_location', 'Place has no coordinates'));
+          return;
+        }
+
+        // Auto-select the top result
+        skipAutoRef.current = true;            // don't re-trigger
+        setQuery(top.primaryText);             // show resolved name
+        setPlace({
+          placeId: top.placeId,
+          name: top.fullText,
+          location: top.location,
+          source: top.source,
+        });
+        setStatus('found');
+      } catch (e) {
+        setStatus('error');
+        setError(
+          e instanceof AppError
+            ? e
+            : new AppError('autocomplete_error', 'Search failed', e),
+        );
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [query, locationBias?.latitude, locationBias?.longitude, place]);
+
+  return { query, setQuery: setQueryWrapped, place, status, error, clear };
+};
