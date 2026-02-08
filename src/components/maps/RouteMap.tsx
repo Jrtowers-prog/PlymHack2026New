@@ -11,7 +11,9 @@ let RouteMap: React.ComponentType<any>;
 if (Platform.OS === 'web') {
   RouteMap = require('@/src/components/maps/RouteMap.web').default;
 } else {
-  // Use the lightweight fallback that works in Expo Go
+  // Use the lightweight fallback that works in Expo Go.
+  // For a dev build, change the line below to:
+  //   RouteMap = require('@/src/components/maps/RouteMapNative').default;
   RouteMap = require('@/src/components/maps/RouteMap.fallback').default;
 }
 
