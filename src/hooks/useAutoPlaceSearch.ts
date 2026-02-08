@@ -4,14 +4,15 @@
  * Replaces the old usePlaceAutocomplete + manual prediction selection.
  * When the user types a query and pauses (600 ms debounce), the hook
  * automatically fetches predictions and selects the first result.
- * No dropdown needed.
+ * Predictions are also exposed so the UI can show a dropdown letting
+ * the user pick a different result.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchPlacePredictions } from '@/src/services/openStreetMap';
 import { AppError } from '@/src/types/errors';
-import type { LatLng, PlaceDetails } from '@/src/types/google';
+import type { LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
 
 export type AutoSearchStatus = 'idle' | 'searching' | 'found' | 'error';
 
@@ -19,8 +20,11 @@ export interface UseAutoPlaceSearchReturn {
   query: string;
   setQuery: (q: string) => void;
   place: PlaceDetails | null;
+  predictions: PlacePrediction[];
   status: AutoSearchStatus;
   error: AppError | null;
+  /** Select a specific prediction from the dropdown */
+  selectPrediction: (prediction: PlacePrediction) => void;
   /** Clear selected place (e.g. user taps ✕) */
   clear: () => void;
 }
@@ -30,6 +34,7 @@ export const useAutoPlaceSearch = (
 ): UseAutoPlaceSearchReturn => {
   const [query, setQuery] = useState('');
   const [place, setPlace] = useState<PlaceDetails | null>(null);
+  const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [status, setStatus] = useState<AutoSearchStatus>('idle');
   const [error, setError] = useState<AppError | null>(null);
 
@@ -44,10 +49,25 @@ export const useAutoPlaceSearch = (
     setQuery(q);
   }, []);
 
+  const selectPrediction = useCallback((prediction: PlacePrediction) => {
+    if (!prediction.location) return;
+    skipAutoRef.current = true;
+    setPredictions([]);
+    setQuery(prediction.primaryText);
+    setPlace({
+      placeId: prediction.placeId,
+      name: prediction.fullText,
+      location: prediction.location,
+      source: prediction.source,
+    });
+    setStatus('found');
+  }, []);
+
   const clear = useCallback(() => {
     skipAutoRef.current = true;
     setQuery('');
     setPlace(null);
+    setPredictions([]);
     setError(null);
     setStatus('idle');
   }, []);
@@ -58,6 +78,7 @@ export const useAutoPlaceSearch = (
     const trimmed = query.trim();
     if (trimmed.length < 3) {
       setStatus('idle');
+      setPredictions([]);
       return;
     }
 
@@ -76,9 +97,13 @@ export const useAutoPlaceSearch = (
 
         if (results.length === 0) {
           setStatus('error');
+          setPredictions([]);
           setError(new AppError('no_results', 'No places found'));
           return;
         }
+
+        // Expose all predictions for the dropdown
+        setPredictions(results);
 
         const top = results[0];
         if (!top.location) {
@@ -99,6 +124,7 @@ export const useAutoPlaceSearch = (
         setStatus('found');
       } catch (e) {
         setStatus('error');
+        setPredictions([]);
         setError(
           e instanceof AppError
             ? e
@@ -110,5 +136,5 @@ export const useAutoPlaceSearch = (
     return () => clearTimeout(timer);
   }, [query, locationBias?.latitude, locationBias?.longitude, place]);
 
-  return { query, setQuery: setQueryWrapped, place, status, error, clear };
+  return { query, setQuery: setQueryWrapped, place, predictions, status, error, selectPrediction, clear };
 };

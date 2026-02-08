@@ -48,10 +48,16 @@ export default function HomeScreen() {
   // Which field gets the next map tap: 'origin' | 'destination' | null
   const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
 
-  // Track which search input is focused for blue glow
+  // Track which search input is focused for blue glow + dropdown
   const [focusedField, setFocusedField] = useState<'origin' | 'destination' | null>(null);
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
+
+  // Determine which dropdown predictions to show
+  const activePredictions =
+    focusedField === 'origin' && !manualOrigin ? originSearch.predictions :
+    focusedField === 'destination' && !manualDest ? destSearch.predictions :
+    [];
 
   // ── Draggable bottom sheet ──
   const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -371,6 +377,56 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         </View>
+
+        {/* Search predictions dropdown */}
+        {activePredictions.length > 0 && (
+          <View style={styles.predictionsDropdown}>
+            {activePredictions.map((pred, idx) => (
+              <Pressable
+                key={pred.placeId}
+                style={({ pressed }: { pressed: boolean }) => [
+                  styles.predictionItem,
+                  idx === 0 && styles.predictionItemFirst,
+                  idx === activePredictions.length - 1 && styles.predictionItemLast,
+                  pressed && styles.predictionItemPressed,
+                ]}
+                onPress={() => {
+                  if (focusedField === 'origin') {
+                    originSearch.selectPrediction(pred);
+                    setManualOrigin(null);
+                    setIsUsingCurrentLocation(false);
+                  } else {
+                    destSearch.selectPrediction(pred);
+                    setManualDest(null);
+                  }
+                  setSelectedRouteId(null);
+                  originInputRef.current?.blur();
+                  destInputRef.current?.blur();
+                  setFocusedField(null);
+                }}
+              >
+                <View style={styles.predictionIcon}>
+                  <Ionicons name="location-outline" size={18} color="#667085" />
+                </View>
+                <View style={styles.predictionText}>
+                  <Text style={styles.predictionPrimary} numberOfLines={1}>
+                    {pred.primaryText}
+                  </Text>
+                  {pred.secondaryText ? (
+                    <Text style={styles.predictionSecondary} numberOfLines={1}>
+                      {pred.secondaryText}
+                    </Text>
+                  ) : null}
+                </View>
+                {idx === 0 && (
+                  <View style={styles.predictionBadge}>
+                    <Text style={styles.predictionBadgeText}>Top</Text>
+                  </View>
+                )}
+              </Pressable>
+            ))}
+          </View>
+        )}
       </View>
       
       {/* Bottom Sheet with Results */}
@@ -712,6 +768,70 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2f4f7',
     marginLeft: 48,
     marginRight: 14,
+  },
+  // Search predictions dropdown
+  predictionsDropdown: {
+    marginTop: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)',
+    elevation: 8,
+    overflow: 'hidden',
+    width: '100%',
+    maxWidth: 600,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  predictionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f2f4f7',
+  },
+  predictionItemFirst: {
+    // top result highlight
+  },
+  predictionItemLast: {
+    borderBottomWidth: 0,
+  },
+  predictionItemPressed: {
+    backgroundColor: '#f0f6ff',
+  },
+  predictionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: '#f2f4f7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  predictionText: {
+    flex: 1,
+  },
+  predictionPrimary: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#101828',
+  },
+  predictionSecondary: {
+    fontSize: 13,
+    color: '#667085',
+    marginTop: 2,
+  },
+  predictionBadge: {
+    backgroundColor: '#ecfdf3',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginLeft: 8,
+  },
+  predictionBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#027a48',
   },
   // Pin-mode banner
   pinBanner: {
