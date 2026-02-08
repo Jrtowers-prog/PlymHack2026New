@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   fetchSafetyMapData,
-  type RoadOverlay,
+  type RoadLabel,
+  type RouteSegment,
   type SafetyMapResult,
   type SafetyMarker,
   type SafetyProgressCb,
@@ -15,7 +16,8 @@ export type SafetyStatus = 'idle' | 'loading' | 'ready' | 'error';
 export interface UseRouteSafetyState {
   status: SafetyStatus;
   markers: SafetyMarker[];
-  roadOverlays: RoadOverlay[];
+  routeSegments: RouteSegment[];
+  roadLabels: RoadLabel[];
   result: SafetyMapResult | null;
   error: AppError | null;
   progressMessage: string;
@@ -100,7 +102,8 @@ export const useRouteSafety = (route: DirectionsRoute | null): UseRouteSafetySta
   return {
     status,
     markers: result?.markers ?? [],
-    roadOverlays: result?.roadOverlays ?? [],
+    routeSegments: result?.routeSegments ?? [],
+    roadLabels: result?.roadLabels ?? [],
     result,
     error,
     progressMessage,

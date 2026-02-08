@@ -1,4 +1,4 @@
-import type { RoadOverlay, SafetyMarker } from '@/src/services/safetyMapData';
+import type { RoadLabel, RouteSegment, SafetyMarker } from '@/src/services/safetyMapData';
 import type { DirectionsRoute, LatLng } from '@/src/types/google';
 
 export type RouteMapProps = {
@@ -7,7 +7,8 @@ export type RouteMapProps = {
   routes: DirectionsRoute[];
   selectedRouteId: string | null;
   safetyMarkers?: SafetyMarker[];
-  roadOverlays?: RoadOverlay[];
+  routeSegments?: RouteSegment[];
+  roadLabels?: RoadLabel[];
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
 };

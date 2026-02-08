@@ -28,7 +28,8 @@ export const RouteMap = ({
   routes,
   selectedRouteId,
   safetyMarkers = [],
-  roadOverlays = [],
+  routeSegments = [],
+  roadLabels = [],
   onSelectRoute,
   onLongPress,
 }: RouteMapProps) => {
@@ -103,41 +104,58 @@ export const RouteMap = ({
       hasBounds = true;
     }
 
-    // --- Road overlays (coloured road type polylines) ---
-    for (const overlay of roadOverlays) {
-      if (overlay.coordinates.length < 2) continue;
-      const path = overlay.coordinates.map((c) => new googleMaps.maps.LatLng(c.latitude, c.longitude));
-      const polyline = new googleMaps.maps.Polyline({
-        path,
-        strokeColor: overlay.color,
-        strokeOpacity: 0.7,
-        strokeWeight: 4,
-        map,
-        clickable: false,
-      });
-      polylinesRef.current.push(polyline);
-    }
-
-    // --- Route polylines (blue) ---
+    // --- Route polylines ---
+    // Unselected routes: grey
     for (const route of routes) {
+      if (route.id === selectedRouteId) continue;
       const path = route.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
-      const isSelected = route.id === selectedRouteId;
       const polyline = new googleMaps.maps.Polyline({
         path,
-        strokeColor: isSelected ? ROUTE_COLOR : ROUTE_COLOR_ALT,
-        strokeOpacity: isSelected ? 0.85 : 0.5,
-        strokeWeight: isSelected ? 5 : 3,
+        strokeColor: ROUTE_COLOR_ALT,
+        strokeOpacity: 0.5,
+        strokeWeight: 3,
         map,
         clickable: Boolean(onSelectRoute),
       });
-
       if (onSelectRoute) {
         const listener = googleMaps.maps.event.addListener(polyline, 'click', () => onSelectRoute(route.id));
         listenersRef.current.push(listener);
       }
-
       polylinesRef.current.push(polyline);
       path.forEach((p) => bounds.extend(p));
+      hasBounds = true;
+    }
+
+    // Selected route: safety-coloured segments (or fallback blue)
+    const selRoute = routes.find((r) => r.id === selectedRouteId);
+    if (selRoute) {
+      if (routeSegments.length > 0) {
+        for (const seg of routeSegments) {
+          const segPath = seg.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
+          const polyline = new googleMaps.maps.Polyline({
+            path: segPath,
+            strokeColor: seg.color,
+            strokeOpacity: 0.9,
+            strokeWeight: 6,
+            map,
+            clickable: false,
+          });
+          polylinesRef.current.push(polyline);
+        }
+      } else {
+        // No segments yet (still loading) – draw a solid blue line
+        const path = selRoute.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
+        const polyline = new googleMaps.maps.Polyline({
+          path,
+          strokeColor: ROUTE_COLOR,
+          strokeOpacity: 0.85,
+          strokeWeight: 5,
+          map,
+          clickable: false,
+        });
+        polylinesRef.current.push(polyline);
+      }
+      selRoute.path.forEach((p) => bounds.extend(new googleMaps.maps.LatLng(p.latitude, p.longitude)));
       hasBounds = true;
     }
 
@@ -156,6 +174,28 @@ export const RouteMap = ({
           strokeColor: '#ffffff',
           strokeWeight: 1,
         } as unknown as string,
+      });
+      markersRef.current.push(marker);
+    }
+
+    // --- Road-type labels (text markers at road transitions) ---
+    for (const label of roadLabels) {
+      const pos = new googleMaps.maps.LatLng(label.coordinate.latitude, label.coordinate.longitude);
+      // Create a small label using a custom SVG marker
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="26">
+        <rect rx="6" ry="6" width="120" height="26" fill="${label.color}" opacity="0.85"/>
+        <text x="60" y="17" text-anchor="middle" fill="white" font-size="11" font-weight="bold" font-family="sans-serif">${label.displayName.slice(0, 18)}</text>
+      </svg>`;
+      const marker = new googleMaps.maps.Marker({
+        position: pos,
+        map,
+        icon: {
+          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+          scaledSize: new googleMaps.maps.Size(120, 26),
+          anchor: new googleMaps.maps.Point(60, 13),
+        } as unknown as string,
+        clickable: false,
+        zIndex: 30,
       });
       markersRef.current.push(marker);
     }
@@ -185,7 +225,8 @@ export const RouteMap = ({
     routes,
     selectedRouteId,
     safetyMarkers,
-    roadOverlays,
+    routeSegments,
+    roadLabels,
     onSelectRoute,
     onLongPress,
   ]);

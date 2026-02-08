@@ -80,7 +80,8 @@ export default function HomeScreen() {
   const { 
     status: safetyStatus, 
     markers: safetyMarkers, 
-    roadOverlays, 
+    routeSegments,
+    roadLabels, 
     result: safetyResult, 
     error: safetyError,
     progressMessage: safetyProgressMessage,
@@ -118,7 +119,8 @@ export default function HomeScreen() {
           routes={routes}
           selectedRouteId={selectedRouteId}
           safetyMarkers={safetyMarkers}
-          roadOverlays={roadOverlays}
+          routeSegments={routeSegments}
+          roadLabels={roadLabels}
           onSelectRoute={setSelectedRouteId}
           onLongPress={handleMapLongPress}
         />
