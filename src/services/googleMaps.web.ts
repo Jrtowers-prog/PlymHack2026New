@@ -166,6 +166,60 @@ const generateOffsetWaypoints = (
   ];
 };
 
+/** Identify the "worst" (most path-heavy / least main-road) routes. */
+const worstRoutes = (routes: DirectionsRoute[]): DirectionsRoute[] => {
+  const scored = routes.map((r) => ({ r, s: mainRoadScore(r.summary) }));
+  scored.sort((a, b) => a.s - b.s);
+  return scored.map((x) => x.r);
+};
+
+/** Smart offsets that push AWAY from the weakest route's path segments
+ *  so the retry round discovers parallel main-road alternatives. */
+const generateSmartOffsets = (
+  origin: LatLng,
+  dest: LatLng,
+  routes: DirectionsRoute[],
+  scalePct: number,
+): LatLng[] => {
+  const targets = worstRoutes(routes);
+  const target = targets[0];
+  const path = target?.path ?? [];
+
+  const dLat = dest.latitude - origin.latitude;
+  const dLng = dest.longitude - origin.longitude;
+  const directLen = Math.sqrt(dLat * dLat + dLng * dLng);
+  if (directLen < 0.0001) return [];
+  const nudge = directLen * scalePct;
+
+  const pts: LatLng[] = [];
+
+  if (path.length >= 4) {
+    for (const frac of [0.25, 0.5, 0.75]) {
+      const idx = Math.min(Math.floor(frac * path.length), path.length - 2);
+      const p0 = path[idx];
+      const p1 = path[idx + 1];
+      const segLat = p1.latitude - p0.latitude;
+      const segLng = p1.longitude - p0.longitude;
+      const segLen = Math.sqrt(segLat * segLat + segLng * segLng);
+      if (segLen < 1e-8) continue;
+      const perpLat = (-segLng / segLen) * nudge;
+      const perpLng = (segLat / segLen) * nudge;
+      pts.push({ latitude: p0.latitude + perpLat, longitude: p0.longitude + perpLng });
+      pts.push({ latitude: p0.latitude - perpLat, longitude: p0.longitude - perpLng });
+    }
+  } else {
+    const pLat = (-dLng / directLen) * nudge;
+    const pLng = (dLat / directLen) * nudge;
+    for (const frac of [1 / 3, 2 / 3]) {
+      const lat = origin.latitude + dLat * frac;
+      const lng = origin.longitude + dLng * frac;
+      pts.push({ latitude: lat + pLat, longitude: lng + pLng });
+      pts.push({ latitude: lat - pLat, longitude: lng - pLng });
+    }
+  }
+  return pts;
+};
+
 const pathHeaviness = (routes: DirectionsRoute[]): number => {
   if (routes.length === 0) return 0;
   let pathHits = 0;
@@ -281,12 +335,27 @@ export const fetchDirections = async (
   );
   const extras = extraResults.flat();
 
-  // 3. Merge, deduplicate, drop routes that detour too far, sort sensibly
-  const merged = deduplicateRoutes([...baseRoutes, ...extras]);
+  // 3. Merge, deduplicate
+  let merged = deduplicateRoutes([...baseRoutes, ...extras]);
+
+  // 4. If fewer than 4 unique routes and route isn't very short, retry with
+  //    wider + more diverse offsets to discover additional paths.
+  const shortestSoFar = Math.min(...merged.map((r) => r.distanceMeters));
+  const MIN_RETRY_DISTANCE = 500; // metres
+  if (merged.length < 4 && shortestSoFar > MIN_RETRY_DISTANCE) {
+    const widerPct = Math.min(offsetPct * 2.5, 0.35);
+    const smartWps = generateSmartOffsets(origin, destination, merged, widerPct);
+    const retryResults = await Promise.all(
+      smartWps.map((wp, i) =>
+        singleDirectionsRequest(service, googleMaps, origin, destination, wp, 100 + i * 10)
+      )
+    );
+    merged = deduplicateRoutes([...merged, ...retryResults.flat()]);
+  }
+
+  // 5. Drop routes that detour too far, sort sensibly
   const shortest = Math.min(...merged.map((r) => r.distanceMeters));
-  // Drop anything more than 50 % longer than the shortest option
   const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.5);
-  // Sort: shortest first, then prefer main-road names as tiebreaker
   reasonable.sort((a, b) => {
     const distDiff = a.distanceMeters - b.distanceMeters;
     if (Math.abs(distDiff) > shortest * 0.05) return distDiff;
