@@ -8,12 +8,27 @@ export type PlacePrediction = {
   primaryText: string;
   secondaryText?: string;
   fullText: string;
+  location?: LatLng;
+  source?: 'osm' | 'os';
 };
 
 export type PlaceDetails = {
   placeId: string;
   name: string;
   location: LatLng;
+  source?: 'osm' | 'os';
+};
+
+export type RouteSegment = {
+  startCoord: LatLng;
+  endCoord: LatLng;
+  midpointCoord: LatLng;
+  distanceMeters: number;
+  lightingScore: number; // 0-1, where 1 = well lit
+  crimeScore: number; // 0-1, where 1 = safe
+  activityScore: number; // 0-1, where 1 = active
+  combinedScore: number; // 0-1 weighted combination
+  color: string; // hex color for rendering
 };
 
 export type DirectionsRoute = {
@@ -22,5 +37,6 @@ export type DirectionsRoute = {
   durationSeconds: number;
   encodedPolyline: string;
   path: LatLng[];
+  segments?: RouteSegment[];
   summary?: string;
 };

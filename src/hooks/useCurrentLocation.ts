@@ -16,12 +16,21 @@ export type UseCurrentLocationState = {
   refresh: () => Promise<void>;
 };
 
-export const useCurrentLocation = (): UseCurrentLocationState => {
+export const useCurrentLocation = (options?: {
+  enabled?: boolean;
+}): UseCurrentLocationState => {
+  const isEnabled = options?.enabled ?? true;
   const [status, setStatus] = useState<LocationStatus>('idle');
   const [location, setLocation] = useState<LatLng | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!isEnabled) {
+      setStatus('idle');
+      setError(null);
+      return;
+    }
+
     setStatus('loading');
     setError(null);
 
@@ -45,14 +54,18 @@ export const useCurrentLocation = (): UseCurrentLocationState => {
       setError(normalizedError);
       setStatus('error');
     }
-  }, []);
+  }, [isEnabled]);
 
   useEffect(() => {
+    if (!isEnabled) {
+      return;
+    }
+
     refresh().catch(() => {
       setStatus('error');
       setError(new AppError('location_refresh_error', 'Unable to refresh location'));
     });
-  }, [refresh]);
+  }, [refresh, isEnabled]);
 
   return {
     status,
