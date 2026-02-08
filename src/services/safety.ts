@@ -677,7 +677,7 @@ export const fetchOpenPlacesForRoute = async (path: LatLng[]): Promise<number> =
     if (path.length === 0) return 0;
 
     // Only run on web platform where Google Places is available
-    if (typeof window === 'undefined') return 0;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return 0;
 
     // Dynamic import to avoid issues on native
     const { countOpenPlacesAlongRoute } = await import('./googleMaps.web');
