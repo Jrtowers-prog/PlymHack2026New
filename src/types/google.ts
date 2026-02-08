@@ -24,3 +24,15 @@ export type DirectionsRoute = {
   path: LatLng[];
   summary?: string;
 };
+
+export type OpenPlacesSummary = {
+  count: number;
+  places: OpenPlace[];
+  sampledPoints: LatLng[];
+};
+
+export type OpenPlace = {
+  placeId: string;
+  name?: string;
+  location: LatLng;
+};

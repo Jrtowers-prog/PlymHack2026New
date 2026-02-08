@@ -1,3 +1,4 @@
+import { Asset } from 'expo-asset';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -13,6 +14,11 @@ import type {
 
 const PRIMARY_COLOR = '#1570ef';
 const SECONDARY_COLOR = '#98a2b3';
+const CRIME_ICON_URL = Asset.fromModule(
+  require('../../../assets/images/crime.png')
+).uri;
+const LIGHT_ICON_URL = 'https://maps.google.com/mapfiles/ms/icons/yellow-dot.png';
+const MARKER_SPREAD_METERS = 4;
 
 export const RouteMap = ({
   origin,
@@ -20,7 +26,46 @@ export const RouteMap = ({
   routes,
   selectedRouteId,
   onSelectRoute,
+  crimePoints = [],
+  openPlaces = [],
+  lightPoints = [],
 }: RouteMapProps) => {
+  const spreadCrimePoints = (points: RouteMapProps['crimePoints']) => {
+    const counts = new Map<string, number>();
+
+    points.forEach((crime) => {
+      const key = `${crime.location.latitude.toFixed(6)},${crime.location.longitude.toFixed(6)}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+
+    const indexTracker = new Map<string, number>();
+
+    return points.map((crime) => {
+      const { latitude, longitude } = crime.location;
+      const key = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+      const total = counts.get(key) ?? 1;
+      const index = indexTracker.get(key) ?? 0;
+      indexTracker.set(key, index + 1);
+
+      if (total === 1) {
+        return crime;
+      }
+
+      const angle = (2 * Math.PI * index) / total;
+      const metersPerDegreeLat = 111320;
+      const metersPerDegreeLng = 111320 * Math.cos((latitude * Math.PI) / 180);
+      const latOffset = (MARKER_SPREAD_METERS * Math.sin(angle)) / metersPerDegreeLat;
+      const lngOffset = (MARKER_SPREAD_METERS * Math.cos(angle)) / metersPerDegreeLng;
+
+      return {
+        ...crime,
+        location: {
+          latitude: latitude + latOffset,
+          longitude: longitude + lngOffset,
+        },
+      };
+    });
+  };
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
   const markersRef = useRef<GoogleMarkerInstance[]>([]);
@@ -144,13 +189,77 @@ export const RouteMap = ({
       hasBounds = true;
     });
 
+    openPlaces.forEach((place) => {
+      const position = new googleMaps.maps.LatLng(
+        place.location.latitude,
+        place.location.longitude
+      );
+      markersRef.current.push(
+        new googleMaps.maps.Marker({
+          position,
+          map,
+          title: place.name ?? 'Open place',
+          icon: 'https://maps.google.com/mapfiles/ms/icons/green-dot.png',
+        })
+      );
+      bounds.extend(position);
+      hasBounds = true;
+    });
+
+    lightPoints.forEach((point, index) => {
+      const position = new googleMaps.maps.LatLng(point.latitude, point.longitude);
+      markersRef.current.push(
+        new googleMaps.maps.Marker({
+          position,
+          map,
+          title: 'Street light',
+          icon: {
+            url: LIGHT_ICON_URL,
+            scaledSize: new googleMaps.maps.Size(16, 16),
+          },
+        })
+      );
+      bounds.extend(position);
+      hasBounds = true;
+    });
+
+    spreadCrimePoints(crimePoints).forEach((crime, index) => {
+      const position = new googleMaps.maps.LatLng(
+        crime.location.latitude,
+        crime.location.longitude
+      );
+      markersRef.current.push(
+        new googleMaps.maps.Marker({
+          position,
+          map,
+          title: crime.category,
+          icon: {
+            url: CRIME_ICON_URL,
+            scaledSize: new googleMaps.maps.Size(28, 28),
+          },
+        })
+      );
+      bounds.extend(position);
+      hasBounds = true;
+    });
+
     if (hasBounds) {
       map.fitBounds(bounds);
     } else {
       map.setCenter(new googleMaps.maps.LatLng(center.latitude, center.longitude));
       map.setZoom(13);
     }
-  }, [googleMaps, origin, destination, routes, selectedRouteId, onSelectRoute]);
+  }, [
+    googleMaps,
+    origin,
+    destination,
+    routes,
+    selectedRouteId,
+    onSelectRoute,
+    openPlaces,
+    crimePoints,
+    lightPoints,
+  ]);
 
   return (
     <View style={styles.container}>

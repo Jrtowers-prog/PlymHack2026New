@@ -1,4 +1,5 @@
-import type { DirectionsRoute, LatLng } from '@/src/types/google';
+import type { CrimePoint } from '@/src/types/crime';
+import type { DirectionsRoute, LatLng, OpenPlace } from '@/src/types/google';
 
 export type RouteMapProps = {
   origin: LatLng | null;
@@ -6,4 +7,7 @@ export type RouteMapProps = {
   routes: DirectionsRoute[];
   selectedRouteId: string | null;
   onSelectRoute?: (routeId: string) => void;
+  crimePoints?: CrimePoint[];
+  openPlaces?: OpenPlace[];
+  lightPoints?: LatLng[];
 };

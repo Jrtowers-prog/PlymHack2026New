@@ -11,6 +11,11 @@ export type GoogleLatLngBounds = {
   extend: (latLng: GoogleLatLng) => void;
 };
 
+export type GoogleSize = {
+  width: number;
+  height: number;
+};
+
 export type GoogleMapOptions = {
   center: GoogleLatLng;
   zoom: number;
@@ -29,7 +34,7 @@ export type GoogleMarkerOptions = {
   position: GoogleLatLng;
   map: GoogleMapInstance;
   title?: string;
-  icon?: string;
+  icon?: string | { url: string; scaledSize?: GoogleSize };
 };
 
 export type GoogleMarkerInstance = {
@@ -84,10 +89,20 @@ export type PlaceResult = {
   };
 };
 
+export type NearbySearchRequest = {
+  location: GoogleLatLng;
+  radius: number;
+  openNow?: boolean;
+};
+
 export type GooglePlacesService = {
   getDetails: (
     request: PlaceDetailsRequest,
     callback: (place: PlaceResult | null, status: string) => void
+  ) => void;
+  nearbySearch: (
+    request: NearbySearchRequest,
+    callback: (results: PlaceResult[] | null, status: string) => void
   ) => void;
 };
 
@@ -130,6 +145,7 @@ export type GoogleMapsApi = {
     Marker: new (options: GoogleMarkerOptions) => GoogleMarkerInstance;
     Polyline: new (options: GooglePolylineOptions) => GooglePolylineInstance;
     LatLng: new (lat: number, lng: number) => GoogleLatLng;
+    Size: new (width: number, height: number) => GoogleSize;
     LatLngBounds: new () => GoogleLatLngBounds;
     TravelMode: {
       WALKING: string;

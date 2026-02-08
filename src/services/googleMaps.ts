@@ -3,10 +3,13 @@ import { AppError } from '@/src/types/errors';
 import type {
     DirectionsRoute,
     LatLng,
+    OpenPlace,
+    OpenPlacesSummary,
     PlaceDetails,
     PlacePrediction,
 } from '@/src/types/google';
 import { decodePolyline } from '@/src/utils/polyline';
+import { sampleRoutePoints } from '@/src/utils/routeSampling';
 
 type GooglePlacesAutocompleteResponse = {
   status: string;
@@ -55,6 +58,21 @@ type GoogleDirectionsResponse = {
   }>;
 };
 
+type GooglePlacesNearbyResponse = {
+  status: string;
+  error_message?: string;
+  results: Array<{
+    place_id?: string;
+    name?: string;
+    geometry?: {
+      location?: {
+        lat: number;
+        lng: number;
+      };
+    };
+  }>;
+};
+
 const GOOGLE_PLACES_BASE_URL = 'https://maps.googleapis.com/maps/api/place';
 const GOOGLE_DIRECTIONS_BASE_URL = 'https://maps.googleapis.com/maps/api/directions';
 
@@ -85,6 +103,63 @@ const fetchJson = async <T>(url: string): Promise<T> => {
 
     throw new AppError('google_maps_network_error', 'Network error', error);
   }
+};
+
+const fetchNearbyOpenPlaces = async (
+  location: LatLng,
+  radiusMeters: number
+): Promise<OpenPlace[]> => {
+  const apiKey = requireGoogleMapsApiKey();
+  const url = `${GOOGLE_PLACES_BASE_URL}/nearbysearch/json?key=${apiKey}&location=${location.latitude},${location.longitude}&radius=${Math.max(
+    1,
+    Math.round(radiusMeters)
+  )}&opennow=true`;
+
+  const data = await fetchJson<GooglePlacesNearbyResponse>(url);
+
+  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+    throw new AppError(
+      'google_places_nearby_error',
+      data.error_message ?? `Google Places Nearby Search failed: ${data.status}`
+    );
+  }
+
+  return (data.results ?? [])
+    .map((result) => {
+      if (!result.place_id || !result.geometry?.location) {
+        return null;
+      }
+
+      return {
+        placeId: result.place_id,
+        name: result.name,
+        location: {
+          latitude: result.geometry.location.lat,
+          longitude: result.geometry.location.lng,
+        },
+      } satisfies OpenPlace;
+    })
+    .filter((place): place is OpenPlace => Boolean(place));
+};
+
+const withConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> => {
+  const results: R[] = [];
+  let index = 0;
+
+  const runners = Array.from({ length: Math.max(1, concurrency) }).map(async () => {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
 };
 
 export const fetchPlacePredictions = async (
@@ -187,6 +262,47 @@ export const fetchDirections = async (
       summary: route.summary,
     };
   });
+};
+
+export const fetchOpenPlacesForRoute = async (
+  path: LatLng[],
+  options?: {
+    intervalMeters?: number;
+    radiusMeters?: number;
+    maxSamples?: number;
+    concurrency?: number;
+  }
+): Promise<OpenPlacesSummary> => {
+  if (path.length < 2) {
+    return {
+      count: 0,
+      places: [],
+      sampledPoints: [],
+    };
+  }
+
+  const intervalMeters = options?.intervalMeters ?? 50;
+  const radiusMeters = options?.radiusMeters ?? 25;
+  const maxSamples = options?.maxSamples ?? 25;
+  const concurrency = options?.concurrency ?? 2;
+
+  const sampledPoints = sampleRoutePoints(path, { intervalMeters, maxSamples });
+  const placeSets = await withConcurrency(sampledPoints, concurrency, (point) =>
+    fetchNearbyOpenPlaces(point, radiusMeters)
+  );
+
+  const uniquePlaces = new Map<string, OpenPlace>();
+  placeSets.forEach((places) => {
+    places.forEach((place) => {
+      uniquePlaces.set(place.placeId, place);
+    });
+  });
+
+  return {
+    count: uniquePlaces.size,
+    places: Array.from(uniquePlaces.values()),
+    sampledPoints,
+  };
 };
 
 export const buildStaticMapUrl = (params: {

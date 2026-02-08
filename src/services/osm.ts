@@ -13,14 +13,113 @@ type OverpassElement = {
   type: 'way' | 'node' | 'relation';
   id: number;
   tags?: Record<string, string>;
+  lat?: number;
+  lon?: number;
 };
 
 type OverpassResponse = {
   elements: OverpassElement[];
 };
 
-const OVERPASS_API_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_API_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.nchc.org.tw/api/interpreter',
+];
 const MAX_POLYGON_POINTS = 200;
+const OSM_CACHE_TTL_MS = 5 * 60 * 1000;
+const OSM_MAX_RETRIES = 3;
+const OSM_BASE_BACKOFF_MS = 500;
+
+const osmCache = new Map<string, { timestamp: number; summary: OsmRouteSummary }>();
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const parseRetryAfterMs = (value: string | null): number | null => {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (!Number.isNaN(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) {
+    return Math.max(0, date - Date.now());
+  }
+
+  return null;
+};
+
+type OverpassErrorInfo = {
+  status: number;
+  retryAfterMs: number | null;
+};
+
+const fetchOverpass = async (query: string, endpoint: string): Promise<OverpassResponse> => {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain',
+    },
+    body: query,
+  });
+
+  if (!response.ok) {
+    const retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After'));
+    const info: OverpassErrorInfo = {
+      status: response.status,
+      retryAfterMs,
+    };
+
+    throw new AppError(
+      'osm_api_error',
+      `Overpass API request failed with status ${response.status}`,
+      info
+    );
+  }
+
+  return (await response.json()) as OverpassResponse;
+};
+
+const fetchOverpassWithRetry = async (query: string): Promise<OverpassResponse> => {
+  let lastError: AppError | null = null;
+
+  for (let attempt = 0; attempt <= OSM_MAX_RETRIES; attempt += 1) {
+    const endpoint = OVERPASS_API_URLS[attempt % OVERPASS_API_URLS.length];
+
+    try {
+      return await fetchOverpass(query, endpoint);
+    } catch (error) {
+      const normalized =
+        error instanceof AppError
+          ? error
+          : new AppError('osm_network_error', 'Network error', error);
+      lastError = normalized;
+
+      if (normalized.code !== 'osm_api_error') {
+        throw normalized;
+      }
+
+      const retryAfter =
+        typeof normalized.cause === 'object' && normalized.cause !== null
+          ? (normalized.cause as OverpassErrorInfo).retryAfterMs ?? null
+          : null;
+      const backoff = OSM_BASE_BACKOFF_MS * Math.pow(2, attempt);
+      const waitMs = retryAfter ?? backoff + Math.floor(Math.random() * 250);
+
+      await sleep(waitMs);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new AppError('osm_api_error', 'Overpass API request failed');
+};
 
 const toFixedCoord = (value: number): string => value.toFixed(6);
 
@@ -117,13 +216,41 @@ const tallyRoadTypes = (elements: OverpassElement[]): RoadTypeCount[] => {
     .sort((a, b) => b.count - a.count);
 };
 
+const extractLightPoints = (elements: OverpassElement[]): LatLng[] => {
+  const points = new Map<number, LatLng>();
+
+  elements.forEach((element) => {
+    if (element.type !== 'node') {
+      return;
+    }
+
+    const highway = element.tags?.highway?.toLowerCase();
+
+    if (highway !== 'street_lamp') {
+      return;
+    }
+
+    if (typeof element.lat !== 'number' || typeof element.lon !== 'number') {
+      return;
+    }
+
+    points.set(element.id, {
+      latitude: element.lat,
+      longitude: element.lon,
+    });
+  });
+
+  return Array.from(points.values());
+};
+
 const buildOverpassQuery = (polygon: string): string => {
   return [
     '[out:json][timeout:25];',
     '(',
     `way["highway"](poly:"${polygon}");`,
+    `node["highway"="street_lamp"](poly:"${polygon}");`,
     ');',
-    'out tags;',
+    'out body;',
   ].join('\n');
 };
 
@@ -133,32 +260,30 @@ export const fetchOsmRouteSummary = async (
 ): Promise<OsmRouteSummary> => {
   const polygon = buildOverpassPolygon(path, bufferMeters);
   const query = buildOverpassQuery(polygon);
+  const cacheKey = `${polygon}:${bufferMeters}`;
+  const cached = osmCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.timestamp < OSM_CACHE_TTL_MS) {
+    return cached.summary;
+  }
 
   try {
-    const response = await fetch(OVERPASS_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: query,
-    });
-
-    if (!response.ok) {
-      throw new AppError(
-        'osm_api_error',
-        `Overpass API request failed with status ${response.status}`
-      );
-    }
-
-    const data = (await response.json()) as OverpassResponse;
+    const data = await fetchOverpassWithRetry(query);
     const elements = data.elements ?? [];
+    const wayElements = elements.filter((element) => element.type === 'way');
+    const lightPoints = extractLightPoints(elements);
 
-    return {
-      roadTypes: tallyRoadTypes(elements),
-      lighting: tallyLighting(elements),
+    const summary = {
+      roadTypes: tallyRoadTypes(wayElements),
+      lighting: tallyLighting(wayElements),
       polygon,
       sampledPoints: path,
-    };
+      lightPoints,
+    } satisfies OsmRouteSummary;
+
+    osmCache.set(cacheKey, { timestamp: Date.now(), summary });
+
+    return summary;
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
@@ -191,7 +316,7 @@ const withConcurrency = async <T, R>(
 export const fetchOsmSummariesForRoutes = async (
   routes: DirectionsRoute[],
   bufferMeters = 50,
-  concurrency = 2
+  concurrency = 1
 ): Promise<OsmRouteResult[]> => {
   if (routes.length === 0) {
     return [];

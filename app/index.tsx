@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import RouteMap from '@/src/components/maps/RouteMap';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
 import { useDirections } from '@/src/hooks/useDirections';
+import { useOpenPlacesForRoute } from '@/src/hooks/useOpenPlacesForRoute';
+import { useOsmRoutesData } from '@/src/hooks/useOsmRouteData';
 import { usePlaceAutocomplete } from '@/src/hooks/usePlaceAutocomplete';
+import { fetchCrimeForRoute } from '@/src/services/crime';
 import { fetchPlaceDetails } from '@/src/services/googleMaps';
+import type { CrimePoint } from '@/src/types/crime';
 import { AppError } from '@/src/types/errors';
 import type { DirectionsRoute, PlaceDetails, PlacePrediction } from '@/src/types/google';
 
@@ -28,6 +32,12 @@ export default function HomeScreen() {
   const [destinationError, setDestinationError] = useState<AppError | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [crimeStatus, setCrimeStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>(
+    'idle'
+  );
+  const [crimeCount, setCrimeCount] = useState<number | null>(null);
+  const [crimeError, setCrimeError] = useState<AppError | null>(null);
+  const [crimePoints, setCrimePoints] = useState<CrimePoint[]>([]);
 
   const { status: autocompleteStatus, predictions, error: autocompleteError } =
     usePlaceAutocomplete(query, location);
@@ -36,6 +46,11 @@ export default function HomeScreen() {
     routes,
     error: directionsError,
   } = useDirections(location, destination?.location ?? null);
+  const {
+    status: osmStatus,
+    data: osmSummaries,
+    error: osmError,
+  } = useOsmRoutesData(routes);
 
   useEffect(() => {
     if (routes.length > 0) {
@@ -46,6 +61,75 @@ export default function HomeScreen() {
   const selectedRoute = useMemo<DirectionsRoute | null>(() => {
     return routes.find((route) => route.id === selectedRouteId) ?? null;
   }, [routes, selectedRouteId]);
+
+  const {
+    status: openPlacesStatus,
+    data: openPlacesSummary,
+    error: openPlacesError,
+  } = useOpenPlacesForRoute(selectedRoute?.path ?? null, {
+    intervalMeters: 50,
+    radiusMeters: 25,
+    maxSamples: 25,
+  });
+
+  const selectedOsmSummary = useMemo(() => {
+    if (!selectedRoute) {
+      return null;
+    }
+
+    return osmSummaries.find((summary) => summary.routeId === selectedRoute.id) ?? null;
+  }, [osmSummaries, selectedRoute]);
+
+  const majorityRoadType = useMemo(() => {
+    const roadTypes = selectedOsmSummary?.summary.roadTypes;
+
+    if (!roadTypes || roadTypes.length === 0) {
+      return null;
+    }
+
+    const top = roadTypes[0];
+    return formatRoadType(top.type);
+  }, [selectedOsmSummary]);
+
+  useEffect(() => {
+    if (!selectedRoute) {
+      setCrimeStatus('idle');
+      setCrimeCount(null);
+      setCrimeError(null);
+      setCrimePoints([]);
+      return;
+    }
+
+    let isActive = true;
+    setCrimeStatus('loading');
+    setCrimeError(null);
+
+    fetchCrimeForRoute(selectedRoute.path)
+      .then((crime) => {
+        if (!isActive) {
+          return;
+        }
+        setCrimeCount(crime.count);
+        setCrimePoints(crime.points);
+        setCrimeStatus('ready');
+      })
+      .catch((caught) => {
+        if (!isActive) {
+          return;
+        }
+        setCrimePoints([]);
+        const normalizedError =
+          caught instanceof AppError
+            ? caught
+            : new AppError('crime_error', 'Unable to fetch crime data', caught);
+        setCrimeError(normalizedError);
+        setCrimeStatus('error');
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedRoute]);
 
   const handlePredictionPress = async (prediction: PlacePrediction) => {
     setDestinationStatus('loading');
@@ -81,6 +165,9 @@ export default function HomeScreen() {
           routes={routes}
           selectedRouteId={selectedRouteId}
           onSelectRoute={setSelectedRouteId}
+          crimePoints={crimePoints}
+          openPlaces={openPlacesSummary?.places ?? []}
+          lightPoints={selectedOsmSummary?.summary.lightPoints ?? []}
         />
       </View>
       <View style={styles.topOverlay} pointerEvents="box-none">
@@ -166,6 +253,49 @@ export default function HomeScreen() {
                 {distanceLabel} · {durationLabel}
               </Text>
             </View>
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>Police API:</Text>
+              <Text style={styles.statusValue}>
+                {crimeStatus === 'loading'
+                  ? 'Loading'
+                  : crimeStatus === 'error'
+                  ? 'Error'
+                  : crimeCount === null
+                  ? '--'
+                  : `${crimeCount} incidents`}
+              </Text>
+              <Text style={styles.statusLabel}>OSM:</Text>
+              <Text style={styles.statusValue}>
+                {osmStatus === 'loading'
+                  ? 'Loading'
+                  : osmStatus === 'error'
+                  ? 'Error'
+                  : selectedOsmSummary
+                  ? `Lit yes ${selectedOsmSummary.summary.lighting.litYes}`
+                  : '--'}
+              </Text>
+              <Text style={styles.statusLabel}>Road type:</Text>
+              <Text style={styles.statusValue}>
+                {osmStatus === 'loading'
+                  ? 'Loading'
+                  : osmStatus === 'error'
+                  ? 'Error'
+                  : majorityRoadType ?? '--'}
+              </Text>
+              <Text style={styles.statusLabel}>Open places:</Text>
+              <Text style={styles.statusValue}>
+                {openPlacesStatus === 'loading'
+                  ? 'Loading'
+                  : openPlacesStatus === 'error'
+                  ? 'Error'
+                  : openPlacesSummary
+                  ? `${openPlacesSummary.count} open`
+                  : '--'}
+              </Text>
+            </View>
+            {crimeError ? <Text style={styles.error}>{crimeError.message}</Text> : null}
+            {osmError ? <Text style={styles.error}>{osmError.message}</Text> : null}
+            {openPlacesError ? <Text style={styles.error}>{openPlacesError.message}</Text> : null}
             {directionsStatus === 'loading' ? (
               <View style={styles.inlineRow}>
                 <ActivityIndicator size="small" color="#1570ef" />
@@ -219,6 +349,34 @@ const formatDuration = (seconds: number): string => {
   }
 
   return `${Math.max(1, Math.round(seconds / 60))} min`;
+};
+
+const formatRoadType = (type: string): string => {
+  switch (type) {
+    case 'primary':
+    case 'primary_link':
+    case 'secondary':
+    case 'secondary_link':
+    case 'tertiary':
+    case 'tertiary_link':
+      return 'Main road';
+    case 'residential':
+    case 'living_street':
+      return 'Residential';
+    case 'footway':
+    case 'path':
+    case 'pedestrian':
+    case 'steps':
+      return 'Path';
+    case 'service':
+      return 'Service road';
+    case 'cycleway':
+      return 'Cycleway';
+    case 'track':
+      return 'Track';
+    default:
+      return type.replace(/_/g, ' ');
+  }
 };
 
 const styles = StyleSheet.create({
@@ -355,6 +513,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  statusRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusLabel: {
+    fontSize: 12,
+    color: '#667085',
+  },
+  statusValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#101828',
   },
   routeRow: {
     marginTop: 8,

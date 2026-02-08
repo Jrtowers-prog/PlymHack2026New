@@ -73,7 +73,7 @@ export const useOsmRouteData = (
 export const useOsmRoutesData = (
   routes: DirectionsRoute[],
   bufferMeters = 50,
-  concurrency = 2
+  concurrency = 1
 ): UseOsmRoutesDataState => {
   const [status, setStatus] = useState<OsmStatus>('idle');
   const [data, setData] = useState<OsmRouteResult[]>([]);

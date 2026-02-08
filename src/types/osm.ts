@@ -16,6 +16,7 @@ export type OsmRouteSummary = {
   lighting: LightingSummary;
   polygon: string;
   sampledPoints: LatLng[];
+  lightPoints: LatLng[];
 };
 
 export type OsmRouteResult = {
