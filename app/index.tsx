@@ -262,40 +262,13 @@ export default function HomeScreen() {
       };
     });
 
-    const crimeValues = entries
-      .map((entry) => entry.crimeDensity)
-      .filter((value): value is number => value !== null);
-    const openValues = entries
-      .map((entry) => entry.openDensity)
-      .filter((value): value is number => value !== null);
-    const lightingValues = entries
-      .map((entry) => entry.lightingRatio)
-      .filter((value): value is number => value !== null);
-    const roadValues = entries
-      .map((entry) => entry.roadScore)
-      .filter((value): value is number => value !== null);
-
-    const minMax = (values: number[]) => {
-      if (values.length === 0) {
-        return { min: 0, max: 0 };
-      }
-      return {
-        min: Math.min(...values),
-        max: Math.max(...values),
-      };
-    };
-
-    const crimeRange = minMax(crimeValues);
-    const openRange = minMax(openValues);
-    const lightingRange = minMax(lightingValues);
-    const roadRange = minMax(roadValues);
-
-    const normalize = (value: number, min: number, max: number): number => {
+    const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
+    const normalizeRange = (value: number, min: number, max: number): number => {
       if (max === min) {
         return 1;
       }
 
-      return (value - min) / (max - min);
+      return clamp01((value - min) / (max - min));
     };
 
     const scores: Record<string, { score: number; color: string }> = {};
@@ -323,14 +296,10 @@ export default function HomeScreen() {
         return;
       }
 
-      const crimeScore = 1 - normalize(entry.crimeDensity, crimeRange.min, crimeRange.max);
-      const openScore = normalize(entry.openDensity, openRange.min, openRange.max);
-      const lightingScore = normalize(
-        entry.lightingRatio,
-        lightingRange.min,
-        lightingRange.max
-      );
-      const roadScore = normalize(entry.roadScore, roadRange.min, roadRange.max);
+      const crimeScore = 1 - normalizeRange(entry.crimeDensity, 0, 20);
+      const openScore = normalizeRange(entry.openDensity, 0, 20);
+      const lightingScore = normalizeRange(entry.lightingRatio, 0.3, 0.9);
+      const roadScore = normalizeRange(entry.roadScore, 0.3, 1);
 
       const weighted =
         crimeScore * 0.4 +
@@ -687,24 +656,62 @@ export default function HomeScreen() {
                     {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
                   </Text>
                   {isExpanded && breakdown ? (
-                    <View style={styles.breakdown}>
-                      <Text style={styles.breakdownTitle}>Safety breakdown</Text>
-                      <Text style={styles.breakdownRow}>
-                        Crime (40%): {formatPercent(breakdown.crimeScore)} •
-                        {` ${formatPerKm(breakdown.crimeDensity)} / km`}
-                      </Text>
-                      <Text style={styles.breakdownRow}>
-                        Open places (30%): {formatPercent(breakdown.openScore)} •
-                        {` ${formatPerKm(breakdown.openDensity)} / km`}
-                      </Text>
-                      <Text style={styles.breakdownRow}>
-                        Lighting (20%): {formatPercent(breakdown.lightingScore)} •
-                        {` ${formatPercent(breakdown.lightingRatio)}`}
-                      </Text>
-                      <Text style={styles.breakdownRow}>
-                        Road type (10%): {formatPercent(breakdown.roadScore)} •
-                        {` ${formatRoadTypeLabel(breakdown.roadType)}`}
-                      </Text>
+                    <View style={styles.breakdownCard}>
+                      <View style={styles.breakdownScore}>
+                        <Text
+                          style={[
+                            styles.breakdownScoreValue,
+                            { color: safety?.color ?? '#667085' },
+                          ]}
+                        >
+                          {safetyLabel}
+                        </Text>
+                        <Text style={styles.breakdownScoreLabel}>Safety</Text>
+                      </View>
+                      <View style={styles.breakdownBars}>
+                        <View style={styles.breakdownRowLine}>
+                          <Text style={styles.breakdownRowLabel}>Crime</Text>
+                          <View style={styles.breakdownBarTrack}>
+                            <View
+                              style={[
+                                styles.breakdownBarFill,
+                                {
+                                  width: `${Math.round(breakdown.crimeScore * 100)}%`,
+                                  backgroundColor: '#f04438',
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                        <View style={styles.breakdownRowLine}>
+                          <Text style={styles.breakdownRowLabel}>Lighting</Text>
+                          <View style={styles.breakdownBarTrack}>
+                            <View
+                              style={[
+                                styles.breakdownBarFill,
+                                {
+                                  width: `${Math.round(breakdown.lightingScore * 100)}%`,
+                                  backgroundColor: '#facc15',
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                        <View style={styles.breakdownRowLine}>
+                          <Text style={styles.breakdownRowLabel}>Open places</Text>
+                          <View style={styles.breakdownBarTrack}>
+                            <View
+                              style={[
+                                styles.breakdownBarFill,
+                                {
+                                  width: `${Math.round(breakdown.openScore * 100)}%`,
+                                  backgroundColor: '#12b76a',
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      </View>
                     </View>
                   ) : null}
                 </Pressable>
@@ -733,50 +740,6 @@ const formatDuration = (seconds: number): string => {
   }
 
   return `${Math.max(1, Math.round(seconds / 60))} min`;
-};
-
-const formatPerKm = (value: number): string => {
-  if (!Number.isFinite(value)) {
-    return '--';
-  }
-
-  return value >= 100 ? value.toFixed(0) : value.toFixed(1);
-};
-
-const formatPercent = (value: number): string => {
-  if (!Number.isFinite(value)) {
-    return '--';
-  }
-
-  return `${Math.round(value * 100)}%`;
-};
-
-const formatRoadTypeLabel = (type: string): string => {
-  switch (type) {
-    case 'primary':
-    case 'primary_link':
-    case 'secondary':
-    case 'secondary_link':
-    case 'tertiary':
-    case 'tertiary_link':
-      return 'Main road';
-    case 'residential':
-    case 'living_street':
-      return 'Residential';
-    case 'footway':
-    case 'path':
-    case 'pedestrian':
-    case 'steps':
-      return 'Path';
-    case 'service':
-      return 'Service road';
-    case 'cycleway':
-      return 'Cycleway';
-    case 'track':
-      return 'Track';
-    default:
-      return type.replace(/_/g, ' ');
-  }
 };
 
 const roadTypeScore = (type: string): number => {
@@ -1028,21 +991,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#667085',
   },
-  breakdown: {
+  breakdownCard: {
     marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#eaecf0',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#eaecf0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
-  breakdownTitle: {
-    fontSize: 12,
+  breakdownScore: {
+    width: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  breakdownScoreValue: {
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  breakdownScoreLabel: {
+    fontSize: 11,
     fontWeight: '600',
-    color: '#344054',
-    marginBottom: 4,
+    color: '#667085',
   },
-  breakdownRow: {
-    fontSize: 12,
+  breakdownBars: {
+    flex: 1,
+    gap: 8,
+  },
+  breakdownRowLine: {
+    gap: 4,
+  },
+  breakdownRowLabel: {
+    fontSize: 11,
+    fontWeight: '600',
     color: '#475467',
-    marginTop: 2,
+  },
+  breakdownBarTrack: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#f2f4f7',
+    overflow: 'hidden',
+  },
+  breakdownBarFill: {
+    height: '100%',
+    borderRadius: 999,
   },
 });
