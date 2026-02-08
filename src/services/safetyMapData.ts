@@ -51,16 +51,21 @@ export interface RouteSegment {
 
 /** Human-readable names for OSM highway types */
 export const ROAD_TYPE_NAMES: Record<string, string> = {
-  primary:       'Main Road',
-  secondary:     'Secondary Road',
-  tertiary:      'Minor Road',
+  primary:       'Main',
+  secondary:     'Secondary',
+  tertiary:      'Minor',
   residential:   'Residential',
-  living_street: 'Living Street',
-  pedestrian:    'Pedestrian Zone',
-  footway:       'Footpath',
+  living_street: 'Living St',
+  pedestrian:    'Pedestrian',
+  footway:       'Path',
   path:          'Path',
   steps:         'Steps',
   track:         'Track',
+  cycleway:      'Cycleway',
+  trunk:         'Highway',
+  motorway:      'Motorway',
+  service:       'Service',
+  unclassified:  'Minor',
 };
 
 export interface SafetyMapResult {
@@ -77,6 +82,9 @@ export interface SafetyMapResult {
   safetyLabel: string;        // e.g. "Safe"
   safetyColor: string;        // hex colour for the score
   mainRoadRatio: number;      // 0-1 fraction of route on main roads
+  /** 0-1 how much real data we had to base the score on.
+   *  Below ~0.3 the score is unreliable → prefer fastest route. */
+  dataConfidence: number;
 }
 
 // Road types considered "main roads" (safer for walking)
@@ -112,9 +120,21 @@ const computeSafetyScore = (
   openPlaces: number,
   routeDistanceKm: number,
   mainRoadRatio: number,
-): { score: number; label: string; color: string } => {
+): { score: number; label: string; color: string; dataConfidence: number } => {
   // Normalise per-km so short and long routes are comparable
   const km = Math.max(routeDistanceKm, 0.3); // avoid divide-by-zero
+
+  // ── Data-confidence: how many data sources actually returned data? ──
+  // Each source contributes up to 0.25 confidence.
+  const hasCrimeData   = crimeCount > 0;                    // API returned results
+  const hasLightData   = streetLights > 0;                  // Overpass lights
+  const hasRoadData    = (litRoads + unlitRoads) > 0;       // Overpass roads
+  const hasPlaceData   = openPlaces > 0;                    // Overpass shops/places
+  const dataConfidence =
+    (hasCrimeData  ? 0.25 : 0) +
+    (hasLightData  ? 0.25 : 0) +
+    (hasRoadData   ? 0.25 : 0) +
+    (hasPlaceData  ? 0.25 : 0);
 
   // --- Crime factor (0 = lots of crime, 1 = no crime) ---
   const crimesPerKm = crimeCount / km;
@@ -149,10 +169,14 @@ const computeSafetyScore = (
   // Map to 1–100
   const score = Math.round(Math.max(1, Math.min(100, raw * 100)));
 
-  // Label & colour
+  // Label & colour — if we lack data, be honest about it
   let label: string;
   let color: string;
-  if (score >= 70) {
+  if (dataConfidence < 0.3) {
+    // Not enough data to make a reliable safety judgement
+    label = 'Insufficient Data';
+    color = '#94a3b8'; // slate-400 (neutral grey)
+  } else if (score >= 70) {
     label = 'Very Safe';
     color = '#22c55e'; // green-500
   } else if (score >= 60) {
@@ -166,7 +190,7 @@ const computeSafetyScore = (
     color = '#ef4444'; // red-500
   }
 
-  return { score, label, color };
+  return { score, label, color, dataConfidence };
 };
 
 // ---------------------------------------------------------------------------
@@ -819,12 +843,11 @@ const generateRoadLabels = (overlays: RoadOverlay[], path: LatLng[]): RoadLabel[
     if (lastCoord && haversine(pt, lastCoord) < 150) continue;
 
     const displayName = ROAD_TYPE_NAMES[matched.roadType] ?? matched.roadType;
-    const streetName = matched.name ?? '';
     labels.push({
       id: `rlabel-${labels.length}`,
       coordinate: pt,
       roadType: matched.roadType,
-      displayName: streetName ? `${streetName} · ${displayName}` : displayName,
+      displayName,
       color: matched.color,
     });
     lastType = matched.roadType;
@@ -851,7 +874,7 @@ export const fetchSafetyMapData = async (
   routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Unknown', safetyColor: '#94a3b8', mainRoadRatio: 0.5 };
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, dataConfidence: 0 };
   }
 
   // Return cached result if we already analysed this exact route
@@ -913,7 +936,7 @@ export const fetchSafetyMapData = async (
   const mainRoadRatio = totalSamples > 0 ? mainSamples / totalSamples : 0.5;
 
   const distKm = (routeDistanceMeters ?? 1000) / 1000;
-  const { score, label, color } = computeSafetyScore(
+  const { score, label, color, dataConfidence } = computeSafetyScore(
     crimes.length,
     roadsData.lights.length,
     roadsData.litCount,
@@ -937,6 +960,7 @@ export const fetchSafetyMapData = async (
     safetyLabel: label,
     safetyColor: color,
     mainRoadRatio,
+    dataConfidence,
   };
 
   // Persist so future calls for the same route are instant & identical

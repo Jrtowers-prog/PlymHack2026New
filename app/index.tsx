@@ -5,6 +5,7 @@ import {
   Animated,
   Dimensions,
   PanResponder,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -44,6 +45,7 @@ export default function HomeScreen() {
 
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [mapPanTo, setMapPanTo] = useState<{ location: LatLng; key: number } | null>(null);
 
   // Which field gets the next map tap: 'origin' | 'destination' | null
   const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
@@ -66,39 +68,132 @@ export default function HomeScreen() {
   const SHEET_MIN = 80;                      // collapsed: just the handle + header
   const sheetHeight = useRef(new Animated.Value(SHEET_DEFAULT)).current;
   const sheetHeightRef = useRef(SHEET_DEFAULT);
+  const scrollOffsetRef = useRef(0);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const sheetBodyRef = useRef<View>(null);
+  const isAtTopRef = useRef(true);
+  const isAtBottomRef = useRef(false);
+  const isDraggingSheetRef = useRef(false);
+  const wheelAccumulatorRef = useRef(0);
+  const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const sheetPanResponder = useRef(
+  // Handle-only pan responder (always drags the sheet)
+  const handlePanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
+      onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
-        // Capture current height at start of gesture
+        isDraggingSheetRef.current = true;
         sheetHeight.stopAnimation((v: number) => { sheetHeightRef.current = v; });
       },
       onPanResponderMove: (_, g) => {
-        // Dragging down = positive dy = shrink sheet; up = negative dy = grow
         const next = Math.min(SHEET_MAX, Math.max(SHEET_MIN, sheetHeightRef.current - g.dy));
         sheetHeight.setValue(next);
       },
       onPanResponderRelease: (_, g) => {
-        const current = sheetHeightRef.current - g.dy;
-        let snap: number;
-        if (g.vy > 0.5 || current < SHEET_MIN + 40) {
-          snap = SHEET_MIN; // fling down → collapse
-        } else if (g.vy < -0.5 || current > SHEET_MAX - 40) {
-          snap = SHEET_MAX; // fling up → expand
-        } else {
-          snap = SHEET_DEFAULT; // settle to default
-        }
-        sheetHeightRef.current = snap;
-        Animated.spring(sheetHeight, {
-          toValue: snap,
-          useNativeDriver: false,
-          bounciness: 4,
-        }).start();
+        isDraggingSheetRef.current = false;
+        snapSheet(sheetHeightRef.current - g.dy, g.vy);
       },
     }),
   ).current;
+
+  // Body pan responder — only captures when scroll is at an edge (touch devices)
+  const bodyPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => {
+        if (Math.abs(g.dy) < 4) return false;
+        if (g.dy < 0 && isAtBottomRef.current) return true;
+        if (g.dy > 0 && isAtTopRef.current) return true;
+        return false;
+      },
+      onPanResponderGrant: () => {
+        isDraggingSheetRef.current = true;
+        sheetHeight.stopAnimation((v: number) => { sheetHeightRef.current = v; });
+      },
+      onPanResponderMove: (_, g) => {
+        const next = Math.min(SHEET_MAX, Math.max(SHEET_MIN, sheetHeightRef.current - g.dy));
+        sheetHeight.setValue(next);
+      },
+      onPanResponderRelease: (_, g) => {
+        isDraggingSheetRef.current = false;
+        snapSheet(sheetHeightRef.current - g.dy, g.vy);
+      },
+    }),
+  ).current;
+
+  const snapSheet = (current: number, vy: number) => {
+    let snap: number;
+    if (vy > 0.5 || current < SHEET_MIN + 40) {
+      snap = SHEET_MIN;
+    } else if (vy < -0.5 || current > SHEET_MAX - 40) {
+      snap = SHEET_MAX;
+    } else {
+      snap = SHEET_DEFAULT;
+    }
+    sheetHeightRef.current = snap;
+    Animated.spring(sheetHeight, {
+      toValue: snap,
+      useNativeDriver: false,
+      bounciness: 4,
+    }).start();
+  };
+
+  const handleSheetScroll = (e: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    scrollOffsetRef.current = contentOffset.y;
+    isAtTopRef.current = contentOffset.y <= 1;
+    isAtBottomRef.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 1;
+  };
+
+  // Web: attach a wheel listener so overscroll at top/bottom drags the sheet
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = (sheetBodyRef.current as any)?._nativeTag
+      ?? (sheetBodyRef.current as any)?.getInnerViewNode?.()
+      ?? (sheetBodyRef.current as any);
+    // In React Native Web the ref is a DOM element or has a property pointing to one
+    const el: HTMLElement | null =
+      node instanceof HTMLElement ? node : (node as any)?._node ?? null;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      // deltaY > 0 = scrolling down,  deltaY < 0 = scrolling up
+      const scrollingDown = e.deltaY > 0;
+      const scrollingUp = e.deltaY < 0;
+
+      // If content can still scroll in the wheel direction, let the browser handle it
+      if (scrollingDown && !isAtBottomRef.current) return;
+      if (scrollingUp && !isAtTopRef.current) return;
+
+      // We're at an edge — prevent default scroll and drag the sheet instead
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Accumulate wheel deltas and apply to sheet height
+      // scrolling down at bottom → deltaY>0 → grow sheet (pull up)
+      // scrolling up at top → deltaY<0 → shrink sheet (push down)
+      const sensitivity = 1.5;
+      wheelAccumulatorRef.current += e.deltaY * sensitivity;
+
+      const next = Math.min(
+        SHEET_MAX,
+        Math.max(SHEET_MIN, sheetHeightRef.current + wheelAccumulatorRef.current),
+      );
+      sheetHeight.setValue(next);
+
+      // Debounce: snap after user stops scrolling (150 ms)
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+      wheelTimerRef.current = setTimeout(() => {
+        const final = sheetHeightRef.current + wheelAccumulatorRef.current;
+        wheelAccumulatorRef.current = 0;
+        snapSheet(final, 0);
+      }, 150);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
 
   const effectiveOrigin = isUsingCurrentLocation
     ? location
@@ -136,6 +231,13 @@ export default function HomeScreen() {
       setShowOnboarding(true);
     }
   }, [onboardingStatus, hasAccepted]);
+
+  // Pan to user's location when it first becomes available
+  useEffect(() => {
+    if (location && isUsingCurrentLocation) {
+      setMapPanTo({ location, key: Date.now() });
+    }
+  }, [location !== null]);
 
   // Auto-select safest route once scoring is done, otherwise pick first
   useEffect(() => {
@@ -215,6 +317,7 @@ export default function HomeScreen() {
           safetyMarkers={safetyMarkers}
           routeSegments={routeSegments}
           roadLabels={roadLabels}
+          panTo={mapPanTo}
           onSelectRoute={setSelectedRouteId}
           onLongPress={handleMapLongPress}
           onMapPress={handleMapPress}
@@ -302,6 +405,9 @@ export default function HomeScreen() {
                       setIsUsingCurrentLocation(true);
                       setManualOrigin(null);
                       originSearch.clear();
+                      if (location) {
+                        setMapPanTo({ location, key: Date.now() });
+                      }
                     }}
                     accessibilityRole="button"
                     accessibilityLabel="Use current location"
@@ -432,14 +538,20 @@ export default function HomeScreen() {
       {/* Bottom Sheet with Results */}
       {(routes.length > 0 || directionsStatus === 'loading') && (
         <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
-          <View {...sheetPanResponder.panHandlers} style={styles.sheetDragZone}>
+          <View {...handlePanResponder.panHandlers} style={styles.sheetDragZone}>
             <View style={styles.sheetHandle} />
           </View>
-          <ScrollView
-            style={styles.sheetScroll}
-            contentContainerStyle={styles.sheetContent}
-            showsVerticalScrollIndicator={false}
-          >
+          <View ref={sheetBodyRef} style={{ flex: 1 }}>
+            <ScrollView
+              ref={scrollViewRef}
+              {...bodyPanResponder.panHandlers}
+              style={styles.sheetScroll}
+              contentContainerStyle={styles.sheetContent}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={handleSheetScroll}
+              bounces={false}
+            >
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Routes</Text>
               <Text style={styles.sheetMeta}>
@@ -463,7 +575,7 @@ export default function HomeScreen() {
               </View>
             )}
 
-            {routes.slice(0, 7).map((route, index) => {
+            {routes.slice(0, 5).map((route, index) => {
               const isSelected = route.id === selectedRouteId;
               const isBest = route.id === bestRouteId;
               const scoreInfo = routeScores[route.id];
@@ -592,6 +704,7 @@ export default function HomeScreen() {
               </>
             )}
           </ScrollView>
+          </View>
         </Animated.View>
       )}
       {showOnboarding ? (
@@ -880,7 +993,9 @@ const styles = StyleSheet.create({
     boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)',
     elevation: 8,
     overflow: 'hidden',
-  },
+    userSelect: 'none',
+    cursor: 'default',
+  } as any,
   sheetDragZone: {
     alignItems: 'center',
     paddingTop: 8,

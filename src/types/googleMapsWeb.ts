@@ -34,7 +34,9 @@ export type GoogleMapOptions = {
 
 export type GoogleMapInstance = {
   setCenter: (latLng: GoogleLatLng) => void;
+  panTo: (latLng: GoogleLatLng) => void;
   setZoom: (zoom: number) => void;
+  getZoom?: () => number;
   fitBounds: (bounds: GoogleLatLngBounds) => void;
   getCenter?: () => GoogleLatLng;
   setMapTypeId?: (mapTypeId: string) => void;

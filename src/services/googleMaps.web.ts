@@ -146,13 +146,17 @@ export const fetchPlaceDetails = async (placeId: string): Promise<PlaceDetails> 
 // Helpers – generate diverse walking routes
 // ---------------------------------------------------------------------------
 
+/** Perpendicular nudges along the STRAIGHT origin→destination line so extra
+ *  API calls explore nearby parallel streets. Only uses the direct line
+ *  (never actual route geometry) so waypoints cannot create route loops.
+ *  `scalePct` controls nudge distance (0.03 = 3 %, 0.12 = 12 %).
+ *  `fractions` controls where along the line to place offsets. */
 const generateOffsetWaypoints = (
   origin: LatLng,
   dest: LatLng,
   scalePct: number,
+  fractions: number[] = [0.5],
 ): LatLng[] => {
-  const midLat = (origin.latitude + dest.latitude) / 2;
-  const midLng = (origin.longitude + dest.longitude) / 2;
   const dLat = dest.latitude - origin.latitude;
   const dLng = dest.longitude - origin.longitude;
   const len = Math.sqrt(dLat * dLat + dLng * dLng);
@@ -160,62 +164,13 @@ const generateOffsetWaypoints = (
   const scale = len * scalePct;
   const pLat = (-dLng / len) * scale;
   const pLng = (dLat / len) * scale;
-  return [
-    { latitude: midLat + pLat, longitude: midLng + pLng },
-    { latitude: midLat - pLat, longitude: midLng - pLng },
-  ];
-};
-
-/** Identify the "worst" (most path-heavy / least main-road) routes. */
-const worstRoutes = (routes: DirectionsRoute[]): DirectionsRoute[] => {
-  const scored = routes.map((r) => ({ r, s: mainRoadScore(r.summary) }));
-  scored.sort((a, b) => a.s - b.s);
-  return scored.map((x) => x.r);
-};
-
-/** Smart offsets that push AWAY from the weakest route's path segments
- *  so the retry round discovers parallel main-road alternatives. */
-const generateSmartOffsets = (
-  origin: LatLng,
-  dest: LatLng,
-  routes: DirectionsRoute[],
-  scalePct: number,
-): LatLng[] => {
-  const targets = worstRoutes(routes);
-  const target = targets[0];
-  const path = target?.path ?? [];
-
-  const dLat = dest.latitude - origin.latitude;
-  const dLng = dest.longitude - origin.longitude;
-  const directLen = Math.sqrt(dLat * dLat + dLng * dLng);
-  if (directLen < 0.0001) return [];
-  const nudge = directLen * scalePct;
 
   const pts: LatLng[] = [];
-
-  if (path.length >= 4) {
-    for (const frac of [0.25, 0.5, 0.75]) {
-      const idx = Math.min(Math.floor(frac * path.length), path.length - 2);
-      const p0 = path[idx];
-      const p1 = path[idx + 1];
-      const segLat = p1.latitude - p0.latitude;
-      const segLng = p1.longitude - p0.longitude;
-      const segLen = Math.sqrt(segLat * segLat + segLng * segLng);
-      if (segLen < 1e-8) continue;
-      const perpLat = (-segLng / segLen) * nudge;
-      const perpLng = (segLat / segLen) * nudge;
-      pts.push({ latitude: p0.latitude + perpLat, longitude: p0.longitude + perpLng });
-      pts.push({ latitude: p0.latitude - perpLat, longitude: p0.longitude - perpLng });
-    }
-  } else {
-    const pLat = (-dLng / directLen) * nudge;
-    const pLng = (dLat / directLen) * nudge;
-    for (const frac of [1 / 3, 2 / 3]) {
-      const lat = origin.latitude + dLat * frac;
-      const lng = origin.longitude + dLng * frac;
-      pts.push({ latitude: lat + pLat, longitude: lng + pLng });
-      pts.push({ latitude: lat - pLat, longitude: lng - pLng });
-    }
+  for (const frac of fractions) {
+    const lat = origin.latitude + dLat * frac;
+    const lng = origin.longitude + dLng * frac;
+    pts.push({ latitude: lat + pLat, longitude: lng + pLng });
+    pts.push({ latitude: lat - pLat, longitude: lng - pLng });
   }
   return pts;
 };
@@ -324,9 +279,9 @@ export const fetchDirections = async (
     throw new AppError('google_directions_error', 'Directions failed: no routes returned');
   }
 
-  // 2. Decide offset size: if base routes are path-heavy, push harder
+  // 2. Offset waypoints at midpoint — road-type driven, gentle nudge
   const heaviness = pathHeaviness(baseRoutes);
-  const offsetPct = 0.05 + heaviness * 0.13; // 0.05–0.18
+  const offsetPct = 0.03 + heaviness * 0.07; // 3 %–10 %, gentle to avoid loops
   const offsets = generateOffsetWaypoints(origin, destination, offsetPct);
   const extraResults = await Promise.all(
     offsets.map((wp, i) =>
@@ -339,14 +294,15 @@ export const fetchDirections = async (
   let merged = deduplicateRoutes([...baseRoutes, ...extras]);
 
   // 4. If fewer than 4 unique routes and route isn't very short, retry with
-  //    wider + more diverse offsets to discover additional paths.
+  //    offsets at ⅓ and ⅔ along the straight line (never along route
+  //    geometry — that caused loops).
   const shortestSoFar = Math.min(...merged.map((r) => r.distanceMeters));
   const MIN_RETRY_DISTANCE = 500; // metres
   if (merged.length < 4 && shortestSoFar > MIN_RETRY_DISTANCE) {
-    const widerPct = Math.min(offsetPct * 2.5, 0.35);
-    const smartWps = generateSmartOffsets(origin, destination, merged, widerPct);
+    const retryPct = Math.min(offsetPct * 1.5, 0.12);
+    const retryWps = generateOffsetWaypoints(origin, destination, retryPct, [1 / 3, 2 / 3]);
     const retryResults = await Promise.all(
-      smartWps.map((wp, i) =>
+      retryWps.map((wp, i) =>
         singleDirectionsRequest(service, googleMaps, origin, destination, wp, 100 + i * 10)
       )
     );
@@ -361,7 +317,7 @@ export const fetchDirections = async (
     if (Math.abs(distDiff) > shortest * 0.05) return distDiff;
     return mainRoadScore(b.summary) - mainRoadScore(a.summary);
   });
-  return reasonable.slice(0, 7).map((r, i) => ({ ...r, id: `route-${i}` }));
+  return reasonable.slice(0, 5).map((r, i) => ({ ...r, id: `route-${i}` }));
 };
 
 export const buildStaticMapUrl = (params: {
