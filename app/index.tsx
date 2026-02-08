@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -44,6 +44,11 @@ export default function HomeScreen() {
 
   // Which field gets the next map tap: 'origin' | 'destination' | null
   const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
+
+  // Track which search input is focused for blue glow
+  const [focusedField, setFocusedField] = useState<'origin' | 'destination' | null>(null);
+  const originInputRef = useRef<TextInput>(null);
+  const destInputRef = useRef<TextInput>(null);
 
   const effectiveOrigin = isUsingCurrentLocation
     ? location
@@ -178,7 +183,10 @@ export default function HomeScreen() {
               <View style={styles.iconDot} />
               <View style={styles.iconConnector} />
             </View>
-            <View style={styles.inputFieldWrap}>
+            <Pressable
+              style={[styles.inputFieldWrap, focusedField === 'origin' && styles.inputFieldWrapFocused]}
+              onPress={() => { if (!isUsingCurrentLocation) originInputRef.current?.focus(); }}
+            >
               {isUsingCurrentLocation ? (
                 <Pressable
                   style={[styles.inputField, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
@@ -192,6 +200,7 @@ export default function HomeScreen() {
                 </Pressable>
               ) : (
                 <TextInput
+                  ref={originInputRef}
                   value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
                   onChangeText={(t: string) => {
                     setManualOrigin(null);
@@ -203,9 +212,11 @@ export default function HomeScreen() {
                   accessibilityLabel="Starting point"
                   autoCorrect={false}
                   style={styles.inputField}
+                  onFocus={() => setFocusedField('origin')}
+                  onBlur={() => setFocusedField(null)}
                 />
               )}
-              <View style={styles.inputActions}>
+              <View style={styles.inputActions} pointerEvents="box-none">
                 {originSearch.status === 'searching' && (
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
@@ -238,7 +249,7 @@ export default function HomeScreen() {
                   </Pressable>
                 )}
               </View>
-            </View>
+            </Pressable>
           </View>
 
           {/* Divider line connecting the dots */}
@@ -249,8 +260,12 @@ export default function HomeScreen() {
             <View style={styles.inputIconWrap}>
               <View style={styles.iconPin} />
             </View>
-            <View style={styles.inputFieldWrap}>
+            <Pressable
+              style={[styles.inputFieldWrap, focusedField === 'destination' && styles.inputFieldWrapFocused]}
+              onPress={() => destInputRef.current?.focus()}
+            >
               <TextInput
+                ref={destInputRef}
                 value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
                 onChangeText={(text: string) => {
                   setManualDest(null);
@@ -262,8 +277,10 @@ export default function HomeScreen() {
                 accessibilityLabel="Destination"
                 autoCorrect={false}
                 style={styles.inputField}
+                onFocus={() => setFocusedField('destination')}
+                onBlur={() => setFocusedField(null)}
               />
-              <View style={styles.inputActions}>
+              <View style={styles.inputActions} pointerEvents="box-none">
                 {destSearch.status === 'searching' && (
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
@@ -296,7 +313,7 @@ export default function HomeScreen() {
                   </Pressable>
                 )}
               </View>
-            </View>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -595,21 +612,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: 10,
     backgroundColor: '#f9fafb',
-    borderRadius: 10,
-    borderWidth: 1,
+    borderRadius: 12,
+    borderWidth: 1.5,
     borderColor: '#e5e7eb',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  inputFieldWrapFocused: {
+    borderColor: '#1570ef',
+    backgroundColor: '#ffffff',
+    boxShadow: '0 0 0 3px rgba(21, 112, 239, 0.2)',
   },
   inputField: {
     flex: 1,
-    fontSize: 16,
+    height: '100%',
+    fontSize: 18,
     color: '#101828',
-    padding: 0,
     fontWeight: '400',
+    outlineStyle: 'none',
   },
   locationDisplayText: {
-    fontSize: 16,
+    fontSize: 18,
     color: '#1570ef',
     fontWeight: '500',
   },
