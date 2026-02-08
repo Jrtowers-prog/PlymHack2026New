@@ -31,6 +31,7 @@ export const RouteMap = ({
   roadLabels = [],
   onSelectRoute,
   onLongPress,
+  onMapPress,
 }: RouteMapProps) => {
   const mapRef = useRef<MapView | null>(null);
   const region = useMemo(() => {
@@ -82,6 +83,7 @@ export const RouteMap = ({
         mapType={useCustomTiles ? 'none' : 'standard'}
         initialRegion={region}
         onLongPress={(event) => onLongPress?.(event.nativeEvent.coordinate)}
+        onPress={(event) => onMapPress?.(event.nativeEvent.coordinate)}
       >
         {tileUrl ? <UrlTile urlTemplate={tileUrl} maximumZ={20} flipY={false} /> : null}
 

@@ -32,6 +32,7 @@ export default function HomeScreen() {
   // Origin (auto-detect)
   const [isUsingCurrentLocation, setIsUsingCurrentLocation] = useState(true);
   const originSearch = useAutoPlaceSearch(location);
+  const [manualOrigin, setManualOrigin] = useState<PlaceDetails | null>(null);
 
   // Destination (auto-detect)
   const destSearch = useAutoPlaceSearch(location);
@@ -40,7 +41,12 @@ export default function HomeScreen() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  const effectiveOrigin = isUsingCurrentLocation ? location : originSearch.place?.location ?? null;
+  // Which field gets the next map tap: 'origin' | 'destination' | null
+  const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
+
+  const effectiveOrigin = isUsingCurrentLocation
+    ? location
+    : manualOrigin?.location ?? originSearch.place?.location ?? null;
   const effectiveDestination = manualDest?.location ?? destSearch.place?.location ?? null;
 
   const {
@@ -89,24 +95,45 @@ export default function HomeScreen() {
   } =
     useRouteSafety(selectedRoute);
 
-  const handleMapLongPress = async (coordinate: LatLng) => {
+  const resolvePin = async (coordinate: LatLng): Promise<PlaceDetails> => {
     const fallback: PlaceDetails = {
-      placeId: `pin:${coordinate.latitude},${coordinate.longitude}`,
+      placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
       name: 'Dropped pin',
       location: coordinate,
     };
-    setManualDest(fallback);
-    destSearch.clear();
-
     const resolved = await reverseGeocode(coordinate);
-    if (resolved) setManualDest(resolved);
+    return resolved ?? fallback;
+  };
+
+  const handleMapPress = async (coordinate: LatLng) => {
+    if (pinMode === 'origin') {
+      setIsUsingCurrentLocation(false);
+      originSearch.clear();
+      const pin = await resolvePin(coordinate);
+      setManualOrigin(pin);
+      setPinMode(null);
+      setSelectedRouteId(null);
+    } else if (pinMode === 'destination') {
+      destSearch.clear();
+      const pin = await resolvePin(coordinate);
+      setManualDest(pin);
+      setPinMode(null);
+      setSelectedRouteId(null);
+    }
+    // If no pinMode active, tap does nothing special
+  };
+
+  const handleMapLongPress = async (coordinate: LatLng) => {
+    // Long-press always sets destination (legacy behaviour)
+    const pin = await resolvePin(coordinate);
+    setManualDest(pin);
+    destSearch.clear();
     setSelectedRouteId(null);
   };
 
   const distanceLabel = selectedRoute ? formatDistance(selectedRoute.distanceMeters) : '--';
   const durationLabel = selectedRoute ? formatDuration(selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(selectedRoute);
-  const destDisplayName = manualDest?.name ?? destSearch.query ?? '';
   
 
 
@@ -123,7 +150,19 @@ export default function HomeScreen() {
           roadLabels={roadLabels}
           onSelectRoute={setSelectedRouteId}
           onLongPress={handleMapLongPress}
+          onMapPress={handleMapPress}
         />
+        {/* Pin-mode banner */}
+        {pinMode && (
+          <View style={styles.pinBanner}>
+            <Text style={styles.pinBannerText}>
+              📍 Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
+            </Text>
+            <Pressable onPress={() => setPinMode(null)} style={styles.pinBannerCancel}>
+              <Text style={styles.pinBannerCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
       
       {/* Top Search Bar */}
@@ -131,84 +170,128 @@ export default function HomeScreen() {
         <View style={styles.searchCard}>
           {/* Origin Input */}
           <View style={styles.inputRow}>
-            <View style={styles.iconDot} />
-            {isUsingCurrentLocation ? (
-              <Pressable
-                style={styles.locationButton}
-                onPress={() => setIsUsingCurrentLocation(false)}
-                accessibilityRole="button"
-              >
-                <Text style={styles.locationButtonText}>
-                  {location ? '📍 Your location' : '⏳ Getting location...'}
-                </Text>
-              </Pressable>
-            ) : (
-              <>
+            <View style={styles.inputIconWrap}>
+              <View style={styles.iconDot} />
+              <View style={styles.iconConnector} />
+            </View>
+            <View style={styles.inputFieldWrap}>
+              {isUsingCurrentLocation ? (
+                <Pressable
+                  style={styles.inputField}
+                  onPress={() => setIsUsingCurrentLocation(false)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.locationDisplayText}>
+                    {location ? '📍 Your location' : '⏳ Getting location...'}
+                  </Text>
+                </Pressable>
+              ) : (
                 <TextInput
-                  value={originSearch.query}
-                  onChangeText={originSearch.setQuery}
+                  value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
+                  onChangeText={(t: string) => {
+                    setManualOrigin(null);
+                    originSearch.setQuery(t);
+                    setSelectedRouteId(null);
+                  }}
                   placeholder="Starting point"
+                  placeholderTextColor="#98a2b3"
                   accessibilityLabel="Starting point"
                   autoCorrect={false}
-                  style={styles.searchInput}
+                  style={styles.inputField}
                 />
+              )}
+              <View style={styles.inputActions}>
                 {originSearch.status === 'searching' && (
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
-                {originSearch.status === 'found' && (
-                  <Text style={styles.searchCheck}>✓</Text>
+                {(originSearch.status === 'found' || manualOrigin) && (
+                  <Text style={styles.checkMark}>✓</Text>
                 )}
                 <Pressable
-                  style={styles.iconButton}
+                  style={styles.mapPinButton}
                   onPress={() => {
-                    setIsUsingCurrentLocation(true);
-                    originSearch.clear();
+                    if (pinMode === 'origin') { setPinMode(null); }
+                    else { setPinMode('origin'); }
                   }}
                   accessibilityRole="button"
+                  accessibilityLabel="Pick on map"
                 >
-                  <Text style={styles.iconButtonText}>📍</Text>
+                  <Text style={[styles.mapPinIcon, pinMode === 'origin' && styles.mapPinActive]}>📍</Text>
                 </Pressable>
-              </>
-            )}
+                {!isUsingCurrentLocation && (
+                  <Pressable
+                    style={styles.mapPinButton}
+                    onPress={() => {
+                      setIsUsingCurrentLocation(true);
+                      setManualOrigin(null);
+                      originSearch.clear();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Use current location"
+                  >
+                    <Text style={styles.mapPinIcon}>⊙</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
           </View>
-          
-          {/* Divider */}
+
+          {/* Divider line connecting the dots */}
           <View style={styles.inputDivider} />
-          
+
           {/* Destination Input */}
           <View style={styles.inputRow}>
-            <View style={styles.iconPin} />
-            <TextInput
-              value={manualDest ? destDisplayName : destSearch.query}
-              onChangeText={(text: string) => {
-                setManualDest(null);
-                destSearch.setQuery(text);
-                setSelectedRouteId(null);
-              }}
-              placeholder="Where to?"
-              accessibilityLabel="Destination"
-              autoCorrect={false}
-              style={styles.searchInput}
-            />
-            {destSearch.status === 'searching' && (
-              <ActivityIndicator size="small" color="#1570ef" />
-            )}
-            {(destSearch.status === 'found' || manualDest) && (
-              <Text style={styles.searchCheck}>✓</Text>
-            )}
-            {(destSearch.place || manualDest) && (
-              <Pressable
-                style={styles.iconButton}
-                onPress={() => {
-                  destSearch.clear();
+            <View style={styles.inputIconWrap}>
+              <View style={styles.iconPin} />
+            </View>
+            <View style={styles.inputFieldWrap}>
+              <TextInput
+                value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
+                onChangeText={(text: string) => {
                   setManualDest(null);
+                  destSearch.setQuery(text);
                   setSelectedRouteId(null);
                 }}
-                accessibilityRole="button"
-              >
-                <Text style={styles.iconButtonText}>✕</Text>
-              </Pressable>
-            )}
+                placeholder="Where to?"
+                placeholderTextColor="#98a2b3"
+                accessibilityLabel="Destination"
+                autoCorrect={false}
+                style={styles.inputField}
+              />
+              <View style={styles.inputActions}>
+                {destSearch.status === 'searching' && (
+                  <ActivityIndicator size="small" color="#1570ef" />
+                )}
+                {(destSearch.status === 'found' || manualDest) && (
+                  <Text style={styles.checkMark}>✓</Text>
+                )}
+                <Pressable
+                  style={styles.mapPinButton}
+                  onPress={() => {
+                    if (pinMode === 'destination') { setPinMode(null); }
+                    else { setPinMode('destination'); }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Pick on map"
+                >
+                  <Text style={[styles.mapPinIcon, pinMode === 'destination' && styles.mapPinActive]}>📍</Text>
+                </Pressable>
+                {(destSearch.place || manualDest) && (
+                  <Pressable
+                    style={styles.mapPinButton}
+                    onPress={() => {
+                      destSearch.clear();
+                      setManualDest(null);
+                      setSelectedRouteId(null);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear destination"
+                  >
+                    <Text style={styles.clearIcon}>✕</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
           </View>
         </View>
       </View>
@@ -454,70 +537,143 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
   },
   
-  // Top Search Container (Google Maps style)
+  // Top Search Container
   topSearchContainer: {
     position: 'absolute',
     top: 12,
-    left: 16,
-    right: 16,
+    left: 12,
+    right: 12,
     zIndex: 10,
   },
   searchCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-    elevation: 4,
+    borderRadius: 16,
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
+    elevation: 6,
+    overflow: 'hidden',
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  inputIconWrap: {
+    width: 24,
+    alignItems: 'center',
   },
   iconDot: {
     width: 12,
     height: 12,
     borderRadius: 6,
     backgroundColor: '#1570ef',
+    borderWidth: 2,
+    borderColor: '#93c5fd',
+  },
+  iconConnector: {
+    width: 2,
+    height: 20,
+    backgroundColor: '#d0d5dd',
+    marginTop: 2,
   },
   iconPin: {
     width: 12,
     height: 12,
     borderRadius: 2,
     backgroundColor: '#d92d20',
+    borderWidth: 2,
+    borderColor: '#fca5a5',
   },
-  searchInput: {
+  inputFieldWrap: {
     flex: 1,
-    fontSize: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 10,
+    backgroundColor: '#f9fafb',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  inputField: {
+    flex: 1,
+    fontSize: 15,
     color: '#101828',
     padding: 0,
+    fontWeight: '400',
   },
-  locationButton: {
-    flex: 1,
-  },
-  locationButtonText: {
-    fontSize: 16,
+  locationDisplayText: {
+    fontSize: 15,
     color: '#1570ef',
     fontWeight: '500',
   },
-  iconButton: {
-    padding: 4,
+  inputActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 8,
   },
-  iconButtonText: {
-    fontSize: 18,
-  },
-  inputDivider: {
-    height: 1,
-    backgroundColor: '#eaecf0',
-    marginHorizontal: 16,
-  },
-  
-  searchCheck: {
+  checkMark: {
     fontSize: 14,
     color: '#22c55e',
     fontWeight: '700',
-    marginRight: 2,
+  },
+  mapPinButton: {
+    padding: 4,
+    borderRadius: 6,
+  },
+  mapPinIcon: {
+    fontSize: 16,
+    opacity: 0.6,
+  },
+  mapPinActive: {
+    opacity: 1,
+  },
+  clearIcon: {
+    fontSize: 14,
+    color: '#98a2b3',
+    fontWeight: '700',
+  },
+  inputDivider: {
+    height: 1,
+    backgroundColor: '#f2f4f7',
+    marginLeft: 48,
+    marginRight: 14,
+  },
+  // Pin-mode banner
+  pinBanner: {
+    position: 'absolute',
+    bottom: 12,
+    left: 16,
+    right: 16,
+    backgroundColor: '#1570ef',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)',
+    elevation: 6,
+  },
+  pinBannerText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+  },
+  pinBannerCancel: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginLeft: 8,
+  },
+  pinBannerCancelText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 13,
   },
   
   // Bottom Sheet
