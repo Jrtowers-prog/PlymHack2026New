@@ -9,13 +9,22 @@ const SECONDARY_COLOR = '#98a2b3';
 const CRIME_ICON = require('../../../assets/images/crime.png');
 const MARKER_SPREAD_METERS = 4;
 
-const getRouteColor = (isSelected: boolean): string =>
-  isSelected ? PRIMARY_COLOR : SECONDARY_COLOR;
+const getRouteColor = (
+  routeId: string,
+  isSelected: boolean,
+  routeColors?: Record<string, string>
+): string => {
+  if (routeColors && routeColors[routeId]) {
+    return routeColors[routeId];
+  }
+
+  return isSelected ? PRIMARY_COLOR : SECONDARY_COLOR;
+};
 
 const toKey = (latitude: number, longitude: number): string =>
   `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
 
-const spreadCrimePoints = (points: RouteMapProps['crimePoints']) => {
+const spreadCrimePoints = (points: RouteMapProps['crimePoints'] = []) => {
   const counts = new Map<string, number>();
 
   points.forEach((crime) => {
@@ -58,6 +67,7 @@ export const RouteMap = ({
   routes,
   selectedRouteId,
   onSelectRoute,
+  routeColors,
   crimePoints = [],
   openPlaces = [],
   lightPoints = [],
@@ -85,12 +95,13 @@ export const RouteMap = ({
         ) : null}
         {routes.map((route) => {
           const isSelected = route.id === selectedRouteId;
+          const strokeColor = getRouteColor(route.id, isSelected, routeColors);
 
           return (
             <Polyline
               key={route.id}
               coordinates={route.path}
-              strokeColor={getRouteColor(isSelected)}
+              strokeColor={strokeColor}
               strokeWidth={isSelected ? 6 : 4}
               tappable
               onPress={() => onSelectRoute?.(route.id)}

@@ -7,6 +7,7 @@ export type RouteMapProps = {
   routes: DirectionsRoute[];
   selectedRouteId: string | null;
   onSelectRoute?: (routeId: string) => void;
+  routeColors?: Record<string, string>;
   crimePoints?: CrimePoint[];
   openPlaces?: OpenPlace[];
   lightPoints?: LatLng[];

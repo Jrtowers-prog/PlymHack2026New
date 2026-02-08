@@ -125,21 +125,21 @@ const fetchNearbyOpenPlaces = async (
   }
 
   return (data.results ?? [])
-    .map((result) => {
+    .map((result): OpenPlace | null => {
       if (!result.place_id || !result.geometry?.location) {
         return null;
       }
 
       return {
         placeId: result.place_id,
-        name: result.name,
+        name: result.name ?? undefined,
         location: {
           latitude: result.geometry.location.lat,
           longitude: result.geometry.location.lng,
         },
-      } satisfies OpenPlace;
+      };
     })
-    .filter((place): place is OpenPlace => Boolean(place));
+    .filter((place): place is OpenPlace => place !== null);
 };
 
 const withConcurrency = async <T, R>(
@@ -236,7 +236,7 @@ export const fetchDirections = async (
     );
   }
 
-  return data.routes.slice(0, 4).map((route, index) => {
+  return data.routes.slice(0, 5).map((route, index) => {
     const encodedPolyline = route.overview_polyline?.points ?? '';
 
     if (!encodedPolyline) {

@@ -216,6 +216,13 @@ const tallyRoadTypes = (elements: OverpassElement[]): RoadTypeCount[] => {
     .sort((a, b) => b.count - a.count);
 };
 
+const isStreetLamp = (tags?: Record<string, string>): boolean => {
+  const highway = tags?.highway?.toLowerCase();
+  const manMade = tags?.man_made?.toLowerCase();
+
+  return highway === 'street_lamp' || manMade === 'street_lamp';
+};
+
 const extractLightPoints = (elements: OverpassElement[]): LatLng[] => {
   const points = new Map<number, LatLng>();
 
@@ -224,9 +231,7 @@ const extractLightPoints = (elements: OverpassElement[]): LatLng[] => {
       return;
     }
 
-    const highway = element.tags?.highway?.toLowerCase();
-
-    if (highway !== 'street_lamp') {
+    if (!isStreetLamp(element.tags)) {
       return;
     }
 
@@ -243,12 +248,13 @@ const extractLightPoints = (elements: OverpassElement[]): LatLng[] => {
   return Array.from(points.values());
 };
 
-const buildOverpassQuery = (polygon: string): string => {
+const buildOverpassQuery = (roadPolygon: string, lightPolygon: string): string => {
   return [
     '[out:json][timeout:25];',
     '(',
-    `way["highway"](poly:"${polygon}");`,
-    `node["highway"="street_lamp"](poly:"${polygon}");`,
+    `way["highway"](poly:"${roadPolygon}");`,
+    `node["highway"="street_lamp"](poly:"${lightPolygon}");`,
+    `node["man_made"="street_lamp"](poly:"${lightPolygon}");`,
     ');',
     'out body;',
   ].join('\n');
@@ -256,11 +262,13 @@ const buildOverpassQuery = (polygon: string): string => {
 
 export const fetchOsmRouteSummary = async (
   path: LatLng[],
-  bufferMeters = 50
+  bufferMeters = 50,
+  lightBufferMeters = 20
 ): Promise<OsmRouteSummary> => {
   const polygon = buildOverpassPolygon(path, bufferMeters);
-  const query = buildOverpassQuery(polygon);
-  const cacheKey = `${polygon}:${bufferMeters}`;
+  const lightPolygon = buildOverpassPolygon(path, lightBufferMeters);
+  const query = buildOverpassQuery(polygon, lightPolygon);
+  const cacheKey = `${polygon}:${bufferMeters}:${lightPolygon}:${lightBufferMeters}`;
   const cached = osmCache.get(cacheKey);
 
   if (cached && Date.now() - cached.timestamp < OSM_CACHE_TTL_MS) {

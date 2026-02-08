@@ -26,6 +26,7 @@ export const RouteMap = ({
   routes,
   selectedRouteId,
   onSelectRoute,
+  routeColors,
   crimePoints = [],
   openPlaces = [],
   lightPoints = [],
@@ -168,9 +169,11 @@ export const RouteMap = ({
         (point) => new googleMaps.maps.LatLng(point.latitude, point.longitude)
       );
       const isSelected = route.id === selectedRouteId;
+      const strokeColor =
+        (routeColors && routeColors[route.id]) ?? (isSelected ? PRIMARY_COLOR : SECONDARY_COLOR);
       const polyline = new googleMaps.maps.Polyline({
         path,
-        strokeColor: isSelected ? PRIMARY_COLOR : SECONDARY_COLOR,
+        strokeColor,
         strokeOpacity: 1,
         strokeWeight: isSelected ? 6 : 4,
         map,
@@ -256,6 +259,7 @@ export const RouteMap = ({
     routes,
     selectedRouteId,
     onSelectRoute,
+    routeColors,
     openPlaces,
     crimePoints,
     lightPoints,

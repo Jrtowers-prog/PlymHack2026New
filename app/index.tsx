@@ -17,7 +17,7 @@ import { useOpenPlacesForRoute } from '@/src/hooks/useOpenPlacesForRoute';
 import { useOsmRoutesData } from '@/src/hooks/useOsmRouteData';
 import { usePlaceAutocomplete } from '@/src/hooks/usePlaceAutocomplete';
 import { fetchCrimeForRoute } from '@/src/services/crime';
-import { fetchPlaceDetails } from '@/src/services/googleMaps';
+import { fetchOpenPlacesForRoute, fetchPlaceDetails } from '@/src/services/googleMaps';
 import type { CrimePoint } from '@/src/types/crime';
 import { AppError } from '@/src/types/errors';
 import type { DirectionsRoute, PlaceDetails, PlacePrediction } from '@/src/types/google';
@@ -25,7 +25,13 @@ import type { DirectionsRoute, PlaceDetails, PlacePrediction } from '@/src/types
 export default function HomeScreen() {
   const { status, location, error, refresh } = useCurrentLocation();
   const [query, setQuery] = useState('');
+  const [originQuery, setOriginQuery] = useState('');
+  const [originPlace, setOriginPlace] = useState<PlaceDetails | null>(null);
   const [destination, setDestination] = useState<PlaceDetails | null>(null);
+  const [originStatus, setOriginStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>(
+    'idle'
+  );
+  const [originError, setOriginError] = useState<AppError | null>(null);
   const [destinationStatus, setDestinationStatus] = useState<
     'idle' | 'loading' | 'error' | 'ready'
   >('idle');
@@ -38,14 +44,31 @@ export default function HomeScreen() {
   const [crimeCount, setCrimeCount] = useState<number | null>(null);
   const [crimeError, setCrimeError] = useState<AppError | null>(null);
   const [crimePoints, setCrimePoints] = useState<CrimePoint[]>([]);
+  const [expandedRouteId, setExpandedRouteId] = useState<string | null>(null);
+  const [routeMetrics, setRouteMetrics] = useState<
+    Record<string, { crimeCount: number; openPlacesCount: number }>
+  >({});
+  const [safetyStatus, setSafetyStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>(
+    'idle'
+  );
+  const [safetyError, setSafetyError] = useState<AppError | null>(null);
 
-  const { status: autocompleteStatus, predictions, error: autocompleteError } =
-    usePlaceAutocomplete(query, location);
+  const {
+    status: originAutocompleteStatus,
+    predictions: originPredictions,
+    error: originAutocompleteError,
+  } = usePlaceAutocomplete(originQuery, location);
+  const {
+    status: autocompleteStatus,
+    predictions,
+    error: autocompleteError,
+  } = usePlaceAutocomplete(query, location);
+  const resolvedOrigin = originPlace?.location ?? location;
   const {
     status: directionsStatus,
     routes,
     error: directionsError,
-  } = useDirections(location, destination?.location ?? null);
+  } = useDirections(resolvedOrigin, destination?.location ?? null);
   const {
     status: osmStatus,
     data: osmSummaries,
@@ -80,16 +103,262 @@ export default function HomeScreen() {
     return osmSummaries.find((summary) => summary.routeId === selectedRoute.id) ?? null;
   }, [osmSummaries, selectedRoute]);
 
-  const majorityRoadType = useMemo(() => {
-    const roadTypes = selectedOsmSummary?.summary.roadTypes;
-
-    if (!roadTypes || roadTypes.length === 0) {
-      return null;
+  useEffect(() => {
+    if (routes.length === 0) {
+      setRouteMetrics({});
+      setSafetyStatus('idle');
+      setSafetyError(null);
+      return;
     }
 
-    const top = roadTypes[0];
-    return formatRoadType(top.type);
-  }, [selectedOsmSummary]);
+    let isActive = true;
+    setSafetyStatus('loading');
+    setSafetyError(null);
+
+    const withConcurrency = async <T, R>(
+      items: T[],
+      concurrency: number,
+      worker: (item: T) => Promise<R>
+    ): Promise<R[]> => {
+      const results: R[] = [];
+      let index = 0;
+
+      const runners = Array.from({ length: Math.max(1, concurrency) }).map(async () => {
+        while (index < items.length) {
+          const currentIndex = index;
+          index += 1;
+          results[currentIndex] = await worker(items[currentIndex]);
+        }
+      });
+
+      await Promise.all(runners);
+      return results;
+    };
+
+    const run = async () => {
+      const results = await withConcurrency(routes, 2, async (route) => {
+        try {
+          const [crime, openPlaces] = await Promise.all([
+            fetchCrimeForRoute(route.path),
+            fetchOpenPlacesForRoute(route.path, {
+              intervalMeters: 50,
+              radiusMeters: 25,
+              maxSamples: 25,
+            }),
+          ]);
+
+          return {
+            routeId: route.id,
+            crimeCount: crime.count,
+            openPlacesCount: openPlaces.count,
+            ok: true as const,
+          };
+        } catch (caught) {
+          return {
+            routeId: route.id,
+            error: caught,
+            ok: false as const,
+          };
+        }
+      });
+
+      if (!isActive) {
+        return;
+      }
+
+      const metrics: Record<string, { crimeCount: number; openPlacesCount: number }> = {};
+      let hadError = false;
+
+      results.forEach((result) => {
+        if (result.ok) {
+          metrics[result.routeId] = {
+            crimeCount: result.crimeCount,
+            openPlacesCount: result.openPlacesCount,
+          };
+        } else {
+          hadError = true;
+        }
+      });
+
+      setRouteMetrics(metrics);
+      setSafetyStatus(hadError ? 'error' : 'ready');
+      setSafetyError(
+        hadError
+          ? new AppError('safety_metrics_error', 'Unable to calculate safety scores')
+          : null
+      );
+    };
+
+    run().catch((caught) => {
+      if (!isActive) {
+        return;
+      }
+      setSafetyStatus('error');
+      setSafetyError(
+        caught instanceof AppError
+          ? caught
+          : new AppError('safety_metrics_error', 'Unable to calculate safety scores', caught)
+      );
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [routes]);
+
+  const safetyData = useMemo(() => {
+    if (routes.length === 0) {
+      return {
+        scores: {} as Record<string, { score: number; color: string }>,
+        breakdowns: {} as Record<
+          string,
+          {
+            crimeScore: number;
+            openScore: number;
+            lightingScore: number;
+            roadScore: number;
+            crimeDensity: number;
+            openDensity: number;
+            lightingRatio: number;
+            roadType: string;
+          }
+        >,
+      };
+    }
+
+    const osmByRoute = new Map(
+      osmSummaries.map((summary) => [summary.routeId, summary.summary])
+    );
+
+    const entries = routes.map((route) => {
+      const metrics = routeMetrics[route.id];
+      const osmSummary = osmByRoute.get(route.id);
+      const distanceKm = Math.max(route.distanceMeters / 1000, 0.1);
+
+      const crimeDensity = metrics ? metrics.crimeCount / distanceKm : null;
+      const openDensity = metrics ? metrics.openPlacesCount / distanceKm : null;
+
+      const lightingTotal = osmSummary
+        ? osmSummary.lighting.litYes +
+          osmSummary.lighting.litNo +
+          osmSummary.lighting.litUnknown
+        : 0;
+      const lightingRatio = osmSummary
+        ? lightingTotal > 0
+          ? osmSummary.lighting.litYes / lightingTotal
+          : 0
+        : null;
+
+      const roadType = osmSummary?.roadTypes[0]?.type ?? null;
+      const roadScore = roadType ? roadTypeScore(roadType) : null;
+
+      return {
+        routeId: route.id,
+        crimeDensity,
+        openDensity,
+        lightingRatio,
+        roadScore,
+        roadType,
+      };
+    });
+
+    const crimeValues = entries
+      .map((entry) => entry.crimeDensity)
+      .filter((value): value is number => value !== null);
+    const openValues = entries
+      .map((entry) => entry.openDensity)
+      .filter((value): value is number => value !== null);
+    const lightingValues = entries
+      .map((entry) => entry.lightingRatio)
+      .filter((value): value is number => value !== null);
+    const roadValues = entries
+      .map((entry) => entry.roadScore)
+      .filter((value): value is number => value !== null);
+
+    const minMax = (values: number[]) => {
+      if (values.length === 0) {
+        return { min: 0, max: 0 };
+      }
+      return {
+        min: Math.min(...values),
+        max: Math.max(...values),
+      };
+    };
+
+    const crimeRange = minMax(crimeValues);
+    const openRange = minMax(openValues);
+    const lightingRange = minMax(lightingValues);
+    const roadRange = minMax(roadValues);
+
+    const normalize = (value: number, min: number, max: number): number => {
+      if (max === min) {
+        return 1;
+      }
+
+      return (value - min) / (max - min);
+    };
+
+    const scores: Record<string, { score: number; color: string }> = {};
+    const breakdowns: Record<
+      string,
+      {
+        crimeScore: number;
+        openScore: number;
+        lightingScore: number;
+        roadScore: number;
+        crimeDensity: number;
+        openDensity: number;
+        lightingRatio: number;
+        roadType: string;
+      }
+    > = {};
+
+    entries.forEach((entry) => {
+        if (
+          entry.crimeDensity === null ||
+          entry.openDensity === null ||
+          entry.lightingRatio === null ||
+          entry.roadScore === null
+        ) {
+        return;
+      }
+
+      const crimeScore = 1 - normalize(entry.crimeDensity, crimeRange.min, crimeRange.max);
+      const openScore = normalize(entry.openDensity, openRange.min, openRange.max);
+      const lightingScore = normalize(
+        entry.lightingRatio,
+        lightingRange.min,
+        lightingRange.max
+      );
+      const roadScore = normalize(entry.roadScore, roadRange.min, roadRange.max);
+
+      const weighted =
+        crimeScore * 0.4 +
+        openScore * 0.3 +
+        lightingScore * 0.2 +
+        roadScore * 0.1;
+
+      const score = Math.min(10, Math.max(1, 1 + weighted * 9));
+
+      scores[entry.routeId] = {
+        score,
+        color: scoreToColor(score),
+      };
+
+      breakdowns[entry.routeId] = {
+        crimeScore,
+        openScore,
+        lightingScore,
+        roadScore,
+        crimeDensity: entry.crimeDensity,
+        openDensity: entry.openDensity,
+        lightingRatio: entry.lightingRatio,
+        roadType: entry.roadType ?? 'unknown',
+      };
+    });
+
+    return { scores, breakdowns };
+  }, [routes, osmSummaries, routeMetrics]);
 
   useEffect(() => {
     if (!selectedRoute) {
@@ -151,6 +420,26 @@ export default function HomeScreen() {
     }
   };
 
+  const handleOriginPredictionPress = async (prediction: PlacePrediction) => {
+    setOriginStatus('loading');
+    setOriginError(null);
+    try {
+      const details = await fetchPlaceDetails(prediction.placeId);
+      setOriginPlace(details);
+      setOriginQuery(details.name);
+      setOriginStatus('ready');
+      setIsSearchOpen(false);
+    } catch (caught) {
+      const normalizedError =
+        caught instanceof AppError
+          ? caught
+          : new AppError('place_details_error', 'Unable to fetch place details', caught);
+
+      setOriginError(normalizedError);
+      setOriginStatus('error');
+    }
+  };
+
   const distanceLabel = selectedRoute ? formatDistance(selectedRoute.distanceMeters) : '--';
   const durationLabel = selectedRoute ? formatDuration(selectedRoute.durationSeconds) : '--';
   const showRoutes =
@@ -160,11 +449,14 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.mapContainer}>
         <RouteMap
-          origin={location}
+          origin={resolvedOrigin}
           destination={destination?.location ?? null}
           routes={routes}
           selectedRouteId={selectedRouteId}
           onSelectRoute={setSelectedRouteId}
+          routeColors={Object.fromEntries(
+            Object.entries(safetyData.scores).map(([routeId, score]) => [routeId, score.color])
+          )}
           crimePoints={crimePoints}
           openPlaces={openPlacesSummary?.places ?? []}
           lightPoints={selectedOsmSummary?.summary.lightPoints ?? []}
@@ -176,8 +468,9 @@ export default function HomeScreen() {
             style={styles.destinationButton}
             onPress={() => setIsSearchOpen((prev) => !prev)}
             accessibilityRole="button"
+            accessibilityLabel="Add destination"
           >
-            <Text style={styles.destinationButtonText}>Destination</Text>
+            <Text style={styles.destinationButtonText}>+</Text>
           </Pressable>
           <Pressable style={styles.refreshButton} onPress={refresh} accessibilityRole="button">
             <Text style={styles.refreshButtonText}>Refresh</Text>
@@ -187,6 +480,60 @@ export default function HomeScreen() {
           <View style={styles.searchCard}>
             <Text style={styles.statusText}>Location: {status}</Text>
             {error ? <Text style={styles.error}>{error.message}</Text> : null}
+            <TextInput
+              value={originQuery}
+              onChangeText={(text) => {
+                setOriginQuery(text);
+                setOriginPlace(null);
+                setSelectedRouteId(null);
+              }}
+              onFocus={() => setIsSearchOpen(true)}
+              placeholder="Enter start location"
+              accessibilityLabel="Start location"
+              autoCorrect={false}
+              style={styles.input}
+            />
+            {originAutocompleteStatus === 'loading' ? (
+              <View style={styles.inlineRow}>
+                <ActivityIndicator size="small" color="#1570ef" />
+                <Text style={styles.helperText}>Searching start locations...</Text>
+              </View>
+            ) : null}
+            {originAutocompleteError ? (
+              <Text style={styles.error}>{originAutocompleteError.message}</Text>
+            ) : null}
+            {originPredictions.length > 0 ? (
+              <ScrollView
+                style={styles.predictions}
+                keyboardShouldPersistTaps="handled"
+              >
+                {originPredictions.slice(0, 5).map((prediction) => (
+                  <Pressable
+                    key={`origin-${prediction.placeId}`}
+                    onPress={() => handleOriginPredictionPress(prediction)}
+                    accessibilityRole="button"
+                    style={styles.predictionRow}
+                  >
+                    <Text style={styles.predictionText}>{prediction.primaryText}</Text>
+                    {prediction.secondaryText ? (
+                      <Text style={styles.predictionSubtext}>
+                        {prediction.secondaryText}
+                      </Text>
+                    ) : null}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : null}
+            {originStatus === 'loading' ? (
+              <View style={styles.inlineRow}>
+                <ActivityIndicator size="small" color="#1570ef" />
+                <Text style={styles.helperText}>Loading start location...</Text>
+              </View>
+            ) : null}
+            {originError ? <Text style={styles.error}>{originError.message}</Text> : null}
+            {originPlace ? (
+              <Text style={styles.helperText}>Start: {originPlace.name}</Text>
+            ) : null}
             <TextInput
               value={query}
               onChangeText={(text) => {
@@ -264,24 +611,6 @@ export default function HomeScreen() {
                   ? '--'
                   : `${crimeCount} incidents`}
               </Text>
-              <Text style={styles.statusLabel}>OSM:</Text>
-              <Text style={styles.statusValue}>
-                {osmStatus === 'loading'
-                  ? 'Loading'
-                  : osmStatus === 'error'
-                  ? 'Error'
-                  : selectedOsmSummary
-                  ? `Lit yes ${selectedOsmSummary.summary.lighting.litYes}`
-                  : '--'}
-              </Text>
-              <Text style={styles.statusLabel}>Road type:</Text>
-              <Text style={styles.statusValue}>
-                {osmStatus === 'loading'
-                  ? 'Loading'
-                  : osmStatus === 'error'
-                  ? 'Error'
-                  : majorityRoadType ?? '--'}
-              </Text>
               <Text style={styles.statusLabel}>Open places:</Text>
               <Text style={styles.statusValue}>
                 {openPlacesStatus === 'loading'
@@ -294,8 +623,8 @@ export default function HomeScreen() {
               </Text>
             </View>
             {crimeError ? <Text style={styles.error}>{crimeError.message}</Text> : null}
-            {osmError ? <Text style={styles.error}>{osmError.message}</Text> : null}
             {openPlacesError ? <Text style={styles.error}>{openPlacesError.message}</Text> : null}
+            {safetyError ? <Text style={styles.error}>{safetyError.message}</Text> : null}
             {directionsStatus === 'loading' ? (
               <View style={styles.inlineRow}>
                 <ActivityIndicator size="small" color="#1570ef" />
@@ -310,7 +639,16 @@ export default function HomeScreen() {
             ) : null}
             {routes.map((route, index) => {
               const isSelected = route.id === selectedRouteId;
+              const isExpanded = expandedRouteId === route.id;
               const label = index === 0 ? 'Primary' : `Alt ${index}`;
+              const safety = safetyData.scores[route.id];
+              const breakdown = safetyData.breakdowns[route.id];
+              const safetyLabel =
+                safetyStatus === 'loading'
+                  ? '...'
+                  : safety
+                  ? safety.score.toFixed(1)
+                  : '--';
 
               return (
                 <Pressable
@@ -319,10 +657,56 @@ export default function HomeScreen() {
                   accessibilityRole="button"
                   style={[styles.routeRow, isSelected ? styles.routeRowSelected : null]}
                 >
-                  <Text style={styles.routeTitle}>{label}</Text>
+                  <View style={styles.routeRowHeader}>
+                    <Text style={styles.routeTitle}>{label}</Text>
+                    <View style={styles.routeRowMeta}>
+                      {safety ? (
+                        <View
+                          style={[styles.scoreBadge, { backgroundColor: safety.color }]}
+                        >
+                          <Text style={styles.scoreText}>{safetyLabel}</Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.scorePlaceholder}>{safetyLabel}</Text>
+                      )}
+                      <Pressable
+                        onPress={() =>
+                          setExpandedRouteId((prev) => (prev === route.id ? null : route.id))
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel="Toggle safety breakdown"
+                        style={styles.detailsButton}
+                      >
+                        <Text style={styles.detailsButtonText}>
+                          {isExpanded ? 'Hide' : 'Details'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
                   <Text style={styles.routeMeta}>
                     {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
                   </Text>
+                  {isExpanded && breakdown ? (
+                    <View style={styles.breakdown}>
+                      <Text style={styles.breakdownTitle}>Safety breakdown</Text>
+                      <Text style={styles.breakdownRow}>
+                        Crime (40%): {formatPercent(breakdown.crimeScore)} •
+                        {` ${formatPerKm(breakdown.crimeDensity)} / km`}
+                      </Text>
+                      <Text style={styles.breakdownRow}>
+                        Open places (30%): {formatPercent(breakdown.openScore)} •
+                        {` ${formatPerKm(breakdown.openDensity)} / km`}
+                      </Text>
+                      <Text style={styles.breakdownRow}>
+                        Lighting (20%): {formatPercent(breakdown.lightingScore)} •
+                        {` ${formatPercent(breakdown.lightingRatio)}`}
+                      </Text>
+                      <Text style={styles.breakdownRow}>
+                        Road type (10%): {formatPercent(breakdown.roadScore)} •
+                        {` ${formatRoadTypeLabel(breakdown.roadType)}`}
+                      </Text>
+                    </View>
+                  ) : null}
                 </Pressable>
               );
             })}
@@ -351,7 +735,23 @@ const formatDuration = (seconds: number): string => {
   return `${Math.max(1, Math.round(seconds / 60))} min`;
 };
 
-const formatRoadType = (type: string): string => {
+const formatPerKm = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+
+  return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+};
+
+const formatPercent = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+
+  return `${Math.round(value * 100)}%`;
+};
+
+const formatRoadTypeLabel = (type: string): string => {
   switch (type) {
     case 'primary':
     case 'primary_link':
@@ -377,6 +777,41 @@ const formatRoadType = (type: string): string => {
     default:
       return type.replace(/_/g, ' ');
   }
+};
+
+const roadTypeScore = (type: string): number => {
+  switch (type) {
+    case 'primary':
+    case 'primary_link':
+    case 'secondary':
+    case 'secondary_link':
+    case 'tertiary':
+    case 'tertiary_link':
+      return 1;
+    case 'residential':
+    case 'living_street':
+      return 0.7;
+    case 'cycleway':
+      return 0.6;
+    case 'service':
+      return 0.5;
+    case 'track':
+      return 0.4;
+    case 'footway':
+    case 'path':
+    case 'pedestrian':
+    case 'steps':
+      return 0.3;
+    default:
+      return 0.5;
+  }
+};
+
+const scoreToColor = (score: number): string => {
+  const clamped = Math.min(10, Math.max(1, score));
+  const ratio = (clamped - 1) / 9;
+  const hue = Math.round(120 * ratio);
+  return `hsl(${hue} 70% 45%)`;
 };
 
 const styles = StyleSheet.create({
@@ -548,8 +983,66 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#101828',
   },
+  routeRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  routeRowMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  scoreBadge: {
+    minWidth: 44,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailsButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d0d5dd',
+  },
+  detailsButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#344054',
+  },
+  scoreText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  scorePlaceholder: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#98a2b3',
+  },
   routeMeta: {
     fontSize: 13,
     color: '#667085',
+  },
+  breakdown: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#eaecf0',
+  },
+  breakdownTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#344054',
+    marginBottom: 4,
+  },
+  breakdownRow: {
+    fontSize: 12,
+    color: '#475467',
+    marginTop: 2,
   },
 });

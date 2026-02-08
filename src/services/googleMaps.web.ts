@@ -161,7 +161,7 @@ export const fetchDirections = async (
           return;
         }
 
-        const routes = (result.routes ?? []).slice(0, 4).map((route, index) => {
+        const routes = (result.routes ?? []).slice(0, 5).map((route, index) => {
           const path = (route.overview_path ?? []).map((point) => ({
             latitude: point.lat(),
             longitude: point.lng(),
@@ -220,7 +220,7 @@ const fetchNearbyOpenPlaces = async (
 
       resolve(
         results
-          .map((result) => {
+          .map((result): OpenPlace | null => {
             const latLng = result.geometry?.location;
 
             if (!result.place_id || !latLng) {
@@ -229,14 +229,14 @@ const fetchNearbyOpenPlaces = async (
 
             return {
               placeId: result.place_id,
-              name: result.name,
+              name: result.name ?? undefined,
               location: {
                 latitude: latLng.lat(),
                 longitude: latLng.lng(),
               },
-            } satisfies OpenPlace;
+            };
           })
-          .filter((place): place is OpenPlace => Boolean(place))
+          .filter((place): place is OpenPlace => place !== null)
       );
     });
   });
