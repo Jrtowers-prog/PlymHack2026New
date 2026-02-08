@@ -38,10 +38,105 @@ export interface SafetyMapResult {
   markers: SafetyMarker[];
   roadOverlays: RoadOverlay[];
   crimeCount: number;
+  streetLights: number;
   litRoads: number;
   unlitRoads: number;
   openPlaces: number;
+  safetyScore: number;        // 1–100
+  safetyLabel: string;        // e.g. "Safe"
+  safetyColor: string;        // hex colour for the score
+  mainRoadRatio: number;      // 0-1 fraction of route on main roads
 }
+
+// Road types considered "main roads" (safer for walking)
+const MAIN_ROAD_TYPES = new Set([
+  'primary', 'secondary', 'tertiary', 'residential', 'living_street',
+]);
+// Road types considered paths/footways (less safe)
+const PATH_ROAD_TYPES = new Set([
+  'footway', 'path', 'steps', 'track',
+]);
+
+// ---------------------------------------------------------------------------
+// Safety scoring algorithm
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute a 1–100 safety score from route data.
+ *
+ * Factors (weights):
+ *   • Crime density      40 %   – fewer crimes = higher score
+ *   • Street lighting    30 %   – more lights = higher score
+ *   • Open places        15 %   – more activity = higher score
+ *   • Road quality       15 %   – more lit/main roads = higher score
+ *
+ * Each factor is normalised 0-1 with sensible caps so the score
+ * stays meaningful regardless of route length.
+ */
+const computeSafetyScore = (
+  crimeCount: number,
+  streetLights: number,
+  litRoads: number,
+  unlitRoads: number,
+  openPlaces: number,
+  routeDistanceKm: number,
+  mainRoadRatio: number,
+): { score: number; label: string; color: string } => {
+  // Normalise per-km so short and long routes are comparable
+  const km = Math.max(routeDistanceKm, 0.3); // avoid divide-by-zero
+
+  // --- Crime factor (0 = lots of crime, 1 = no crime) ---
+  const crimesPerKm = crimeCount / km;
+  // 0 crimes/km → 1.0,  ≥20 crimes/km → 0.0
+  const crimeFactor = Math.max(0, 1 - crimesPerKm / 20);
+
+  // --- Lighting factor (0 = no lights, 1 = well lit) ---
+  const lightsPerKm = streetLights / km;
+  // 0 lights/km → 0.0,  ≥15 lights/km → 1.0
+  const lightFactor = Math.min(1, lightsPerKm / 15);
+
+  // --- Activity factor (0 = deserted, 1 = bustling) ---
+  const placesPerKm = openPlaces / km;
+  // 0 places/km → 0.0,  ≥8 places/km → 1.0
+  const activityFactor = Math.min(1, placesPerKm / 8);
+
+  // --- Road quality factor (fraction of roads that are lit) ---
+  const totalRoads = litRoads + unlitRoads;
+  const roadLitFactor = totalRoads > 0 ? litRoads / totalRoads : 0.5;
+
+  // --- Main road factor (0 = all paths, 1 = all main roads) ---
+  const mainRoadFactor = mainRoadRatio; // already 0-1
+
+  // Weighted sum — main road usage is a significant safety signal
+  const raw =
+    crimeFactor    * 0.30 +
+    lightFactor    * 0.25 +
+    mainRoadFactor * 0.20 +
+    activityFactor * 0.15 +
+    roadLitFactor  * 0.10;
+
+  // Map to 1–100
+  const score = Math.round(Math.max(1, Math.min(100, raw * 100)));
+
+  // Label & colour
+  let label: string;
+  let color: string;
+  if (score >= 70) {
+    label = 'Very Safe';
+    color = '#22c55e'; // green-500
+  } else if (score >= 60) {
+    label = 'Safe';
+    color = '#84cc16'; // lime-500
+  } else if (score >= 40) {
+    label = 'Moderate';
+    color = '#f59e0b'; // amber-500
+  } else {
+    label = 'Use Caution';
+    color = '#ef4444'; // red-500
+  }
+
+  return { score, label, color };
+};
 
 // ---------------------------------------------------------------------------
 // Config
@@ -431,17 +526,35 @@ const fetchOpenPlaceMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> =>
 };
 
 // ---------------------------------------------------------------------------
-// Main entry – fetch everything in parallel
+// Main entry – fetch everything in parallel (with result cache)
 // ---------------------------------------------------------------------------
 
 export type SafetyProgressCb = (msg: string, pct: number) => void;
 
+/** Cache keyed by path fingerprint so repeated calls return identical data */
+const resultCache = new Map<string, SafetyMapResult>();
+
+const pathFingerprint = (path: LatLng[], dist?: number): string => {
+  const first = path[0];
+  const last = path[path.length - 1];
+  return `${first.latitude.toFixed(5)},${first.longitude.toFixed(5)}|${last.latitude.toFixed(5)},${last.longitude.toFixed(5)}|${dist ?? 0}`;
+};
+
 export const fetchSafetyMapData = async (
   path: LatLng[],
   onProgress?: SafetyProgressCb,
+  routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], crimeCount: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0 };
+    return { markers: [], roadOverlays: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Unknown', safetyColor: '#94a3b8', mainRoadRatio: 0.5 };
+  }
+
+  // Return cached result if we already analysed this exact route
+  const fp = pathFingerprint(path, routeDistanceMeters);
+  const cached = resultCache.get(fp);
+  if (cached) {
+    onProgress?.('✅ Done!', 100);
+    return cached;
   }
 
   onProgress?.('🔍 Fetching safety data…', 10);
@@ -456,12 +569,43 @@ export const fetchSafetyMapData = async (
 
   const markers = [...crimes, ...roadsData.lights, ...shops];
 
-  return {
+  // Compute main-road ratio from the road overlays
+  let mainRoadCount = 0;
+  let pathCount = 0;
+  for (const overlay of roadsData.overlays) {
+    if (MAIN_ROAD_TYPES.has(overlay.roadType)) mainRoadCount++;
+    else if (PATH_ROAD_TYPES.has(overlay.roadType)) pathCount++;
+  }
+  const totalTyped = mainRoadCount + pathCount;
+  const mainRoadRatio = totalTyped > 0 ? mainRoadCount / totalTyped : 0.5;
+
+  const distKm = (routeDistanceMeters ?? 1000) / 1000;
+  const { score, label, color } = computeSafetyScore(
+    crimes.length,
+    roadsData.lights.length,
+    roadsData.litCount,
+    roadsData.unlitCount,
+    shops.length,
+    distKm,
+    mainRoadRatio,
+  );
+
+  const result: SafetyMapResult = {
     markers,
     roadOverlays: roadsData.overlays,
     crimeCount: crimes.length,
+    streetLights: roadsData.lights.length,
     litRoads: roadsData.litCount,
     unlitRoads: roadsData.unlitCount,
     openPlaces: shops.length,
+    safetyScore: score,
+    safetyLabel: label,
+    safetyColor: color,
+    mainRoadRatio,
   };
+
+  // Persist so future calls for the same route are instant & identical
+  resultCache.set(fp, result);
+
+  return result;
 };

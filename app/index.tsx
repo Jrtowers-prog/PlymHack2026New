@@ -11,16 +11,14 @@ import {
 } from 'react-native';
 
 import RouteMap from '@/src/components/maps/RouteMap';
+import { useAllRoutesSafety } from '@/src/hooks/useAllRoutesSafety';
+import { useAutoPlaceSearch } from '@/src/hooks/useAutoPlaceSearch';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
 import { useDirections } from '@/src/hooks/useDirections';
 import { useOnboarding } from '@/src/hooks/useOnboarding';
-import { usePlaceAutocomplete } from '@/src/hooks/usePlaceAutocomplete';
 import { useRouteSafety } from '@/src/hooks/useRouteSafety';
-import {
-  reverseGeocode
-} from '@/src/services/openStreetMap';
-import { AppError } from '@/src/types/errors';
-import type { DirectionsRoute, LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
+import { reverseGeocode } from '@/src/services/openStreetMap';
+import type { DirectionsRoute, LatLng, PlaceDetails } from '@/src/types/google';
 
 export default function HomeScreen() {
   const { status: onboardingStatus, hasAccepted, error: onboardingError, accept } = useOnboarding();
@@ -31,34 +29,34 @@ export default function HomeScreen() {
     refresh: refreshLocation,
   } = useCurrentLocation({ enabled: hasAccepted });
   
-  // Origin states
-  const [originQuery, setOriginQuery] = useState('');
-  const [origin, setOrigin] = useState<PlaceDetails | null>(null);
+  // Origin (auto-detect)
   const [isUsingCurrentLocation, setIsUsingCurrentLocation] = useState(true);
-  const [originStatus, setOriginStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle');
-  const [originError, setOriginError] = useState<AppError | null>(null);
-  const [activeInput, setActiveInput] = useState<'origin' | 'destination' | null>(null);
-  
-  // Destination states
-  const [destinationQuery, setDestinationQuery] = useState('');
-  const [destination, setDestination] = useState<PlaceDetails | null>(null);
-  const [destinationStatus, setDestinationStatus] = useState<
-    'idle' | 'loading' | 'error' | 'ready'
-  >('idle');
-  const [destinationError, setDestinationError] = useState<AppError | null>(null);
+  const originSearch = useAutoPlaceSearch(location);
+
+  // Destination (auto-detect)
+  const destSearch = useAutoPlaceSearch(location);
+  const [manualDest, setManualDest] = useState<PlaceDetails | null>(null);
+
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  const currentQuery = activeInput === 'origin' ? originQuery : destinationQuery;
-  const effectiveOrigin = isUsingCurrentLocation ? location : origin?.location ?? null;
+  const effectiveOrigin = isUsingCurrentLocation ? location : originSearch.place?.location ?? null;
+  const effectiveDestination = manualDest?.location ?? destSearch.place?.location ?? null;
 
-  const { status: autocompleteStatus, predictions, error: autocompleteError } =
-    usePlaceAutocomplete(currentQuery, location);
   const {
     status: directionsStatus,
     routes,
     error: directionsError,
-  } = useDirections(effectiveOrigin, destination?.location ?? null);
+  } = useDirections(effectiveOrigin, effectiveDestination);
+
+  // Background safety scoring for ALL routes
+  const { scores: routeScores, bestRouteId, loading: scoringRoutes } =
+    useAllRoutesSafety(routes);
+
+  // When user types a new destination, clear the manual pin
+  useEffect(() => {
+    if (destSearch.query.length > 0) setManualDest(null);
+  }, [destSearch.query]);
 
   useEffect(() => {
     if (onboardingStatus === 'ready' && !hasAccepted) {
@@ -66,11 +64,14 @@ export default function HomeScreen() {
     }
   }, [onboardingStatus, hasAccepted]);
 
+  // Auto-select safest route once scoring is done, otherwise pick first
   useEffect(() => {
-    if (routes.length > 0) {
+    if (bestRouteId) {
+      setSelectedRouteId(bestRouteId);
+    } else if (routes.length > 0) {
       setSelectedRouteId(routes[0].id);
     }
-  }, [routes]);
+  }, [routes, bestRouteId]);
 
   const selectedRoute = useMemo<DirectionsRoute | null>(() => {
     return routes.find((route) => route.id === selectedRouteId) ?? null;
@@ -87,77 +88,24 @@ export default function HomeScreen() {
   } =
     useRouteSafety(selectedRoute);
 
-  const handlePredictionPress = (prediction: PlacePrediction) => {
-    if (!prediction.location) {
-      if (activeInput === 'origin') {
-        setOriginError(new AppError('origin_missing_location', 'Origin has no coordinates'));
-        setOriginStatus('error');
-      } else {
-        setDestinationError(
-          new AppError('destination_missing_location', 'Destination has no coordinates')
-        );
-        setDestinationStatus('error');
-      }
-      return;
-    }
-
-    const details: PlaceDetails = {
-      placeId: prediction.placeId,
-      name: prediction.fullText,
-      location: prediction.location,
-      source: prediction.source,
-    };
-
-    if (activeInput === 'origin') {
-      setOrigin(details);
-      setOriginQuery(prediction.primaryText);
-      setOriginStatus('ready');
-      setOriginError(null);
-    } else {
-      setDestination(details);
-      setDestinationQuery(prediction.primaryText);
-      setDestinationStatus('ready');
-      setDestinationError(null);
-    }
-    
-    setActiveInput(null);
-  };
-
   const handleMapLongPress = async (coordinate: LatLng) => {
-    setDestinationStatus('loading');
-    setDestinationError(null);
-
     const fallback: PlaceDetails = {
       placeId: `pin:${coordinate.latitude},${coordinate.longitude}`,
       name: 'Dropped pin',
       location: coordinate,
     };
-
-    setDestination(fallback);
-    setDestinationQuery(fallback.name);
+    setManualDest(fallback);
+    destSearch.clear();
 
     const resolved = await reverseGeocode(coordinate);
-    if (resolved) {
-      setDestination(resolved);
-      setDestinationQuery(resolved.name);
-    }
-
-    setDestinationStatus('ready');
+    if (resolved) setManualDest(resolved);
     setSelectedRouteId(null);
-  };
-
-  const handleUseCurrentLocation = () => {
-    setIsUsingCurrentLocation(true);
-    setOrigin(null);
-    setOriginQuery('');
-    setOriginStatus('idle');
-    setOriginError(null);
   };
 
   const distanceLabel = selectedRoute ? formatDistance(selectedRoute.distanceMeters) : '--';
   const durationLabel = selectedRoute ? formatDuration(selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(selectedRoute);
-  const showPredictions = activeInput && predictions.length > 0;
+  const destDisplayName = manualDest?.name ?? destSearch.query ?? '';
   
 
 
@@ -166,7 +114,7 @@ export default function HomeScreen() {
       <View style={styles.mapContainer}>
         <RouteMap
           origin={effectiveOrigin}
-          destination={destination?.location ?? null}
+          destination={effectiveDestination}
           routes={routes}
           selectedRouteId={selectedRouteId}
           safetyMarkers={safetyMarkers}
@@ -176,7 +124,7 @@ export default function HomeScreen() {
         />
       </View>
       
-      {/* Top Search Inputs - Google Maps Style */}
+      {/* Top Search Bar */}
       <View style={styles.topSearchContainer}>
         <View style={styles.searchCard}>
           {/* Origin Input */}
@@ -185,40 +133,40 @@ export default function HomeScreen() {
             {isUsingCurrentLocation ? (
               <Pressable
                 style={styles.locationButton}
-                onPress={() => {
-                  setIsUsingCurrentLocation(false);
-                  setActiveInput('origin');
-                }}
+                onPress={() => setIsUsingCurrentLocation(false)}
                 accessibilityRole="button"
               >
                 <Text style={styles.locationButtonText}>
-                  {location ? 'Your location' : 'Getting location...'}
+                  {location ? '📍 Your location' : '⏳ Getting location...'}
                 </Text>
               </Pressable>
             ) : (
-              <TextInput
-                value={originQuery}
-                onChangeText={(text) => {
-                  setOriginQuery(text);
-                  setOrigin(null);
-                  setOriginStatus('idle');
-                  setOriginError(null);
-                }}
-                onFocus={() => setActiveInput('origin')}
-                placeholder="Choose starting point"
-                accessibilityLabel="Starting point"
-                autoCorrect={false}
-                style={styles.searchInput}
-              />
-            )}
-            {!isUsingCurrentLocation && (
-              <Pressable
-                style={styles.iconButton}
-                onPress={handleUseCurrentLocation}
-                accessibilityRole="button"
-              >
-                <Text style={styles.iconButtonText}>📍</Text>
-              </Pressable>
+              <>
+                <TextInput
+                  value={originSearch.query}
+                  onChangeText={originSearch.setQuery}
+                  placeholder="Starting point"
+                  accessibilityLabel="Starting point"
+                  autoCorrect={false}
+                  style={styles.searchInput}
+                />
+                {originSearch.status === 'searching' && (
+                  <ActivityIndicator size="small" color="#1570ef" />
+                )}
+                {originSearch.status === 'found' && (
+                  <Text style={styles.searchCheck}>✓</Text>
+                )}
+                <Pressable
+                  style={styles.iconButton}
+                  onPress={() => {
+                    setIsUsingCurrentLocation(true);
+                    originSearch.clear();
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.iconButtonText}>📍</Text>
+                </Pressable>
+              </>
             )}
           </View>
           
@@ -229,44 +177,38 @@ export default function HomeScreen() {
           <View style={styles.inputRow}>
             <View style={styles.iconPin} />
             <TextInput
-              value={destinationQuery}
-              onChangeText={(text) => {
-                setDestinationQuery(text);
-                setDestination(null);
+              value={manualDest ? destDisplayName : destSearch.query}
+              onChangeText={(text: string) => {
+                setManualDest(null);
+                destSearch.setQuery(text);
                 setSelectedRouteId(null);
-                setDestinationStatus('idle');
-                setDestinationError(null);
               }}
-              onFocus={() => setActiveInput('destination')}
-              placeholder="Choose destination"
+              placeholder="Where to?"
               accessibilityLabel="Destination"
               autoCorrect={false}
               style={styles.searchInput}
             />
+            {destSearch.status === 'searching' && (
+              <ActivityIndicator size="small" color="#1570ef" />
+            )}
+            {(destSearch.status === 'found' || manualDest) && (
+              <Text style={styles.searchCheck}>✓</Text>
+            )}
+            {(destSearch.place || manualDest) && (
+              <Pressable
+                style={styles.iconButton}
+                onPress={() => {
+                  destSearch.clear();
+                  setManualDest(null);
+                  setSelectedRouteId(null);
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.iconButtonText}>✕</Text>
+              </Pressable>
+            )}
           </View>
         </View>
-        
-        {/* Autocomplete Predictions */}
-        {showPredictions && (
-          <View style={styles.predictionsCard}>
-            {predictions.slice(0, 5).map((prediction) => (
-              <Pressable
-                key={prediction.placeId}
-                onPress={() => handlePredictionPress(prediction)}
-                accessibilityRole="button"
-                style={styles.predictionItem}
-              >
-                <Text style={styles.predictionIcon}>📍</Text>
-                <View style={styles.predictionTextContainer}>
-                  <Text style={styles.predictionPrimary}>{prediction.primaryText}</Text>
-                  {prediction.secondaryText && (
-                    <Text style={styles.predictionSecondary}>{prediction.secondaryText}</Text>
-                  )}
-                </View>
-              </Pressable>
-            ))}
-          </View>
-        )}
       </View>
       
       {/* Bottom Sheet with Results */}
@@ -294,25 +236,62 @@ export default function HomeScreen() {
             
             {directionsError && <Text style={styles.error}>{directionsError.message}</Text>}
             
-            {routes.slice(0, 5).map((route, index) => {
+            {scoringRoutes && (
+              <View style={styles.scoringBanner}>
+                <ActivityIndicator size="small" color="#1570ef" />
+                <Text style={styles.scoringBannerText}>Scoring all routes for safety…</Text>
+              </View>
+            )}
+
+            {routes.slice(0, 7).map((route, index) => {
               const isSelected = route.id === selectedRouteId;
-              const label = index === 0 ? 'Best route' : `Alternative ${index}`;
+              const isBest = route.id === bestRouteId;
+              const scoreInfo = routeScores[route.id];
+              const label = isBest ? 'Safest Route' : `Route ${index + 1}`;
 
               return (
                 <Pressable
                   key={route.id}
                   onPress={() => setSelectedRouteId(route.id)}
                   accessibilityRole="button"
-                  style={[styles.routeCard, isSelected && styles.routeCardSelected]}
+                  style={[
+                    styles.routeCard,
+                    isSelected && styles.routeCardSelected,
+                    isBest && styles.routeCardBest,
+                  ]}
                 >
                   <View style={styles.routeHeader}>
-                    <Text style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
-                      {label}
-                    </Text>
-                    {isSelected && <View style={styles.selectedBadge} />}
+                    <View style={styles.routeLabelRow}>
+                      {isBest && (
+                        <View style={styles.bestBadge}>
+                          <Text style={styles.bestBadgeTick}>✓</Text>
+                        </View>
+                      )}
+                      <Text
+                        style={[
+                          styles.routeLabel,
+                          isSelected && styles.routeLabelSelected,
+                          isBest && styles.routeLabelBest,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </View>
+                    {scoreInfo?.status === 'done' && (
+                      <View style={[styles.scoreChip, { backgroundColor: scoreInfo.color + '20' }]}>
+                        <View style={[styles.scoreChipDot, { backgroundColor: scoreInfo.color }]} />
+                        <Text style={[styles.scoreChipText, { color: scoreInfo.color }]}>
+                          {scoreInfo.score}
+                        </Text>
+                      </View>
+                    )}
+                    {scoreInfo?.status === 'pending' && (
+                      <ActivityIndicator size="small" color="#94a3b8" />
+                    )}
                   </View>
                   <Text style={styles.routeDetails}>
                     {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
+                    {scoreInfo?.status === 'done' ? ` · ${scoreInfo.label}` : ''}
                   </Text>
                 </Pressable>
               );
@@ -336,24 +315,59 @@ export default function HomeScreen() {
                 {safetyError && <Text style={styles.error}>{safetyError.message}</Text>}
                 
                 {safetyResult && (
-                  <View style={styles.safetyGrid}>
-                    <View style={styles.safetyItem}>
-                      <Text style={styles.safetyValue}>{safetyResult.crimeCount}</Text>
-                      <Text style={styles.safetyLabel}>Crime reports</Text>
+                  <>
+                    {/* ── Safety Score Gauge ── */}
+                    <View style={styles.scoreCard}>
+                      <View style={styles.scoreGauge}>
+                        {/* Background track */}
+                        <View style={styles.gaugeTrack} />
+                        {/* Filled portion */}
+                        <View
+                          style={[
+                            styles.gaugeFill,
+                            {
+                              width: `${safetyResult.safetyScore}%`,
+                              backgroundColor: safetyResult.safetyColor,
+                            },
+                          ]}
+                        />
+                      </View>
+                      <View style={styles.scoreRow}>
+                        <Text style={[styles.scoreNumber, { color: safetyResult.safetyColor }]}>
+                          {safetyResult.safetyScore}
+                        </Text>
+                        <Text style={styles.scoreOutOf}>/100</Text>
+                        <View style={[styles.scoreBadge, { backgroundColor: safetyResult.safetyColor + '22' }]}>
+                          <View style={[styles.scoreDot, { backgroundColor: safetyResult.safetyColor }]} />
+                          <Text style={[styles.scoreBadgeText, { color: safetyResult.safetyColor }]}>
+                            {safetyResult.safetyLabel}
+                          </Text>
+                        </View>
+                      </View>
+                      {/* Mini breakdown bars */}
+                      <View style={styles.breakdownRow}>
+                        <MiniBar label="Crime" value={Math.max(0, 100 - safetyResult.crimeCount * 4)} color="#ef4444" />
+                        <MiniBar label="Lights" value={Math.min(100, safetyResult.streetLights * 2)} color="#facc15" />
+                        <MiniBar label="Activity" value={Math.min(100, safetyResult.openPlaces * 10)} color="#22c55e" />
+                      </View>
                     </View>
-                    <View style={styles.safetyItem}>
-                      <Text style={styles.safetyValue}>{safetyResult.litRoads}</Text>
-                      <Text style={styles.safetyLabel}>Well-lit roads</Text>
+
+                    {/* ── Stat Grid ── */}
+                    <View style={styles.safetyGrid}>
+                      <View style={styles.safetyItem}>
+                        <Text style={styles.safetyValue}>{safetyResult.crimeCount}</Text>
+                        <Text style={styles.safetyLabel}>Crime reports</Text>
+                      </View>
+                      <View style={styles.safetyItem}>
+                        <Text style={styles.safetyValue}>{safetyResult.streetLights}</Text>
+                        <Text style={styles.safetyLabel}>Street lights</Text>
+                      </View>
+                      <View style={styles.safetyItem}>
+                        <Text style={styles.safetyValue}>{safetyResult.openPlaces}</Text>
+                        <Text style={styles.safetyLabel}>Open places</Text>
+                      </View>
                     </View>
-                    <View style={styles.safetyItem}>
-                      <Text style={styles.safetyValue}>{safetyResult.unlitRoads}</Text>
-                      <Text style={styles.safetyLabel}>Unlit roads</Text>
-                    </View>
-                    <View style={styles.safetyItem}>
-                      <Text style={styles.safetyValue}>{safetyResult.openPlaces}</Text>
-                      <Text style={styles.safetyLabel}>Open places</Text>
-                    </View>
-                  </View>
+                  </>
                 )}
               </>
             )}
@@ -395,6 +409,19 @@ export default function HomeScreen() {
         </View>
       ) : null}
     </SafeAreaView>
+  );
+}
+
+// ── Mini breakdown bar for safety chart ──
+function MiniBar({ label, value, color }: { label: string; value: number; color: string }) {
+  const clamped = Math.max(0, Math.min(100, value));
+  return (
+    <View style={styles.miniBarWrap}>
+      <Text style={styles.miniBarLabel}>{label}</Text>
+      <View style={styles.miniBarTrack}>
+        <View style={[styles.miniBarFill, { width: `${clamped}%`, backgroundColor: color }]} />
+      </View>
+    </View>
   );
 }
 
@@ -484,39 +511,11 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
   },
   
-  // Predictions Dropdown
-  predictionsCard: {
-    marginTop: 8,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-    elevation: 4,
-    maxHeight: 300,
-  },
-  predictionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f2f4f7',
-  },
-  predictionIcon: {
-    fontSize: 18,
-  },
-  predictionTextContainer: {
-    flex: 1,
-  },
-  predictionPrimary: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#101828',
-  },
-  predictionSecondary: {
-    fontSize: 13,
-    color: '#667085',
-    marginTop: 2,
+  searchCheck: {
+    fontSize: 14,
+    color: '#22c55e',
+    fontWeight: '700',
+    marginRight: 2,
   },
   
   // Bottom Sheet
@@ -598,6 +597,64 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#1570ef',
   },
+  routeCardBest: {
+    borderColor: '#22c55e',
+    backgroundColor: '#f0fdf4',
+  },
+  routeLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  routeLabelBest: {
+    color: '#16a34a',
+  },
+  bestBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bestBadgeTick: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  scoreChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 5,
+  },
+  scoreChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  scoreChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  scoringBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 10,
+    backgroundColor: '#eff6ff',
+  },
+  scoringBannerText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#1570ef',
+  },
   routeDetails: {
     fontSize: 14,
     color: '#667085',
@@ -636,6 +693,93 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   
+  // Safety Score
+  scoreCard: {
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 14,
+    backgroundColor: '#f0f4ff',
+    borderWidth: 1,
+    borderColor: '#d0d5dd',
+  },
+  scoreGauge: {
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    position: 'relative',
+    marginBottom: 12,
+  },
+  gaugeTrack: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 5,
+  },
+  gaugeFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 5,
+  },
+  scoreRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+    marginBottom: 14,
+  },
+  scoreNumber: {
+    fontSize: 36,
+    fontWeight: '800',
+  },
+  scoreOutOf: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#667085',
+  },
+  scoreBadge: {
+    marginLeft: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 6,
+  },
+  scoreDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  scoreBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  breakdownRow: {
+    gap: 8,
+  },
+  miniBarWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  miniBarLabel: {
+    width: 52,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#667085',
+  },
+  miniBarTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#e5e7eb',
+    overflow: 'hidden',
+  },
+  miniBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+
   // Loading & Errors
   loadingContainer: {
     flexDirection: 'column',
