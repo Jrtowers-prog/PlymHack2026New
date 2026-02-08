@@ -9,6 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import RouteMap from '@/src/components/maps/RouteMap';
 import { useAllRoutesSafety } from '@/src/hooks/useAllRoutesSafety';
@@ -155,9 +156,12 @@ export default function HomeScreen() {
         {/* Pin-mode banner */}
         {pinMode && (
           <View style={styles.pinBanner}>
-            <Text style={styles.pinBannerText}>
-              📍 Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <Ionicons name="location" size={18} color="#ffffff" />
+              <Text style={styles.pinBannerText}>
+                Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
+              </Text>
+            </View>
             <Pressable onPress={() => setPinMode(null)} style={styles.pinBannerCancel}>
               <Text style={styles.pinBannerCancelText}>Cancel</Text>
             </Pressable>
@@ -177,12 +181,13 @@ export default function HomeScreen() {
             <View style={styles.inputFieldWrap}>
               {isUsingCurrentLocation ? (
                 <Pressable
-                  style={styles.inputField}
+                  style={[styles.inputField, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
                   onPress={() => setIsUsingCurrentLocation(false)}
                   accessibilityRole="button"
                 >
+                  <Ionicons name={location ? 'navigate' : 'hourglass-outline'} size={16} color="#1570ef" />
                   <Text style={styles.locationDisplayText}>
-                    {location ? '📍 Your location' : '⏳ Getting location...'}
+                    {location ? 'Your location' : 'Getting location...'}
                   </Text>
                 </Pressable>
               ) : (
@@ -205,7 +210,7 @@ export default function HomeScreen() {
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
                 {(originSearch.status === 'found' || manualOrigin) && (
-                  <Text style={styles.checkMark}>✓</Text>
+                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
                 )}
                 <Pressable
                   style={styles.mapPinButton}
@@ -216,7 +221,7 @@ export default function HomeScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Pick on map"
                 >
-                  <Text style={[styles.mapPinIcon, pinMode === 'origin' && styles.mapPinActive]}>📍</Text>
+                  <Ionicons name="location-outline" size={20} color={pinMode === 'origin' ? '#1570ef' : '#667085'} />
                 </Pressable>
                 {!isUsingCurrentLocation && (
                   <Pressable
@@ -229,7 +234,7 @@ export default function HomeScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Use current location"
                   >
-                    <Text style={styles.mapPinIcon}>⊙</Text>
+                    <Ionicons name="locate-outline" size={20} color="#667085" />
                   </Pressable>
                 )}
               </View>
@@ -263,7 +268,7 @@ export default function HomeScreen() {
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
                 {(destSearch.status === 'found' || manualDest) && (
-                  <Text style={styles.checkMark}>✓</Text>
+                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
                 )}
                 <Pressable
                   style={styles.mapPinButton}
@@ -274,7 +279,7 @@ export default function HomeScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Pick on map"
                 >
-                  <Text style={[styles.mapPinIcon, pinMode === 'destination' && styles.mapPinActive]}>📍</Text>
+                  <Ionicons name="location-outline" size={20} color={pinMode === 'destination' ? '#d92d20' : '#667085'} />
                 </Pressable>
                 {(destSearch.place || manualDest) && (
                   <Pressable
@@ -287,7 +292,7 @@ export default function HomeScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Clear destination"
                   >
-                    <Text style={styles.clearIcon}>✕</Text>
+                    <Ionicons name="close-circle-outline" size={20} color="#98a2b3" />
                   </Pressable>
                 )}
               </View>
@@ -593,18 +598,18 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   inputField: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 16,
     color: '#101828',
     padding: 0,
     fontWeight: '400',
   },
   locationDisplayText: {
-    fontSize: 15,
+    fontSize: 16,
     color: '#1570ef',
     fontWeight: '500',
   },
@@ -614,26 +619,9 @@ const styles = StyleSheet.create({
     gap: 6,
     marginLeft: 8,
   },
-  checkMark: {
-    fontSize: 14,
-    color: '#22c55e',
-    fontWeight: '700',
-  },
   mapPinButton: {
     padding: 4,
     borderRadius: 6,
-  },
-  mapPinIcon: {
-    fontSize: 16,
-    opacity: 0.6,
-  },
-  mapPinActive: {
-    opacity: 1,
-  },
-  clearIcon: {
-    fontSize: 14,
-    color: '#98a2b3',
-    fontWeight: '700',
   },
   inputDivider: {
     height: 1,

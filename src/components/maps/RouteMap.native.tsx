@@ -87,8 +87,17 @@ export const RouteMap = ({
       >
         {tileUrl ? <UrlTile urlTemplate={tileUrl} maximumZ={20} flipY={false} /> : null}
 
-        {/* Origin / Destination markers */}
-        {origin ? <Marker coordinate={origin} title="Your location" pinColor={ROUTE_COLOR} /> : null}
+        {/* Origin marker – blue dot */}
+        {origin ? (
+          <Marker coordinate={origin} title="Your location" anchor={{ x: 0.5, y: 0.5 }} zIndex={50}>
+            <View style={styles.blueDotOuter}>
+              <View style={styles.blueDotInner}>
+                <View style={styles.blueDotCore} />
+              </View>
+            </View>
+          </Marker>
+        ) : null}
+        {/* Destination marker */}
         {destination ? <Marker coordinate={destination} title="Destination" pinColor="#d92d20" /> : null}
 
         {/* Route polylines – unselected routes grey */}
@@ -194,6 +203,28 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  blueDotOuter: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(66,133,244,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blueDotInner: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#4285F4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blueDotCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#ffffff',
   },
 });
 
