@@ -9,13 +9,13 @@ import {
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import RouteMap from '@/src/components/maps/RouteMap';
 import { useAIExplanation } from '@/src/hooks/useAIExplanation';
@@ -1045,13 +1045,15 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     backgroundColor: '#f9fafb',
     borderRadius: 12,
-    borderWidth: 0,
-    borderColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
     paddingHorizontal: 18,
     paddingVertical: 16,
   },
   inputFieldWrapFocused: {
+    borderColor: '#1570ef',
     backgroundColor: '#ffffff',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 0 3px rgba(21, 112, 239, 0.2)' } : {}),
   },
   inputField: {
     flex: 1,
@@ -1059,6 +1061,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#101828',
     fontWeight: '400',
+    borderWidth: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
   } as any,
   locationDisplayText: {
     fontSize: 18,

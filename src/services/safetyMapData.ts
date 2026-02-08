@@ -611,7 +611,7 @@ const MAX_SHOP_MARKERS = 200;
 
 const fetchOpenPlaceMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
   try {
-    if (typeof window === 'undefined') return [];
+    if (typeof window === 'undefined' || typeof document === 'undefined') return [];
 
     const { fetchNearbyOpenPlaces } = await import('./googleMaps.web');
 

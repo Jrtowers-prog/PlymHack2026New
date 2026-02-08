@@ -17,6 +17,9 @@ type GoogleMapsWindow = Window & {
 let mapsScriptPromise: Promise<void> | null = null;
 
 const loadGoogleMapsScript = (): Promise<void> => {
+  if (typeof document === 'undefined') {
+    return Promise.reject(new AppError('google_maps_not_web', 'Google Maps JS API is only available on web'));
+  }
   if ((window as GoogleMapsWindow).google?.maps) {
     return Promise.resolve();
   }
@@ -499,8 +502,8 @@ export const fetchNearbyOpenPlaces = async (
   center: LatLng,
   radiusMeters: number = 50
 ): Promise<NearbyPlace[]> => {
-  // Ensure we're in a browser environment
-  if (typeof window === 'undefined') {
+  // Ensure we're in a browser environment (document must exist for DOM operations)
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
     return [];
   }
 
@@ -614,7 +617,7 @@ export const countOpenPlacesAlongRoute = async (
   path: LatLng[],
   sampleIntervalMeters: number = 200
 ): Promise<number> => {
-  if (path.length < 2 || typeof window === 'undefined') {
+  if (path.length < 2 || typeof window === 'undefined' || typeof document === 'undefined') {
     return 0;
   }
 
