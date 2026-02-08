@@ -52,6 +52,22 @@ export default function HomeScreen() {
     'idle'
   );
   const [safetyError, setSafetyError] = useState<AppError | null>(null);
+  const handleRefreshPress = () => {
+    setQuery('');
+    setOriginQuery('');
+    setOriginPlace(null);
+    setDestination(null);
+    setSelectedRouteId(null);
+    setIsSearchOpen(false);
+    setCrimeStatus('idle');
+    setCrimeCount(null);
+    setCrimeError(null);
+    setCrimePoints([]);
+    setRouteMetrics({});
+    setSafetyStatus('idle');
+    setSafetyError(null);
+    refresh();
+  };
 
   const {
     status: originAutocompleteStatus,
@@ -441,7 +457,11 @@ export default function HomeScreen() {
           >
             <Text style={styles.destinationButtonText}>+</Text>
           </Pressable>
-          <Pressable style={styles.refreshButton} onPress={refresh} accessibilityRole="button">
+          <Pressable
+            style={styles.refreshButton}
+            onPress={handleRefreshPress}
+            accessibilityRole="button"
+          >
             <Text style={styles.refreshButtonText}>Refresh</Text>
           </Pressable>
         </View>
