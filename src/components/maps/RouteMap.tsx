@@ -1,20 +1,16 @@
 import { Platform } from 'react-native';
 
 /**
- * On web, use the Google Maps JS API renderer.
- * On native, use the fallback (react-native-maps needs a dev build, not Expo Go).
- * To use the full native map, swap RouteMapFallback → RouteMapNative below
- * and run `npx expo run:ios` / `npx expo run:android`.
+ * On web, use the Google Maps JS API renderer directly in the DOM.
+ * On native (iOS / Android), use a WebView-based Google Maps renderer
+ * that works in Expo Go — no dev build required.
  */
 let RouteMap: React.ComponentType<any>;
 
 if (Platform.OS === 'web') {
   RouteMap = require('@/src/components/maps/RouteMap.web').default;
 } else {
-  // Use the lightweight fallback that works in Expo Go.
-  // For a dev build, change the line below to:
-  //   RouteMap = require('@/src/components/maps/RouteMapNative').default;
-  RouteMap = require('@/src/components/maps/RouteMap.fallback').default;
+  RouteMap = require('@/src/components/maps/RouteMap.native').default;
 }
 
 export default RouteMap;
