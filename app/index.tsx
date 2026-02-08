@@ -296,9 +296,9 @@ export default function HomeScreen() {
         return;
       }
 
-      const crimeScore = 1 - normalizeRange(entry.crimeDensity, 0, 20);
-      const openScore = normalizeRange(entry.openDensity, 0, 20);
-      const lightingScore = normalizeRange(entry.lightingRatio, 0.3, 0.9);
+      const crimeScore = 1 - normalizeRange(entry.crimeDensity, 0, 50);
+      const openScore = normalizeRange(entry.openDensity, 0, 10);
+      const lightingScore = normalizeRange(entry.lightingRatio, 0, 0.8);
       const roadScore = normalizeRange(entry.roadScore, 0.3, 1);
 
       const weighted =
