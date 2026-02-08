@@ -34,9 +34,40 @@ export interface RoadOverlay {
   lit: 'yes' | 'no' | 'unknown';
 }
 
+export interface RoadLabel {
+  id: string;
+  coordinate: LatLng;
+  roadType: string;
+  displayName: string;
+  color: string;
+}
+
+/** A segment of the route polyline coloured by local danger level. */
+export interface RouteSegment {
+  id: string;
+  path: LatLng[];
+  color: string; // hex – green (safe) → red (dangerous)
+}
+
+/** Human-readable names for OSM highway types */
+export const ROAD_TYPE_NAMES: Record<string, string> = {
+  primary:       'Main Road',
+  secondary:     'Secondary Road',
+  tertiary:      'Minor Road',
+  residential:   'Residential',
+  living_street: 'Living Street',
+  pedestrian:    'Pedestrian Zone',
+  footway:       'Footpath',
+  path:          'Path',
+  steps:         'Steps',
+  track:         'Track',
+};
+
 export interface SafetyMapResult {
   markers: SafetyMarker[];
   roadOverlays: RoadOverlay[];
+  roadLabels: RoadLabel[];
+  routeSegments: RouteSegment[];
   crimeCount: number;
   streetLights: number;
   litRoads: number;
@@ -157,22 +188,66 @@ const fetchWithTimeout = async <T>(
   url: string,
   options?: RequestInit,
   timeoutMs = 12_000,
+  retries = 3,
 ): Promise<T> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) throw new AppError('safety_http', `HTTP ${res.status}`);
-    return (await res.json()) as T;
-  } catch (err) {
-    clearTimeout(timer);
-    if (err instanceof AppError) throw err;
-    if (err instanceof Error && err.name === 'AbortError')
-      throw new AppError('safety_timeout', 'Request timed out');
-    throw new AppError('safety_network', 'Network error', err);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      if (res.status === 429) {
+        // Rate-limited — wait and retry
+        if (attempt < retries) {
+          const delay = 2000 * (attempt + 1); // 2s, 4s, 6s
+          console.warn(`[SafetyMap] 429 rate-limited, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw new AppError('safety_http', 'HTTP 429 — rate limited');
+      }
+      if (!res.ok) throw new AppError('safety_http', `HTTP ${res.status}`);
+      return (await res.json()) as T;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof AppError) {
+        if (err.message.includes('429') && attempt < retries) continue;
+        throw err;
+      }
+      if (err instanceof Error && err.name === 'AbortError')
+        throw new AppError('safety_timeout', 'Request timed out');
+      throw new AppError('safety_network', 'Network error', err);
+    }
   }
+  throw new AppError('safety_http', 'Max retries exceeded');
 };
+
+// ---------------------------------------------------------------------------
+// Overpass request serializer — only 1 in-flight request at a time
+// ---------------------------------------------------------------------------
+let overpassQueue: Promise<any> = Promise.resolve();
+
+const serialOverpassFetch = async <T>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = 15_000,
+): Promise<T> => {
+  // Chain onto the queue so requests run one-at-a-time
+  const ticket = overpassQueue.then(() => fetchWithTimeout<T>(url, options, timeoutMs));
+  // Update the queue head (swallow errors so the queue keeps moving)
+  overpassQueue = ticket.catch(() => {});
+  return ticket;
+};
+
+// ---------------------------------------------------------------------------
+// Shared roads+lights cache (keyed by rounded bbox, shared across routes)
+// ---------------------------------------------------------------------------
+type RoadsResult = { overlays: RoadOverlay[]; lights: SafetyMarker[]; litCount: number; unlitCount: number };
+const roadsCache = new Map<string, RoadsResult>();
+const pendingRoads = new Map<string, Promise<RoadsResult>>();
+
+const bboxKey = (b: BBox): string =>
+  `${b.minLat.toFixed(4)},${b.minLng.toFixed(4)},${b.maxLat.toFixed(4)},${b.maxLng.toFixed(4)}`;
 
 // ---------------------------------------------------------------------------
 // Geo helpers
@@ -370,17 +445,22 @@ const fetchRoadsAndLights = async (
     const b = bbox(simplify(path), 30);
     if (!b) return { overlays: [], lights: [], litCount: 0, unlitCount: 0 };
 
-    // Build a coordinate string for the Overpass "around" filter.
-    // Use a simplified path (max ~40 points) so the query stays small.
-    const routePts = simplify(path, 40);
-    const aroundCoords = routePts.map((p) => `${p.latitude},${p.longitude}`).join(',');
-    // 15 m radius – only lights essentially ON the route
-    const LIGHT_RADIUS_M = 15;
+    // Check bbox-level cache — routes in the same area share the raw Overpass data
+    const bk = bboxKey(b);
+    const cachedRoads = roadsCache.get(bk);
+    if (cachedRoads) return cachedRoads;
 
-    // Single Overpass query:
-    //   • highways inside bbox (for road overlays)
-    //   • street_lamp nodes within 15 m of the actual route path
-    const query = `
+    // If another route is already fetching this bbox, wait for it
+    const pending = pendingRoads.get(bk);
+    if (pending) return pending;
+
+    const doFetch = async (): Promise<RoadsResult> => {
+      // Build a coordinate string for the Overpass "around" filter.
+      const routePts = simplify(path, 40);
+      const aroundCoords = routePts.map((p) => `${p.latitude},${p.longitude}`).join(',');
+      const LIGHT_RADIUS_M = 15;
+
+      const query = `
 [out:json][timeout:12];
 (
   way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary|primary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
@@ -388,85 +468,98 @@ const fetchRoadsAndLights = async (
 );
 out body geom qt;
 `;
-    const params = new URLSearchParams({ data: query });
+      const params = new URLSearchParams({ data: query });
 
-    let response: any;
-    try {
-      response = await fetchWithTimeout<any>(
-        OVERPASS_BASE_URL,
-        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() },
-        15_000,
-      );
-    } catch {
-      // Fallback: smaller query, skip lights entirely
-      const fallback = `
+      let response: any;
+      try {
+        response = await serialOverpassFetch<any>(
+          OVERPASS_BASE_URL,
+          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() },
+          15_000,
+        );
+      } catch {
+        // Fallback: smaller query, skip lights entirely
+        const fallback = `
 [out:json][timeout:8];
 way["highway"~"^(residential|primary|secondary|tertiary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
 out body geom qt;
 `;
-      response = await fetchWithTimeout<any>(
-        OVERPASS_BASE_URL,
-        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ data: fallback }).toString() },
-        10_000,
-      );
-    }
+        response = await serialOverpassFetch<any>(
+          OVERPASS_BASE_URL,
+          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ data: fallback }).toString() },
+          10_000,
+        );
+      }
 
-    const overlays: RoadOverlay[] = [];
-    const lights: SafetyMarker[] = [];
-    let litCount = 0;
-    let unlitCount = 0;
+      const overlays: RoadOverlay[] = [];
+      const lights: SafetyMarker[] = [];
+      let litCount = 0;
+      let unlitCount = 0;
 
-    for (const el of (response?.elements ?? []) as any[]) {
-      // Street-lamp nodes – double-check proximity to the path
-      if (el.type === 'node' && el.tags?.highway === 'street_lamp') {
-        const coord: LatLng = { latitude: el.lat, longitude: el.lon };
-        // Only keep lights within 20 m of the actual route polyline
-        if (distanceToPath(coord, path) <= 20) {
-          if (lights.length < MAX_LIGHT_MARKERS) {
-            lights.push({
-              id: `light-${el.id}`,
-              kind: 'light',
-              coordinate: coord,
-              label: 'Street light',
+      for (const el of (response?.elements ?? []) as any[]) {
+        // Street-lamp nodes – double-check proximity to the path
+        if (el.type === 'node' && el.tags?.highway === 'street_lamp') {
+          const coord: LatLng = { latitude: el.lat, longitude: el.lon };
+          // Only keep lights within 20 m of the actual route polyline
+          if (distanceToPath(coord, path) <= 20) {
+            if (lights.length < MAX_LIGHT_MARKERS) {
+              lights.push({
+                id: `light-${el.id}`,
+                kind: 'light',
+                coordinate: coord,
+                label: 'Street light',
+              });
+            }
+          }
+          continue;
+        }
+
+        // Highway ways – only include roads that touch/overlap the selected route
+        if (el.type === 'way' && el.tags?.highway && el.geometry?.length >= 2) {
+          const highway: string = el.tags.highway;
+          const litVal: string = el.tags.lit ?? '';
+          const lit: 'yes' | 'no' | 'unknown' =
+            litVal === 'yes' || litVal === 'night' ? 'yes' :
+            litVal === 'no' || litVal === 'disused' ? 'no' : 'unknown';
+
+          const coords: LatLng[] = (el.geometry as Array<{ lat: number; lon: number }>).map(
+            (n) => ({ latitude: n.lat, longitude: n.lon }),
+          );
+
+          // Check if any point on this road is within 40 m of the route
+          const nearRoute = coords.some((c) => distanceToPath(c, path) <= 40);
+          if (!nearRoute) continue;
+
+          if (lit === 'yes') litCount++;
+          else if (lit === 'no') unlitCount++;
+
+          if (overlays.length < MAX_ROAD_OVERLAYS) {
+            overlays.push({
+              id: `road-${el.id}`,
+              coordinates: coords,
+              color: roadColor(highway, lit),
+              roadType: highway,
+              name: el.tags.name,
+              lit,
             });
           }
         }
-        continue;
       }
 
-      // Highway ways – only include roads that touch/overlap the selected route
-      if (el.type === 'way' && el.tags?.highway && el.geometry?.length >= 2) {
-        const highway: string = el.tags.highway;
-        const litVal: string = el.tags.lit ?? '';
-        const lit: 'yes' | 'no' | 'unknown' =
-          litVal === 'yes' || litVal === 'night' ? 'yes' :
-          litVal === 'no' || litVal === 'disused' ? 'no' : 'unknown';
+      return { overlays, lights, litCount, unlitCount };
+    }; // end doFetch
 
-        const coords: LatLng[] = (el.geometry as Array<{ lat: number; lon: number }>).map(
-          (n) => ({ latitude: n.lat, longitude: n.lon }),
-        );
+    // Execute with dedup — only one in-flight fetch per bbox
+    const promise = doFetch();
+    pendingRoads.set(bk, promise);
 
-        // Check if any point on this road is within 40 m of the route
-        const nearRoute = coords.some((c) => distanceToPath(c, path) <= 40);
-        if (!nearRoute) continue;
-
-        if (lit === 'yes') litCount++;
-        else if (lit === 'no') unlitCount++;
-
-        if (overlays.length < MAX_ROAD_OVERLAYS) {
-          overlays.push({
-            id: `road-${el.id}`,
-            coordinates: coords,
-            color: roadColor(highway, lit),
-            roadType: highway,
-            name: el.tags.name,
-            lit,
-          });
-        }
-      }
+    try {
+      const result = await promise;
+      roadsCache.set(bk, result);
+      return result;
+    } finally {
+      pendingRoads.delete(bk);
     }
-
-    return { overlays, lights, litCount, unlitCount };
   } catch (e) {
     console.warn('[SafetyMap] roads fetch failed', e);
     return { overlays: [], lights: [], litCount: 0, unlitCount: 0 };
@@ -529,6 +622,218 @@ const fetchOpenPlaceMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> =>
 // Main entry – fetch everything in parallel (with result cache)
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Generate safety-coloured route segments
+// ---------------------------------------------------------------------------
+
+/**
+ * Split the route path into segments, each coloured by local danger.
+ * For each chunk (~50 m) we check:
+ *   • nearby crimes (within 50 m)
+ *   • nearby street lights (within 25 m)
+ *   • road type the user is on (main road vs footpath)
+ * These produce a local 0-1 score mapped to green→amber→red.
+ */
+const generateRouteSegments = (
+  path: LatLng[],
+  crimes: SafetyMarker[],
+  lights: SafetyMarker[],
+  overlays: RoadOverlay[],
+): RouteSegment[] => {
+  if (path.length < 2) return [];
+
+  // Build simple lookup arrays once
+  const crimeCoords = crimes.map((c) => c.coordinate);
+  const lightCoords = lights.filter((l) => l.kind === 'light').map((l) => l.coordinate);
+
+  // Determine segment boundaries (~50 m chunks along path)
+  const CHUNK_M = 50;
+  const chunks: { start: number; end: number }[] = [];
+  let acc = 0;
+  let chunkStart = 0;
+  for (let i = 1; i < path.length; i++) {
+    acc += haversine(path[i - 1], path[i]);
+    if (acc >= CHUNK_M || i === path.length - 1) {
+      chunks.push({ start: chunkStart, end: i });
+      chunkStart = i;
+      acc = 0;
+    }
+  }
+  if (chunks.length === 0) {
+    chunks.push({ start: 0, end: path.length - 1 });
+  }
+
+  const segments: RouteSegment[] = [];
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const { start, end } = chunks[ci];
+    const segPath = path.slice(start, end + 1);
+    if (segPath.length < 2) continue;
+
+    // Mid-point of the chunk for proximity checks
+    const midIdx = Math.floor((start + end) / 2);
+    const mid = path[midIdx];
+
+    // Count crimes within 50 m of this chunk's midpoint
+    let nearCrimes = 0;
+    for (const c of crimeCoords) {
+      if (haversine(mid, c) <= 50) nearCrimes++;
+    }
+
+    // Count lights within 25 m of this chunk's midpoint
+    let nearLights = 0;
+    for (const l of lightCoords) {
+      if (haversine(mid, l) <= 25) nearLights++;
+    }
+
+    // Determine road type at midpoint
+    let bestOverlay: RoadOverlay | null = null;
+    let bestDist = 30;
+    for (const o of overlays) {
+      for (const c of o.coordinates) {
+        const d = haversine(mid, c);
+        if (d < bestDist) { bestDist = d; bestOverlay = o; if (d < 10) break; }
+      }
+      if (bestDist < 10) break;
+    }
+
+    const isMainRoad = bestOverlay ? MAIN_ROAD_TYPES.has(bestOverlay.roadType) : false;
+    const isPath = bestOverlay ? PATH_ROAD_TYPES.has(bestOverlay.roadType) : false;
+    const isLit = bestOverlay?.lit === 'yes';
+
+    // Compute local safety factor 0 (dangerous) → 1 (safe)
+    // Crime factor: 0 crimes → 1.0, 3+ crimes → 0.0
+    const crimeFactor = Math.max(0, 1 - nearCrimes / 3);
+    // Light factor: 0 lights → 0.2, 2+ lights → 1.0
+    const lightFactor = Math.min(1, 0.2 + nearLights * 0.4);
+    // Road factor: main road → 1.0, residential → 0.7, path → 0.2
+    const roadFactor = isMainRoad ? 1.0 : isPath ? 0.2 : 0.6;
+    // Lit bonus
+    const litBonus = isLit ? 0.15 : 0;
+
+    const local = Math.min(1, crimeFactor * 0.40 + lightFactor * 0.30 + roadFactor * 0.20 + litBonus + 0.10);
+
+    // Map local score to colour: 0 → red, 0.5 → amber, 1 → green
+    const color = localScoreToColor(local);
+
+    segments.push({ id: `seg-${ci}`, path: segPath, color });
+  }
+
+  return segments;
+};
+
+/** Map a 0-1 safety value to a smooth green→amber→red gradient. */
+const localScoreToColor = (t: number): string => {
+  // t = 0 → red, t = 0.5 → amber/yellow, t = 1 → green
+  const clamped = Math.max(0, Math.min(1, t));
+  let r: number, g: number, b: number;
+  if (clamped < 0.5) {
+    // red → amber
+    const p = clamped / 0.5;
+    r = 239;
+    g = Math.round(68 + p * (158 - 68)); // 68 → 158
+    b = Math.round(68 - p * 57);          // 68 → 11
+  } else {
+    // amber → green
+    const p = (clamped - 0.5) / 0.5;
+    r = Math.round(245 - p * 211);        // 245 → 34
+    g = Math.round(158 + p * (197 - 158)); // 158 → 197
+    b = Math.round(11 + p * (83 - 11));    // 11 → 94
+  }
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+};
+
+// ---------------------------------------------------------------------------
+// Generate road-type labels at transition points ALONG THE ROUTE ONLY
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk along the user's route path step-by-step and determine which road
+ * overlay the path is actually *on* at each sample point.  Emit a label
+ * every time the road type (or street name) changes – i.e. when the user
+ * would turn onto a different kind of road.
+ *
+ * Side roads that happen to be nearby but are NOT part of the route are
+ * ignored entirely.
+ */
+const generateRoadLabels = (overlays: RoadOverlay[], path: LatLng[]): RoadLabel[] => {
+  if (overlays.length === 0 || path.length < 2) return [];
+
+  // Pre-compute the midpoint of every overlay for fast lookup
+  const overlayMids = overlays.map((o) => ({
+    overlay: o,
+    mid: o.coordinates[Math.floor(o.coordinates.length / 2)],
+  }));
+
+  /**
+   * For a given point on the route, find the overlay whose geometry is
+   * closest.  We check every coordinate of every overlay – but we bail
+   * early once we find something within 15 m (definitely on the road).
+   * If nothing is within 30 m the point is "unmatched" (e.g. crossing a
+   * car park).
+   */
+  const matchOverlay = (pt: LatLng): RoadOverlay | null => {
+    let best: RoadOverlay | null = null;
+    let bestDist = 30; // max snap distance in metres
+    for (const { overlay } of overlayMids) {
+      for (const c of overlay.coordinates) {
+        const d = haversine(pt, c);
+        if (d < bestDist) {
+          bestDist = d;
+          best = overlay;
+          if (d < 15) return best; // close enough, skip the rest
+        }
+      }
+    }
+    return best;
+  };
+
+  // Sample the route at roughly every 80 m — enough to catch turns
+  const samplePoints: LatLng[] = [];
+  let accumulated = 0;
+  samplePoints.push(path[0]);
+  for (let i = 1; i < path.length; i++) {
+    accumulated += haversine(path[i - 1], path[i]);
+    if (accumulated >= 80) {
+      samplePoints.push(path[i]);
+      accumulated = 0;
+    }
+  }
+  if (samplePoints[samplePoints.length - 1] !== path[path.length - 1]) {
+    samplePoints.push(path[path.length - 1]);
+  }
+
+  const labels: RoadLabel[] = [];
+  let lastType = ''; // only track road TYPE, not name
+  let lastCoord: LatLng | null = null;
+
+  for (const pt of samplePoints) {
+    const matched = matchOverlay(pt);
+    if (!matched) continue;
+
+    // Only emit a label when the road TYPE changes (e.g. residential → footway)
+    if (matched.roadType === lastType) continue;
+
+    // Ensure minimum 150 m spacing between labels so they don't pile up
+    if (lastCoord && haversine(pt, lastCoord) < 150) continue;
+
+    const displayName = ROAD_TYPE_NAMES[matched.roadType] ?? matched.roadType;
+    const streetName = matched.name ?? '';
+    labels.push({
+      id: `rlabel-${labels.length}`,
+      coordinate: pt,
+      roadType: matched.roadType,
+      displayName: streetName ? `${streetName} · ${displayName}` : displayName,
+      color: matched.color,
+    });
+    lastType = matched.roadType;
+    lastCoord = pt;
+  }
+
+  return labels;
+};
+
 export type SafetyProgressCb = (msg: string, pct: number) => void;
 
 /** Cache keyed by path fingerprint so repeated calls return identical data */
@@ -546,7 +851,7 @@ export const fetchSafetyMapData = async (
   routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Unknown', safetyColor: '#94a3b8', mainRoadRatio: 0.5 };
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Unknown', safetyColor: '#94a3b8', mainRoadRatio: 0.5 };
   }
 
   // Return cached result if we already analysed this exact route
@@ -569,15 +874,43 @@ export const fetchSafetyMapData = async (
 
   const markers = [...crimes, ...roadsData.lights, ...shops];
 
-  // Compute main-road ratio from the road overlays
-  let mainRoadCount = 0;
-  let pathCount = 0;
-  for (const overlay of roadsData.overlays) {
-    if (MAIN_ROAD_TYPES.has(overlay.roadType)) mainRoadCount++;
-    else if (PATH_ROAD_TYPES.has(overlay.roadType)) pathCount++;
+  // --- Generate safety-coloured route segments ---
+  const routeSegments = generateRouteSegments(path, crimes, roadsData.lights, roadsData.overlays);
+
+  // --- Generate road-type labels where the street type changes ---
+  const roadLabels = generateRoadLabels(roadsData.overlays, path);
+
+  // Compute main-road ratio by WALKING THE ACTUAL ROUTE and checking
+  // what road type each sample point is on. This ensures a route on
+  // main roads gets a high ratio even when the bbox contains footpaths nearby.
+  let mainSamples = 0;
+  let pathSamples = 0;
+  let totalSamples = 0;
+  {
+    const SAMPLE_M = 50;
+    let acc = 0;
+    const samplePts: LatLng[] = [path[0]];
+    for (let i = 1; i < path.length; i++) {
+      acc += haversine(path[i - 1], path[i]);
+      if (acc >= SAMPLE_M) { samplePts.push(path[i]); acc = 0; }
+    }
+    for (const pt of samplePts) {
+      let bestOverlay: RoadOverlay | null = null;
+      let bestDist = 30;
+      for (const o of roadsData.overlays) {
+        for (const c of o.coordinates) {
+          const d = haversine(pt, c);
+          if (d < bestDist) { bestDist = d; bestOverlay = o; if (d < 10) break; }
+        }
+        if (bestDist < 10) break;
+      }
+      if (!bestOverlay) continue;
+      totalSamples++;
+      if (MAIN_ROAD_TYPES.has(bestOverlay.roadType)) mainSamples++;
+      else if (PATH_ROAD_TYPES.has(bestOverlay.roadType)) pathSamples++;
+    }
   }
-  const totalTyped = mainRoadCount + pathCount;
-  const mainRoadRatio = totalTyped > 0 ? mainRoadCount / totalTyped : 0.5;
+  const mainRoadRatio = totalSamples > 0 ? mainSamples / totalSamples : 0.5;
 
   const distKm = (routeDistanceMeters ?? 1000) / 1000;
   const { score, label, color } = computeSafetyScore(
@@ -593,6 +926,8 @@ export const fetchSafetyMapData = async (
   const result: SafetyMapResult = {
     markers,
     roadOverlays: roadsData.overlays,
+    roadLabels,
+    routeSegments,
     crimeCount: crimes.length,
     streetLights: roadsData.lights.length,
     litRoads: roadsData.litCount,

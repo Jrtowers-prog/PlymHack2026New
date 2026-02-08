@@ -150,22 +150,40 @@ export const fetchPlaceDetails = async (placeId: string): Promise<PlaceDetails> 
 // ---------------------------------------------------------------------------
 
 /** Small perpendicular nudges so extra API calls explore nearby parallel streets.
- *  Kept small (10 %) so routes stay close to the direct path. */
-const generateOffsetWaypoints = (origin: LatLng, dest: LatLng): LatLng[] => {
+ *  `scalePct` controls how far to push (0.05 = 5 %, 0.20 = 20 %). */
+const generateOffsetWaypoints = (
+  origin: LatLng,
+  dest: LatLng,
+  scalePct: number,
+): LatLng[] => {
   const midLat = (origin.latitude + dest.latitude) / 2;
   const midLng = (origin.longitude + dest.longitude) / 2;
   const dLat = dest.latitude - origin.latitude;
   const dLng = dest.longitude - origin.longitude;
   const len = Math.sqrt(dLat * dLat + dLng * dLng);
   if (len < 0.0001) return [];
-  // 10 % offset — enough to find a parallel main road, not enough for a detour
-  const scale = len * 0.10;
+  const scale = len * scalePct;
   const pLat = (-dLng / len) * scale;
   const pLng = (dLat / len) * scale;
   return [
     { latitude: midLat + pLat, longitude: midLng + pLng },
     { latitude: midLat - pLat, longitude: midLng - pLng },
   ];
+};
+
+/** Estimate how "path-heavy" a set of routes is from their summaries.
+ *  Returns 0 (all main roads) to 1 (all paths). */
+const pathHeaviness = (routes: DirectionsRoute[]): number => {
+  if (routes.length === 0) return 0;
+  let pathHits = 0;
+  let mainHits = 0;
+  for (const r of routes) {
+    const s = r.summary ?? '';
+    if (/\b(path|trail|footpath|footway|alley|steps|track)\b/i.test(s)) pathHits++;
+    if (/\b[ABM]\d|\b(road|street|ave|avenue|boulevard|drive)\b/i.test(s)) mainHits++;
+  }
+  const total = pathHits + mainHits;
+  return total > 0 ? pathHits / total : 0.5;
 };
 
 /** Drop routes whose distance AND duration are within 5 %/8 % of an already-kept route */
@@ -236,8 +254,11 @@ export const fetchDirections = async (
   }
   const baseRoutes = parseDirectionsResponse(baseData, 0);
 
-  // 2. Extra requests with offset waypoints for more diversity
-  const offsets = generateOffsetWaypoints(origin, destination);
+  // 2. Decide offset size: if base routes are path-heavy, push harder
+  //    5 % (mostly main roads) → 18 % (mostly paths), capped so we don't detour
+  const heaviness = pathHeaviness(baseRoutes);
+  const offsetPct = 0.05 + heaviness * 0.13; // 0.05–0.18
+  const offsets = generateOffsetWaypoints(origin, destination, offsetPct);
   const extras = await Promise.all(
     offsets.map((wp, i) =>
       fetchJson<GoogleDirectionsResponse>(

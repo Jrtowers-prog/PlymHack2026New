@@ -27,7 +27,8 @@ export const RouteMap = ({
   routes,
   selectedRouteId,
   safetyMarkers = [],
-  roadOverlays = [],
+  routeSegments = [],
+  roadLabels = [],
   onSelectRoute,
   onLongPress,
 }: RouteMapProps) => {
@@ -88,34 +89,43 @@ export const RouteMap = ({
         {origin ? <Marker coordinate={origin} title="Your location" pinColor={ROUTE_COLOR} /> : null}
         {destination ? <Marker coordinate={destination} title="Destination" pinColor="#d92d20" /> : null}
 
-        {/* Road overlays – coloured by road type / lighting */}
-        {roadOverlays.map((overlay) =>
-          overlay.coordinates.length >= 2 ? (
-            <Polyline
-              key={overlay.id}
-              coordinates={overlay.coordinates}
-              strokeColor={overlay.color}
-              strokeWidth={4}
-              lineDashPhase={0}
-            />
-          ) : null,
-        )}
-
-        {/* Route polylines – blue */}
-        {routes.map((route) => {
-          const isSelected = route.id === selectedRouteId;
-          return (
+        {/* Route polylines – unselected routes grey */}
+        {routes
+          .filter((r) => r.id !== selectedRouteId)
+          .map((route) => (
             <Polyline
               key={route.id}
               coordinates={route.path}
-              strokeColor={isSelected ? ROUTE_COLOR : ROUTE_COLOR_ALT}
-              strokeWidth={isSelected ? 5 : 3}
+              strokeColor={ROUTE_COLOR_ALT}
+              strokeWidth={3}
               tappable
               onPress={() => onSelectRoute?.(route.id)}
-              zIndex={isSelected ? 10 : 1}
+              zIndex={1}
             />
-          );
-        })}
+          ))}
+
+        {/* Selected route – safety-coloured segments */}
+        {routeSegments.length > 0
+          ? routeSegments.map((seg) => (
+              <Polyline
+                key={seg.id}
+                coordinates={seg.path}
+                strokeColor={seg.color}
+                strokeWidth={6}
+                zIndex={10}
+              />
+            ))
+          : routes
+              .filter((r) => r.id === selectedRouteId)
+              .map((route) => (
+                <Polyline
+                  key={route.id}
+                  coordinates={route.path}
+                  strokeColor={ROUTE_COLOR}
+                  strokeWidth={5}
+                  zIndex={10}
+                />
+              ))}
 
         {/* Safety markers – small circles */}
         {safetyMarkers.map((m) => (
@@ -128,6 +138,26 @@ export const RouteMap = ({
             strokeWidth={1}
             zIndex={20}
           />
+        ))}
+
+        {/* Road-type labels at street transitions */}
+        {roadLabels.map((label) => (
+          <Marker
+            key={label.id}
+            coordinate={label.coordinate}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            zIndex={30}
+          >
+            <View style={[
+              styles.roadLabel,
+              { backgroundColor: label.color },
+            ]}>
+              <Text style={styles.roadLabelText} numberOfLines={1}>
+                {label.displayName}
+              </Text>
+            </View>
+          </Marker>
         ))}
       </MapView>
       {showOsTiles ? (
@@ -151,6 +181,18 @@ const styles = StyleSheet.create({
     borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.9)',
   },
   attributionText: { fontSize: 10, color: '#475467' },
+  roadLabel: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    maxWidth: 130,
+  },
+  roadLabelText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
 });
 
 export default RouteMap;

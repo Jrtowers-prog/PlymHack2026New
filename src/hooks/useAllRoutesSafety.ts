@@ -141,7 +141,10 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
     };
   }, [routes.map((r) => r.id).join(',')]); // re-run when the set of routes changes
 
-  // Derive best route whenever scores update
+  // Derive best route whenever scores update.
+  // When scores are within 10 points, prefer routes that stay on main roads
+  // and are shorter (less time exposed). This means a 71-score route on
+  // main roads beats a 77-score route on side streets.
   useEffect(() => {
     const all = Object.values(scores) as RouteScore[];
     const done = all.filter((s) => s.status === 'done');
@@ -149,9 +152,32 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
       setBestRouteId(null);
       return;
     }
-    const best = done.reduce((a, b) => (b.score > a.score ? b : a));
+
+    // Build a lookup for route distance
+    const distMap = new Map<string, number>();
+    for (const r of routes) distMap.set(r.id, r.distanceMeters ?? 0);
+
+    /**
+     * Composite rank: raw score + up to 8 bonus points for main-road usage
+     *                 + up to 4 bonus points for being shorter.
+     * This means a route that's 100% on main roads and shorter can earn
+     * up to 12 bonus points — enough to overtake a side-street route
+     * that scored ~10 points higher raw.
+     */
+    const effectiveScore = (s: RouteScore): number => {
+      const mainRoadBonus = s.mainRoadRatio * 8;  // 0-8
+      const dist = distMap.get(s.routeId) ?? 0;
+      const shortestDist = Math.min(...done.map((d) => distMap.get(d.routeId) ?? Infinity));
+      const distRatio = shortestDist > 0 && dist > 0 ? shortestDist / dist : 1;
+      const distBonus = distRatio * 4; // shorter route → closer to 4
+      return s.score + mainRoadBonus + distBonus;
+    };
+
+    const best = done.reduce((a, b) =>
+      effectiveScore(b) > effectiveScore(a) ? b : a,
+    );
     setBestRouteId(best.routeId);
-  }, [scores]);
+  }, [scores, routes]);
 
   return { scores, bestRouteId, loading };
 };
