@@ -1,10 +1,11 @@
 {
   "expo": {
-    "name": "PlymHack2026New",
+    "name": "Safe Night Home",
     "slug": "PlymHack2026New",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "plymhack2026new",
+    "icon": "./assets/images/logo.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -29,13 +30,15 @@
       "package": "com.anonymous.PlymHack2026New"
     },
     "web": {
-      "output": "static"
+      "output": "static",
+      "favicon": "./assets/images/logo.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
+          "image": "./assets/images/logo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",

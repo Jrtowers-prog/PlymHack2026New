@@ -2,7 +2,7 @@
  * openai.ts
  *
  * Lightweight OpenAI chat-completion wrapper.
- * Sends route safety insights and gets a plain-English explanation
+ * Sends ALL route safety data and gets a ≤150-word explanation
  * of why the safest route was chosen.
  */
 
@@ -10,20 +10,31 @@ import { env } from '@/src/config/env';
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
 
-export interface AIExplanationInput {
-  /** The safety result for the selected (safest) route */
-  safetyResult: SafetyMapResult;
-  /** All route scores so the AI can compare */
-  allScores: RouteScore[];
-  /** Distance of the safest route in metres */
+/** Per-route info bundle passed to the AI */
+export interface RouteInfo {
+  routeId: string;
   distanceMeters: number;
-  /** Duration of the safest route in seconds */
   durationSeconds: number;
+  summary?: string;
+  score: RouteScore | undefined;
 }
 
+export interface AIExplanationInput {
+  /** Full safety analysis of the recommended (safest) route */
+  safetyResult: SafetyMapResult;
+  /** Every route with distance, duration, summary & score */
+  routes: RouteInfo[];
+  /** Which route id is the recommended safest one */
+  bestRouteId: string;
+}
+
+const fmtDist = (m: number) =>
+  m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+const fmtTime = (s: number) => `${Math.max(1, Math.round(s / 60))} min`;
+
 /**
- * Ask OpenAI for a two-paragraph explanation of why the safest route
- * was recommended, based on the safety data we collected.
+ * Ask OpenAI for a concise (≤150 word) explanation of why the
+ * safest route is safer than the alternatives.
  */
 export const fetchAIExplanation = async (input: AIExplanationInput): Promise<string> => {
   const apiKey = env.openaiApiKey;
@@ -31,36 +42,37 @@ export const fetchAIExplanation = async (input: AIExplanationInput): Promise<str
     throw new Error('Missing EXPO_PUBLIC_OPENAI_API_KEY. Set it in your .env file.');
   }
 
-  const { safetyResult, allScores, distanceMeters, durationSeconds } = input;
+  const { safetyResult, routes, bestRouteId } = input;
 
-  const sortedScores = [...allScores]
-    .filter((s) => s.status === 'done')
-    .sort((a, b) => b.score - a.score);
+  // Build a block for every route so the AI can compare all of them
+  const routeBlocks = routes.map((r, i) => {
+    const isBest = r.routeId === bestRouteId;
+    const tag = isBest ? ' ← RECOMMENDED' : '';
+    const s = r.score;
+    return [
+      `Route ${i + 1}${tag}:`,
+      `  Distance: ${fmtDist(r.distanceMeters)}, Walking time: ${fmtTime(r.durationSeconds)}`,
+      s?.status === 'done'
+        ? `  Safety score: ${s.score}/100 (${s.label}), Pathfinding score: ${s.pathfindingScore}, Main-road ratio: ${(s.mainRoadRatio * 100).toFixed(0)}%`
+        : '  Safety score: not available',
+      r.summary ? `  Summary: ${r.summary}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
 
-  const routeSummaries = sortedScores
-    .map(
-      (s, i) =>
-        `Route ${i + 1}: safety score ${s.score}/100 (${s.label}), ` +
-        `pathfinding score ${s.pathfindingScore}, main road ratio ${(s.mainRoadRatio * 100).toFixed(0)}%`,
-    )
-    .join('\n');
+  const prompt = `You are a concise walking-safety assistant. We analysed ${routes.length} walking routes. Based ONLY on the data below, explain in 1–2 short paragraphs (max 150 words total) why the recommended route is the safest choice compared to the others. Reference specific numbers. Do NOT give general safety tips.
 
-  const prompt = `You are a walking-safety assistant. The user asked for walking directions and we analysed multiple routes. Based on the data below, write exactly two short paragraphs explaining why the recommended (safest) route is the best choice. Be concise, friendly, and reference specific numbers.
-
-SAFEST ROUTE DATA:
+RECOMMENDED ROUTE DETAILED DATA:
 - Safety score: ${safetyResult.safetyScore}/100 (${safetyResult.safetyLabel})
 - Crime reports nearby: ${safetyResult.crimeCount}
-- Street lights along route: ${safetyResult.streetLights}
+- Street lights: ${safetyResult.streetLights}
 - Lit roads: ${safetyResult.litRoads}, Unlit roads: ${safetyResult.unlitRoads}
-- Open places (shops/cafes): ${safetyResult.openPlaces}
-- Main road ratio: ${(safetyResult.mainRoadRatio * 100).toFixed(0)}%
-- Distance: ${(distanceMeters / 1000).toFixed(1)} km
-- Walking time: ${Math.max(1, Math.round(durationSeconds / 60))} min
+- Open places (shops/cafés): ${safetyResult.openPlaces}
+- Main-road ratio: ${(safetyResult.mainRoadRatio * 100).toFixed(0)}%
 
-ALL ROUTES COMPARED:
-${routeSummaries}
+ALL ${routes.length} ROUTES:
+${routeBlocks}
 
-Write two short paragraphs. First paragraph: why this route is safest. Second paragraph: practical tips for the walk.`;
+Respond with 1–2 paragraphs, max 150 words. Explain why the recommended route is safer.`;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -71,8 +83,8 @@ Write two short paragraphs. First paragraph: why this route is safest. Second pa
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 300,
-      temperature: 0.7,
+      max_tokens: 200,
+      temperature: 0.6,
     }),
   });
 

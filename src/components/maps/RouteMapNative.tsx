@@ -82,6 +82,8 @@ export const RouteMap = ({
         provider={useCustomTiles ? undefined : PROVIDER_GOOGLE}
         mapType={useCustomTiles ? 'none' : 'standard'}
         initialRegion={region}
+        minZoomLevel={10}
+        maxZoomLevel={18}
         onLongPress={(event) => onLongPress?.(event.nativeEvent.coordinate)}
         onPress={(event) => onMapPress?.(event.nativeEvent.coordinate)}
       >

@@ -75,6 +75,7 @@ export const RouteMap = ({
   }, [panTo, googleMaps]);
 
   // Navigation mode: follow user location + show heading marker
+  const wasNavigatingRef = useRef(false);
   const navMarkerRef = useRef<GoogleMarkerInstance | null>(null);
   useEffect(() => {
     if (!googleMaps || !mapRef.current) return;
@@ -86,7 +87,17 @@ export const RouteMap = ({
       navMarkerRef.current = null;
     }
 
-    if (!isNavigating || !navigationLocation) return;
+    if (!isNavigating || !navigationLocation) {
+      // Reset camera when navigation ends
+      if (wasNavigatingRef.current) {
+        wasNavigatingRef.current = false;
+        (map as any).setTilt?.(0);
+        (map as any).setHeading?.(0);
+      }
+      return;
+    }
+
+    wasNavigatingRef.current = true;
 
     // Create a directional arrow marker for the user
     const heading = navigationHeading ?? 0;
@@ -107,9 +118,11 @@ export const RouteMap = ({
       clickable: false,
     });
 
-    // Smoothly follow user
+    // Navigation camera: 3D tilt, heading rotation, close zoom
     map.panTo(new googleMaps.maps.LatLng(navigationLocation.latitude, navigationLocation.longitude));
-    if ((map.getZoom?.() ?? 10) < 17) map.setZoom(17);
+    (map as any).setTilt?.(45);
+    (map as any).setHeading?.(heading);
+    if ((map.getZoom?.() ?? 10) < 18) map.setZoom(18);
 
     return () => {
       if (navMarkerRef.current) {
@@ -156,8 +169,8 @@ export const RouteMap = ({
     const bounds = new googleMaps.maps.LatLngBounds();
     let hasBounds = false;
 
-    // Origin marker – Google-style blue dot
-    if (origin) {
+    // Origin marker – Google-style blue dot (hidden during navigation — arrow replaces it)
+    if (origin && !isNavigating) {
       const pos = new googleMaps.maps.LatLng(origin.latitude, origin.longitude);
       const blueDotSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
         <circle cx="12" cy="12" r="11" fill="#4285F4" opacity="0.25"/>
@@ -210,33 +223,106 @@ export const RouteMap = ({
     }
 
     // Selected route: safety-coloured segments (or fallback blue)
+    // During navigation, split into traveled (black) + remaining (colored)
     const selRoute = routes.find((r) => r.id === selectedRouteId);
     if (selRoute) {
-      if (routeSegments.length > 0) {
-        for (const seg of routeSegments) {
-          const segPath = seg.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
+      const isNav = isNavigating && navigationLocation;
+
+      // Find nearest path index to navigation location
+      const findNearestIdx = (path: { latitude: number; longitude: number }[], pt: { latitude: number; longitude: number }) => {
+        let best = 0, bestD = Infinity;
+        for (let i = 0; i < path.length; i++) {
+          const dlat = path[i].latitude - pt.latitude;
+          const dlng = path[i].longitude - pt.longitude;
+          const d = dlat * dlat + dlng * dlng;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+      };
+
+      if (isNav && selRoute.path.length > 1) {
+        const splitIdx = findNearestIdx(selRoute.path, navigationLocation!);
+
+        // ── Traveled portion → black ──
+        if (splitIdx > 0) {
+          const traveledCoords = selRoute.path.slice(0, splitIdx + 1).map((p) =>
+            new googleMaps.maps.LatLng(p.latitude, p.longitude)
+          );
+          traveledCoords.push(new googleMaps.maps.LatLng(navigationLocation!.latitude, navigationLocation!.longitude));
+          polylinesRef.current.push(new googleMaps.maps.Polyline({
+            path: traveledCoords,
+            strokeColor: '#1D2939',
+            strokeOpacity: 0.7,
+            strokeWeight: 7,
+            map,
+            clickable: false,
+          }));
+        }
+
+        // ── Remaining portion → safety colors or blue ──
+        if (routeSegments.length > 0) {
+          for (const seg of routeSegments) {
+            const filteredPath: any[] = [];
+            let started = false;
+            for (const sp of seg.path) {
+              if (!started) {
+                const spIdx = findNearestIdx(selRoute.path, sp);
+                if (spIdx >= splitIdx) started = true;
+              }
+              if (started) filteredPath.push(new googleMaps.maps.LatLng(sp.latitude, sp.longitude));
+            }
+            if (filteredPath.length >= 2) {
+              polylinesRef.current.push(new googleMaps.maps.Polyline({
+                path: filteredPath,
+                strokeColor: seg.color,
+                strokeOpacity: 0.9,
+                strokeWeight: 6,
+                map,
+                clickable: false,
+              }));
+            }
+          }
+        } else {
+          const remCoords = [new googleMaps.maps.LatLng(navigationLocation!.latitude, navigationLocation!.longitude)];
+          for (let i = splitIdx; i < selRoute.path.length; i++) {
+            remCoords.push(new googleMaps.maps.LatLng(selRoute.path[i].latitude, selRoute.path[i].longitude));
+          }
+          polylinesRef.current.push(new googleMaps.maps.Polyline({
+            path: remCoords,
+            strokeColor: ROUTE_COLOR,
+            strokeOpacity: 0.85,
+            strokeWeight: 5,
+            map,
+            clickable: false,
+          }));
+        }
+      } else {
+        // Not navigating — normal rendering
+        if (routeSegments.length > 0) {
+          for (const seg of routeSegments) {
+            const segPath = seg.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
+            const polyline = new googleMaps.maps.Polyline({
+              path: segPath,
+              strokeColor: seg.color,
+              strokeOpacity: 0.9,
+              strokeWeight: 6,
+              map,
+              clickable: false,
+            });
+            polylinesRef.current.push(polyline);
+          }
+        } else {
+          const path = selRoute.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
           const polyline = new googleMaps.maps.Polyline({
-            path: segPath,
-            strokeColor: seg.color,
-            strokeOpacity: 0.9,
-            strokeWeight: 6,
+            path,
+            strokeColor: ROUTE_COLOR,
+            strokeOpacity: 0.85,
+            strokeWeight: 5,
             map,
             clickable: false,
           });
           polylinesRef.current.push(polyline);
         }
-      } else {
-        // No segments yet (still loading) – draw a solid blue line
-        const path = selRoute.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
-        const polyline = new googleMaps.maps.Polyline({
-          path,
-          strokeColor: ROUTE_COLOR,
-          strokeOpacity: 0.85,
-          strokeWeight: 5,
-          map,
-          clickable: false,
-        });
-        polylinesRef.current.push(polyline);
       }
       selRoute.path.forEach((p) => bounds.extend(new googleMaps.maps.LatLng(p.latitude, p.longitude)));
       hasBounds = true;
@@ -298,7 +384,7 @@ export const RouteMap = ({
       routesKey !== prevRoutesKeyRef.current ||
       selectedKey !== prevSelectedRef.current;
 
-    if (geographyChanged) {
+    if (geographyChanged && !isNavigating) {
       prevOriginRef.current = originKey;
       prevDestRef.current = destKey;
       prevRoutesKeyRef.current = routesKey;
@@ -353,6 +439,8 @@ export const RouteMap = ({
     onSelectRoute,
     onLongPress,
     onMapPress,
+    isNavigating,
+    navigationLocation,
   ]);
 
   return (
