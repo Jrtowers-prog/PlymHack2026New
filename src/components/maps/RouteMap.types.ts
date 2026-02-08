@@ -9,6 +9,8 @@ export type RouteMapProps = {
   safetyMarkers?: SafetyMarker[];
   routeSegments?: RouteSegment[];
   roadLabels?: RoadLabel[];
+  /** When set, the map smoothly pans to this location. Bump the key to re-trigger. */
+  panTo?: { location: LatLng; key: number } | null;
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;

@@ -30,6 +30,7 @@ export const RouteMap = ({
   safetyMarkers = [],
   routeSegments = [],
   roadLabels = [],
+  panTo,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -58,6 +59,17 @@ export const RouteMap = ({
       .catch(() => { if (active) setHasError(true); });
     return () => { active = false; };
   }, []);
+
+  // Smooth-pan to a location when panTo prop changes
+  const prevPanKeyRef = useRef<number>(-1);
+  useEffect(() => {
+    if (!panTo || !googleMaps || !mapRef.current) return;
+    if (panTo.key === prevPanKeyRef.current) return;
+    prevPanKeyRef.current = panTo.key;
+    const map = mapRef.current;
+    map.panTo(new googleMaps.maps.LatLng(panTo.location.latitude, panTo.location.longitude));
+    if ((map.getZoom?.() ?? 10) < 14) map.setZoom(14);
+  }, [panTo, googleMaps]);
 
   // Render map contents
   useEffect(() => {
@@ -201,21 +213,24 @@ export const RouteMap = ({
       markersRef.current.push(marker);
     }
 
-    // --- Road-type labels (text markers at road transitions) ---
+    // --- Road-type labels (small pill tags) ---
     for (const label of roadLabels) {
       const pos = new googleMaps.maps.LatLng(label.coordinate.latitude, label.coordinate.longitude);
-      // Create a small label using a custom SVG marker
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="26">
-        <rect rx="6" ry="6" width="120" height="26" fill="${label.color}" opacity="0.85"/>
-        <text x="60" y="17" text-anchor="middle" fill="white" font-size="11" font-weight="bold" font-family="sans-serif">${label.displayName.slice(0, 18)}</text>
+      const text = label.displayName.slice(0, 12);
+      // Measure approximate width: ~6.5px per char + 16px padding
+      const w = Math.round(text.length * 6.5 + 16);
+      const h = 18;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
+        <rect rx="${h / 2}" ry="${h / 2}" width="${w}" height="${h}" fill="${label.color}" opacity="0.8"/>
+        <text x="${w / 2}" y="12.5" text-anchor="middle" fill="white" font-size="9" font-weight="600" font-family="-apple-system,BlinkMacSystemFont,sans-serif" letter-spacing="0.3">${text}</text>
       </svg>`;
       const marker = new googleMaps.maps.Marker({
         position: pos,
         map,
         icon: {
           url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-          scaledSize: new googleMaps.maps.Size(120, 26),
-          anchor: new googleMaps.maps.Point(60, 13),
+          scaledSize: new googleMaps.maps.Size(w, h),
+          anchor: new googleMaps.maps.Point(w / 2, h / 2),
         } as unknown as string,
         clickable: false,
         zIndex: 30,

@@ -9,6 +9,8 @@ export interface RouteScore {
   label: string;
   color: string;
   mainRoadRatio: number;
+  /** 0-1 — how much real data the score is based on. Below ~0.3 is unreliable. */
+  dataConfidence: number;
   status: 'pending' | 'done' | 'error';
 }
 
@@ -25,7 +27,7 @@ export interface UseAllRoutesSafetyState {
 // Module-level cache so scores survive re-renders & re-mounts.
 // Key = first 6 coords of the path (fingerprint), value = score result.
 // ---------------------------------------------------------------------------
-const scoreCache = new Map<string, { score: number; label: string; color: string; mainRoadRatio: number }>();
+const scoreCache = new Map<string, { score: number; label: string; color: string; mainRoadRatio: number; dataConfidence: number }>();
 
 /** Cheap fingerprint: first + last coord + distance – unique enough per route */
 const routeFingerprint = (route: DirectionsRoute): string => {
@@ -73,6 +75,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
           label: cached.label,
           color: cached.color,
           mainRoadRatio: cached.mainRoadRatio,
+          dataConfidence: cached.dataConfidence,
           status: 'done',
         };
       } else {
@@ -82,6 +85,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
           label: '',
           color: '#94a3b8',
           mainRoadRatio: 0,
+          dataConfidence: 0,
           status: 'pending',
         };
         uncached.push(r);
@@ -109,6 +113,7 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
           label: data.safetyLabel,
           color: data.safetyColor,
           mainRoadRatio: data.mainRoadRatio,
+          dataConfidence: data.dataConfidence,
         };
 
         // Persist in cache
@@ -142,9 +147,8 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
   }, [routes.map((r) => r.id).join(',')]); // re-run when the set of routes changes
 
   // Derive best route whenever scores update.
-  // When scores are within 10 points, prefer routes that stay on main roads
-  // and are shorter (less time exposed). This means a 71-score route on
-  // main roads beats a 77-score route on side streets.
+  // If most routes lack data (confidence < 0.3), don't pretend we know
+  // which is safest — just pick the shortest/fastest route instead.
   useEffect(() => {
     const all = Object.values(scores) as RouteScore[];
     const done = all.filter((s) => s.status === 'done');
@@ -157,14 +161,28 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
     const distMap = new Map<string, number>();
     for (const r of routes) distMap.set(r.id, r.distanceMeters ?? 0);
 
+    // Check if we have enough data to make safety-based decisions.
+    // If the majority of scored routes have low confidence, fall back
+    // to the shortest route (fastest walking time).
+    const confident = done.filter((s) => s.dataConfidence >= 0.3);
+    if (confident.length === 0) {
+      // Not enough data on ANY route → pick shortest
+      const shortest = routes.reduce((a, b) =>
+        (a.distanceMeters ?? Infinity) <= (b.distanceMeters ?? Infinity) ? a : b,
+      );
+      setBestRouteId(shortest.id);
+      return;
+    }
+
     /**
      * Composite rank: raw score + up to 8 bonus points for main-road usage
      *                 + up to 4 bonus points for being shorter.
-     * This means a route that's 100% on main roads and shorter can earn
-     * up to 12 bonus points — enough to overtake a side-street route
-     * that scored ~10 points higher raw.
+     * Routes with low data-confidence are penalised so they don't win
+     * over routes we actually have data for.
      */
     const effectiveScore = (s: RouteScore): number => {
+      // If this route specifically lacks data, heavily penalise it
+      if (s.dataConfidence < 0.3) return -1;
       const mainRoadBonus = s.mainRoadRatio * 8;  // 0-8
       const dist = distMap.get(s.routeId) ?? 0;
       const shortestDist = Math.min(...done.map((d) => distMap.get(d.routeId) ?? Infinity));
