@@ -11,6 +11,19 @@ export type GoogleLatLngBounds = {
   extend: (latLng: GoogleLatLng) => void;
 };
 
+export type GoogleSize = {
+  width: number;
+  height: number;
+};
+
+export type GoogleMapType = {
+  name?: string;
+};
+
+export type GoogleMapTypes = {
+  set: (id: string, mapType: GoogleMapType) => void;
+};
+
 export type GoogleMapOptions = {
   center: GoogleLatLng;
   zoom: number;
@@ -23,6 +36,9 @@ export type GoogleMapInstance = {
   setCenter: (latLng: GoogleLatLng) => void;
   setZoom: (zoom: number) => void;
   fitBounds: (bounds: GoogleLatLngBounds) => void;
+  getCenter?: () => GoogleLatLng;
+  setMapTypeId?: (mapTypeId: string) => void;
+  mapTypes?: GoogleMapTypes;
 };
 
 export type GoogleMarkerOptions = {
@@ -131,6 +147,13 @@ export type GoogleMapsApi = {
     Polyline: new (options: GooglePolylineOptions) => GooglePolylineInstance;
     LatLng: new (lat: number, lng: number) => GoogleLatLng;
     LatLngBounds: new () => GoogleLatLngBounds;
+    ImageMapType: new (options: {
+      getTileUrl: (coord: { x: number; y: number }, zoom: number) => string | null;
+      tileSize: GoogleSize;
+      maxZoom?: number;
+      name?: string;
+    }) => GoogleMapType;
+    Size: new (width: number, height: number) => GoogleSize;
     TravelMode: {
       WALKING: string;
     };
@@ -150,7 +173,7 @@ export type GoogleMapsApi = {
       addListener: (
         instance: object,
         eventName: string,
-        handler: () => void
+        handler: (...args: unknown[]) => void
       ) => GoogleMapsEventListener;
     };
   };
