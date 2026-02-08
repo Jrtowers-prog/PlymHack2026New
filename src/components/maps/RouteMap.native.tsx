@@ -5,8 +5,7 @@ import MapView, {
   Marker,
   Polyline,
   PROVIDER_GOOGLE,
-  type Region,
-  UrlTile,
+  UrlTile
 } from 'react-native-maps';
 
 import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
@@ -40,8 +39,8 @@ export const RouteMap = ({
     return {
       latitude: center.latitude,
       longitude: center.longitude,
-      latitudeDelta: 0.05,
-      longitudeDelta: 0.05,
+      latitudeDelta: 0.1,
+      longitudeDelta: 0.1,
     };
   }, [origin]);
 
@@ -64,15 +63,16 @@ export const RouteMap = ({
       return;
     }
 
-    if (origin) {
-      const nextRegion: Region = {
-        ...region,
-        latitude: origin.latitude,
-        longitude: origin.longitude,
-      };
-      mapRef.current.animateToRegion(nextRegion, 500);
+    // Only re-center (city-level) when origin changes — don't zoom in tight
+    if (origin && destination) {
+      // Both set but no routes yet — fit to both markers at city level
+      mapRef.current.fitToCoordinates(
+        [origin, destination],
+        { edgePadding: { top: 80, bottom: 80, left: 80, right: 80 }, animated: true },
+      );
     }
-  }, [origin, region, routes, selectedRouteId]);
+    // origin-only: let initialRegion handle it (city-level zoom)
+  }, [origin, destination, routes, selectedRouteId]);
 
   return (
     <View style={styles.container}>
