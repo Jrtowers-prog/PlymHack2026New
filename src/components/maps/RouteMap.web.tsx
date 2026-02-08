@@ -89,10 +89,25 @@ export const RouteMap = ({
     const bounds = new googleMaps.maps.LatLngBounds();
     let hasBounds = false;
 
-    // Origin marker
+    // Origin marker – Google-style blue dot
     if (origin) {
       const pos = new googleMaps.maps.LatLng(origin.latitude, origin.longitude);
-      markersRef.current.push(new googleMaps.maps.Marker({ position: pos, map, title: 'Your location' }));
+      const blueDotSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+        <circle cx="12" cy="12" r="11" fill="#4285F4" opacity="0.25"/>
+        <circle cx="12" cy="12" r="7" fill="#4285F4"/>
+        <circle cx="12" cy="12" r="3.5" fill="#ffffff"/>
+      </svg>`;
+      markersRef.current.push(new googleMaps.maps.Marker({
+        position: pos,
+        map,
+        title: 'Your location',
+        icon: {
+          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(blueDotSvg),
+          scaledSize: new googleMaps.maps.Size(24, 24),
+          anchor: new googleMaps.maps.Point(12, 12),
+        } as unknown as string,
+        zIndex: 50,
+      }));
       bounds.extend(pos);
       hasBounds = true;
     }
