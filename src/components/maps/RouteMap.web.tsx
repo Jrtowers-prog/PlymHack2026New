@@ -32,6 +32,7 @@ export const RouteMap = ({
   roadLabels = [],
   onSelectRoute,
   onLongPress,
+  onMapPress,
 }: RouteMapProps) => {
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
@@ -218,6 +219,16 @@ export const RouteMap = ({
       });
       listenersRef.current.push(listener);
     }
+
+    // Single click / tap
+    if (onMapPress) {
+      const listener = googleMaps.maps.event.addListener(map, 'click', (event) => {
+        const target = (event as { latLng?: { lat: () => number; lng: () => number } })?.latLng;
+        if (!target) return;
+        onMapPress({ latitude: target.lat(), longitude: target.lng() });
+      });
+      listenersRef.current.push(listener);
+    }
   }, [
     googleMaps,
     origin,
@@ -229,6 +240,7 @@ export const RouteMap = ({
     roadLabels,
     onSelectRoute,
     onLongPress,
+    onMapPress,
   ]);
 
   return (

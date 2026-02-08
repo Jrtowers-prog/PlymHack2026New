@@ -11,4 +11,5 @@ export type RouteMapProps = {
   roadLabels?: RoadLabel[];
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
+  onMapPress?: (location: LatLng) => void;
 };
