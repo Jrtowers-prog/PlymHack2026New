@@ -47,6 +47,7 @@ export interface RouteSegment {
   id: string;
   path: LatLng[];
   color: string; // hex – green (safe) → red (dangerous)
+  score: number; // 0 (dangerous) → 1 (safe)
 }
 
 /** Human-readable names for OSM highway types */
@@ -754,7 +755,7 @@ const generateRouteSegments = (
     // Map local score to colour: 0 → red, 0.5 → amber, 1 → green
     const color = localScoreToColor(local);
 
-    segments.push({ id: `seg-${ci}`, path: segPath, color });
+    segments.push({ id: `seg-${ci}`, path: segPath, color, score: local });
   }
 
   return segments;

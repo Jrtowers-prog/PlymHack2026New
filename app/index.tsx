@@ -4,8 +4,10 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  type GestureResponderEvent,
   Image,
   Keyboard,
+  type LayoutChangeEvent,
   Modal,
   PanResponder,
   Platform,
@@ -67,8 +69,15 @@ export default function HomeScreen() {
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Remember the last focused field so prediction taps work even if blur fires first
   const lastFocusedFieldRef = useRef<'origin' | 'destination' | null>(null);
+  // Suppress blur when a prediction tap is in progress (web: onPressIn fires before onBlur)
+  const suppressBlurRef = useRef(false);
   const handleBlur = () => {
-    blurTimerRef.current = setTimeout(() => setFocusedField(null), 300);
+    if (suppressBlurRef.current) {
+      // A prediction item was pressed — don't clear the dropdown
+      suppressBlurRef.current = false;
+      return;
+    }
+    blurTimerRef.current = setTimeout(() => setFocusedField(null), 200);
   };
   const cancelBlurTimer = () => {
     if (blurTimerRef.current) {
@@ -83,7 +92,7 @@ export default function HomeScreen() {
   }, [focusedField]);
 
   // Determine which dropdown predictions to show.
-  // The blur timer (300 ms) keeps focusedField alive long enough for onPress to fire.
+  // The blur timer (200 ms) keeps focusedField alive long enough for onPress to fire.
   const activePredictions =
     focusedField === 'origin' && !manualOrigin && !originSearch.place ? originSearch.predictions :
     focusedField === 'destination' && !manualDest && !destSearch.place ? destSearch.predictions :
@@ -400,7 +409,13 @@ export default function HomeScreen() {
       )}
       
       {/* Top Search Bar — hidden during navigation */}
-      {!isNavActive && <View style={[styles.topSearchContainer, { top: insets.top + 8 }]}>
+      {!isNavActive && <ScrollView
+        style={[styles.topSearchContainer, { top: insets.top + 8 }]}
+        contentContainerStyle={styles.topSearchContent}
+        keyboardShouldPersistTaps="always"
+        scrollEnabled={false}
+        pointerEvents="box-none"
+      >
         <View style={styles.searchCard}>
           {/* Logo Header */}
           <View style={styles.logoHeader}>
@@ -562,9 +577,16 @@ export default function HomeScreen() {
                   idx === activePredictions.length - 1 && styles.predictionItemLast,
                   pressed && styles.predictionItemPressed,
                 ]}
-                onPressIn={cancelBlurTimer}
+                onPressIn={() => {
+                  // On web, onPressIn fires BEFORE onBlur. Set suppress flag so
+                  // handleBlur knows a prediction tap is in progress.
+                  // On native, onBlur fires first — cancelBlurTimer kills the timer.
+                  suppressBlurRef.current = true;
+                  cancelBlurTimer();
+                }}
                 onPress={() => {
                   cancelBlurTimer();
+                  suppressBlurRef.current = false;
                   const field = focusedField ?? lastFocusedFieldRef.current;
                   if (field === 'origin') {
                     originSearch.selectPrediction(pred);
@@ -608,7 +630,7 @@ export default function HomeScreen() {
             ))}
           </View>
         )}
-      </View>}
+      </ScrollView>}
       
       {/* Floating AI button above the bottom sheet */}
       {safetyResult && !isNavActive && routes.length > 0 && (
@@ -787,6 +809,11 @@ export default function HomeScreen() {
                       <Text style={styles.safetyCardLabel}>Open</Text>
                     </View>
                   </View>
+                )}
+
+                {/* Interactive safety profile chart */}
+                {routeSegments.length > 1 && (
+                  <SafetyProfileChart segments={routeSegments} />
                 )}
               </>
             )}
@@ -1034,6 +1061,258 @@ function CircleProgress({
   );
 }
 
+// ── Interactive safety profile chart (smooth, like hiking elevation charts) ──
+function SafetyProfileChart({
+  segments,
+}: {
+  segments: { score: number; color: string }[];
+}) {
+  const [chartWidth, setChartWidth] = useState(0);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const CHART_H = 120;
+  const PAD_TOP = 14;
+  const PAD_BOT = 6;
+  const DRAW_H = CHART_H - PAD_TOP - PAD_BOT;
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    setChartWidth(e.nativeEvent.layout.width);
+  };
+
+  // Smooth the raw scores using a moving-average window
+  const smoothed = useMemo(() => {
+    if (segments.length === 0) return [];
+    const raw = segments.map((s) => s.score);
+    const windowSize = Math.max(3, Math.ceil(raw.length / 8));
+    const half = Math.floor(windowSize / 2);
+    return raw.map((_, i) => {
+      let sum = 0;
+      let count = 0;
+      for (let j = i - half; j <= i + half; j++) {
+        if (j >= 0 && j < raw.length) { sum += raw[j]; count++; }
+      }
+      return sum / count;
+    });
+  }, [segments]);
+
+  // Overall average for the reference line
+  const avg = useMemo(() => {
+    if (smoothed.length === 0) return 0;
+    return smoothed.reduce((a, b) => a + b, 0) / smoothed.length;
+  }, [smoothed]);
+
+  // Convert smoothed scores to chart points
+  const points = useMemo(() => {
+    if (!chartWidth || smoothed.length === 0) return [];
+    const step = chartWidth / Math.max(1, smoothed.length - 1);
+    return smoothed.map((val, i) => {
+      const score100 = Math.round(val * 100);
+      // Interpolate colour: red→amber→green based on smoothed value
+      const c = val < 0.5
+        ? lerpColor(0xef4444, 0xeab308, val / 0.5)
+        : lerpColor(0xeab308, 0x22c55e, (val - 0.5) / 0.5);
+      return {
+        x: i * step,
+        y: PAD_TOP + DRAW_H * (1 - val),
+        score: score100,
+        color: c,
+        raw: segments[i]?.score ?? val,
+      };
+    });
+  }, [chartWidth, smoothed, segments]);
+
+  // Average line Y
+  const avgY = PAD_TOP + DRAW_H * (1 - avg);
+
+  const idxFromX = (pageX: number, viewX: number) => {
+    if (!chartWidth || points.length === 0) return null;
+    const x = pageX - viewX;
+    const step = chartWidth / Math.max(1, points.length - 1);
+    const idx = Math.round(x / step);
+    return Math.max(0, Math.min(points.length - 1, idx));
+  };
+
+  const chartRef = useRef<View>(null);
+  const viewXRef = useRef(0);
+
+  const handleTouchStart = (e: GestureResponderEvent) => {
+    chartRef.current?.measureInWindow((wx: number) => {
+      viewXRef.current = wx;
+      setActiveIdx(idxFromX(e.nativeEvent.pageX, wx));
+    });
+  };
+  const handleTouchMove = (e: GestureResponderEvent) => {
+    setActiveIdx(idxFromX(e.nativeEvent.pageX, viewXRef.current));
+  };
+  const handleTouchEnd = () => { /* keep tooltip visible */ };
+
+  const activePoint = activeIdx !== null ? points[activeIdx] : null;
+
+  return (
+    <View style={styles.chartContainer}>
+      {/* Header row */}
+      <View style={styles.chartHeaderRow}>
+        <Text style={styles.chartTitle}>Safety Profile</Text>
+        {activePoint ? (
+          <View style={[styles.chartPill, { backgroundColor: activePoint.color + '22' }]}>
+            <View style={[styles.chartPillDot, { backgroundColor: activePoint.color }]} />
+            <Text style={[styles.chartPillText, { color: activePoint.color }]}>
+              {activePoint.score}
+            </Text>
+          </View>
+        ) : (
+          <View style={[styles.chartPill, { backgroundColor: '#64748b18' }]}>  
+            <Text style={styles.chartPillHint}>Tap to inspect</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Chart body */}
+      <View
+        ref={chartRef}
+        style={[styles.chartArea, { height: CHART_H }]}
+        onLayout={onLayout}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderGrant={handleTouchStart}
+        onResponderMove={handleTouchMove}
+        onResponderRelease={handleTouchEnd}
+      >
+        {/* Subtle grid lines */}
+        {[0, 25, 50, 75, 100].map((v) => {
+          const y = PAD_TOP + DRAW_H * (1 - v / 100);
+          return (
+            <View key={`g-${v}`} style={[styles.chartGridLine, { top: y }]}>
+              {(v === 0 || v === 50 || v === 100) && (
+                <Text style={styles.chartGridLabel}>{v}</Text>
+              )}
+            </View>
+          );
+        })}
+
+        {/* Gradient-like filled area using thin columns */}
+        {points.map((pt, i) => {
+          if (!chartWidth) return null;
+          const step = chartWidth / Math.max(1, points.length - 1);
+          const colW = Math.max(2, step + 1);
+          const h = Math.max(0, CHART_H - PAD_BOT - pt.y);
+          return (
+            <View
+              key={`area-${i}`}
+              style={{
+                position: 'absolute',
+                left: pt.x - colW / 2,
+                bottom: PAD_BOT,
+                width: colW,
+                height: h,
+                backgroundColor: pt.color + '20',
+              }}
+            />
+          );
+        })}
+
+        {/* Smooth line — rendered as short segments with rounded ends */}
+        {points.map((pt, i) => {
+          if (i === 0) return null;
+          const prev = points[i - 1];
+          const dx = pt.x - prev.x;
+          const dy = pt.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          return (
+            <View
+              key={`ln-${i}`}
+              style={{
+                position: 'absolute',
+                left: prev.x,
+                top: prev.y - 1.5,
+                width: len + 1,
+                height: 3,
+                borderRadius: 1.5,
+                backgroundColor: pt.color,
+                transform: [{ rotate: `${angle}deg` }],
+                transformOrigin: '0 50%',
+                opacity: 0.85,
+              }}
+            />
+          );
+        })}
+
+        {/* Average reference line */}
+        <View style={[styles.chartAvgLine, { top: avgY }]} />
+        <View style={[styles.chartAvgBadge, { top: avgY - 9 }]}>
+          <Text style={styles.chartAvgText}>avg {Math.round(avg * 100)}</Text>
+        </View>
+
+        {/* Active cursor & glow */}
+        {activePoint && (
+          <>
+            {/* Vertical cursor */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 0.5,
+                top: PAD_TOP,
+                width: 1,
+                height: DRAW_H,
+                backgroundColor: activePoint.color + '66',
+                zIndex: 4,
+              }}
+            />
+            {/* Glow dot */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 8,
+                top: activePoint.y - 8,
+                width: 16,
+                height: 16,
+                borderRadius: 8,
+                backgroundColor: activePoint.color + '33',
+                zIndex: 5,
+              }}
+            />
+            {/* Solid dot */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 5,
+                top: activePoint.y - 5,
+                width: 10,
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: activePoint.color,
+                borderWidth: 2,
+                borderColor: '#ffffff',
+                zIndex: 6,
+              }}
+            />
+          </>
+        )}
+      </View>
+
+      {/* X axis labels */}
+      <View style={styles.chartXAxis}>
+        <Text style={styles.chartXLabel}>🏠 Start</Text>
+        <Text style={[styles.chartXLabel, { color: '#cbd5e1' }]}>
+          ── {segments.length} segments ──
+        </Text>
+        <Text style={styles.chartXLabel}>📍 End</Text>
+      </View>
+    </View>
+  );
+}
+
+/** Interpolate between two hex-packed colours (0xRRGGBB). Returns CSS hex. */
+function lerpColor(a: number, b: number, t: number): string {
+  const clamp = Math.max(0, Math.min(1, t));
+  const rA = (a >> 16) & 0xff, gA = (a >> 8) & 0xff, bA = a & 0xff;
+  const rB = (b >> 16) & 0xff, gB = (b >> 8) & 0xff, bB = b & 0xff;
+  const r = Math.round(rA + (rB - rA) * clamp);
+  const g = Math.round(gA + (gB - gA) * clamp);
+  const bl = Math.round(bA + (bB - bA) * clamp);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`;
+}
+
 /** Map Google maneuver strings to Ionicons names */
 function maneuverIcon(maneuver?: string): string {
   switch (maneuver) {
@@ -1090,8 +1369,6 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 10,
     elevation: 10,
-    alignItems: 'center',
-    paddingHorizontal: 12,
   },
   searchCard: {
     backgroundColor: '#ffffff',
@@ -1194,12 +1471,23 @@ const styles = StyleSheet.create({
     marginLeft: 48,
     marginRight: 14,
   },
+  topSearchContent: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
   // Search predictions dropdown
   predictionsDropdown: {
     marginTop: 8,
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    ...(Platform.OS === 'web' ? { boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)' } : {}),
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.14,
+          shadowRadius: 24,
+        }),
     elevation: 12,
     zIndex: 20,
     overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
@@ -1790,5 +2078,108 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
     fontSize: 14,
+  },
+
+  // Safety Profile Chart
+  chartContainer: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#eaecf0',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 1px 4px rgba(0,0,0,0.06)' } : {}),
+    elevation: 2,
+  },
+  chartHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  chartTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  chartPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 5,
+  },
+  chartPillDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  chartPillText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  chartPillHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  chartArea: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+  },
+  chartGridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chartGridLabel: {
+    position: 'absolute',
+    left: 4,
+    fontSize: 8,
+    fontWeight: '600',
+    color: '#cbd5e1',
+  },
+  chartAvgLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    borderWidth: 0,
+    borderTopWidth: 1,
+    borderColor: '#94a3b8',
+    borderStyle: 'dashed',
+    zIndex: 3,
+  } as any,
+  chartAvgBadge: {
+    position: 'absolute',
+    right: 4,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    zIndex: 3,
+  },
+  chartAvgText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  chartXAxis: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingHorizontal: 2,
+  },
+  chartXLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
   },
 });
