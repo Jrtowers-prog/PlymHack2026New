@@ -16,6 +16,22 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
+## Environment variables
+
+Create a `.env` (or set EAS env vars) with:
+
+- `EXPO_PUBLIC_OS_MAPS_API_KEY` - required for OS Maps tiles. TODO: Obtain from Ordnance Survey.
+- `EXPO_PUBLIC_OS_MAPS_LAYER` - optional (default `Road_3857`).
+- `EXPO_PUBLIC_OS_MAPS_BASE_URL` - optional (default `https://api.os.uk/maps/raster/v1/zxy`).
+- `EXPO_PUBLIC_OSM_USER_AGENT` - required in production for Nominatim usage. TODO: Set a descriptive value.
+- `EXPO_PUBLIC_OSM_EMAIL` - optional (recommended for Nominatim usage).
+- `EXPO_PUBLIC_OSM_BASE_URL` - optional (default `https://nominatim.openstreetmap.org`).
+- `EXPO_PUBLIC_OSM_TILE_URL` - optional (default `https://tile.openstreetmap.org/{z}/{x}/{y}.png`).
+- `EXPO_PUBLIC_OSRM_BASE_URL` - optional (default `https://router.project-osrm.org`).
+- `EXPO_PUBLIC_OVERPASS_API_URL` - optional (default `https://overpass-api.de/api/interpreter`).
+- `EXPO_PUBLIC_POLICE_API_URL` - optional (default `https://data.police.uk/api`).
+- `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` - still required for web map container.
+
 In the output, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)

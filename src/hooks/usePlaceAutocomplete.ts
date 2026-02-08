@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { fetchPlacePredictions } from '@/src/services/googleMaps';
+import { fetchPlacePredictions } from '@/src/services/openStreetMap';
 import { AppError } from '@/src/types/errors';
 import type { LatLng, PlacePrediction } from '@/src/types/google';
 
@@ -51,7 +51,7 @@ export const usePlaceAutocomplete = (
           setError(normalizedError);
           setStatus('error');
         });
-    }, 350);
+    }, 1000);
 
     return () => clearTimeout(timeout);
   }, [query, locationBias?.latitude, locationBias?.longitude]);
