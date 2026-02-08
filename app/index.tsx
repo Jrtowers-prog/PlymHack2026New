@@ -2,6 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Dimensions,
+  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -49,6 +52,58 @@ export default function HomeScreen() {
   const [focusedField, setFocusedField] = useState<'origin' | 'destination' | null>(null);
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
+
+  // ── Draggable bottom sheet ──
+  const SCREEN_HEIGHT = Dimensions.get('window').height;
+  const SHEET_MAX = SCREEN_HEIGHT * 0.75;   // max: up to ~search inputs area
+  const SHEET_DEFAULT = SCREEN_HEIGHT * 0.4; // default: 40 % of screen
+  const SHEET_MIN = 80;                      // collapsed: just the handle + header
+  const sheetHeight = useRef(new Animated.Value(SHEET_DEFAULT)).current;
+  const sheetHeightRef = useRef(SHEET_DEFAULT);
+
+  // Reset sheet height when routes change
+  useEffect(() => {
+    if (routes.length > 0) {
+      Animated.spring(sheetHeight, {
+        toValue: SHEET_DEFAULT,
+        useNativeDriver: false,
+      }).start();
+      sheetHeightRef.current = SHEET_DEFAULT;
+    }
+  }, [routes.length]);
+
+  const sheetPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
+      onPanResponderGrant: () => {
+        // Capture current height at start of gesture
+        sheetHeight.stopAnimation((v) => { sheetHeightRef.current = v; });
+      },
+      onPanResponderMove: (_, g) => {
+        // Dragging down = positive dy = shrink sheet; up = negative dy = grow
+        const next = Math.min(SHEET_MAX, Math.max(SHEET_MIN, sheetHeightRef.current - g.dy));
+        sheetHeight.setValue(next);
+      },
+      onPanResponderRelease: (_, g) => {
+        const current = sheetHeightRef.current - g.dy;
+        let snap: number;
+        if (g.vy > 0.5 || current < SHEET_MIN + 40) {
+          snap = SHEET_MIN; // fling down → collapse
+        } else if (g.vy < -0.5 || current > SHEET_MAX - 40) {
+          snap = SHEET_MAX; // fling up → expand
+        } else {
+          snap = SHEET_DEFAULT; // settle to default
+        }
+        sheetHeightRef.current = snap;
+        Animated.spring(sheetHeight, {
+          toValue: snap,
+          useNativeDriver: false,
+          bounciness: 4,
+        }).start();
+      },
+    }),
+  ).current;
 
   const effectiveOrigin = isUsingCurrentLocation
     ? location
@@ -320,8 +375,10 @@ export default function HomeScreen() {
       
       {/* Bottom Sheet with Results */}
       {(routes.length > 0 || directionsStatus === 'loading') && (
-        <View style={styles.bottomSheet}>
-          <View style={styles.sheetHandle} />
+        <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
+          <View {...sheetPanResponder.panHandlers} style={styles.sheetDragZone}>
+            <View style={styles.sheetHandle} />
+          </View>
           <ScrollView
             style={styles.sheetScroll}
             contentContainerStyle={styles.sheetContent}
@@ -479,7 +536,7 @@ export default function HomeScreen() {
               </>
             )}
           </ScrollView>
-        </View>
+        </Animated.View>
       )}
       {showOnboarding ? (
         <View style={styles.onboardingOverlay}>
@@ -698,12 +755,15 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)',
     elevation: 8,
-    maxHeight: '50%',
+    overflow: 'hidden',
+  },
+  sheetDragZone: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 4,
+    cursor: 'grab',
   },
   sheetHandle: {
-    alignSelf: 'center',
-    marginTop: 8,
-    marginBottom: 8,
     width: 36,
     height: 4,
     borderRadius: 2,
