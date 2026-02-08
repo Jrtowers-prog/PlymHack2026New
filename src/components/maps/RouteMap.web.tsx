@@ -43,6 +43,13 @@ export const RouteMap = ({
   const [googleMaps, setGoogleMaps] = useState<GoogleMapsApi | null>(null);
   const [hasError, setHasError] = useState(false);
 
+  // Track previous viewport-relevant values so we only re-centre when
+  // the actual geography changes, not on marker / segment / label updates.
+  const prevOriginRef = useRef<string | null>(null);
+  const prevDestRef = useRef<string | null>(null);
+  const prevRoutesKeyRef = useRef<string>('');
+  const prevSelectedRef = useRef<string | null>(null);
+
   // Load Google Maps API
   useEffect(() => {
     let active = true;
@@ -216,19 +223,39 @@ export const RouteMap = ({
       markersRef.current.push(marker);
     }
 
-    // Fit bounds – only zoom in when there's a real route or both endpoints
-    const hasRoutes = routes.length > 0;
-    const hasBothEndpoints = Boolean(origin) && Boolean(destination);
-    if (hasBounds && (hasRoutes || hasBothEndpoints)) {
-      map.fitBounds(bounds);
-      // Cap zoom so fitBounds never zooms in too close
-      const listener = googleMaps.maps.event.addListenerOnce(map, 'idle', () => {
-        if ((map.getZoom?.() ?? 10) > 16) map.setZoom(16);
-      });
-      listenersRef.current.push(listener);
-    } else {
-      map.setCenter(new googleMaps.maps.LatLng(center.latitude, center.longitude));
-      map.setZoom(12);
+    // --- Viewport: only move the camera when geography actually changed ---
+    const originKey = origin ? `${origin.latitude},${origin.longitude}` : '';
+    const destKey = destination ? `${destination.latitude},${destination.longitude}` : '';
+    const routesKey = routes.map((r) => r.id).join(',');
+    const selectedKey = selectedRouteId ?? '';
+
+    const geographyChanged =
+      originKey !== prevOriginRef.current ||
+      destKey !== prevDestRef.current ||
+      routesKey !== prevRoutesKeyRef.current ||
+      selectedKey !== prevSelectedRef.current;
+
+    if (geographyChanged) {
+      prevOriginRef.current = originKey;
+      prevDestRef.current = destKey;
+      prevRoutesKeyRef.current = routesKey;
+      prevSelectedRef.current = selectedKey;
+
+      const hasRoutes = routes.length > 0;
+      const hasBothEndpoints = Boolean(origin) && Boolean(destination);
+      if (hasBounds && (hasRoutes || hasBothEndpoints)) {
+        map.fitBounds(bounds);
+        // Cap zoom so fitBounds never zooms in too close
+        const listener = googleMaps.maps.event.addListenerOnce(map, 'idle', () => {
+          if ((map.getZoom?.() ?? 10) > 16) map.setZoom(16);
+        });
+        listenersRef.current.push(listener);
+      } else if (!mapRef.current) {
+        // Only set center on first initialisation — after that, leave
+        // the map wherever the user has panned to.
+        map.setCenter(new googleMaps.maps.LatLng(center.latitude, center.longitude));
+        map.setZoom(12);
+      }
     }
 
     // Long-press (right-click)
