@@ -68,7 +68,7 @@ export const RouteMap = ({
     if (!mapRef.current) {
       mapRef.current = new googleMaps.maps.Map(mapElementRef.current, {
         center: new googleMaps.maps.LatLng(center.latitude, center.longitude),
-        zoom: 13,
+        zoom: 12,
         disableDefaultUI: true,
         clickableIcons: false,
       });
@@ -201,12 +201,19 @@ export const RouteMap = ({
       markersRef.current.push(marker);
     }
 
-    // Fit bounds
-    if (hasBounds) {
+    // Fit bounds – only zoom in when there's a real route or both endpoints
+    const hasRoutes = routes.length > 0;
+    const hasBothEndpoints = Boolean(origin) && Boolean(destination);
+    if (hasBounds && (hasRoutes || hasBothEndpoints)) {
       map.fitBounds(bounds);
+      // Cap zoom so fitBounds never zooms in too close
+      const listener = googleMaps.maps.event.addListenerOnce(map, 'idle', () => {
+        if ((map.getZoom?.() ?? 10) > 16) map.setZoom(16);
+      });
+      listenersRef.current.push(listener);
     } else {
       map.setCenter(new googleMaps.maps.LatLng(center.latitude, center.longitude));
-      map.setZoom(13);
+      map.setZoom(12);
     }
 
     // Long-press (right-click)
