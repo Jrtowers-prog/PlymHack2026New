@@ -3,6 +3,7 @@ import { AppError } from '@/src/types/errors';
 import type {
     DirectionsRoute,
     LatLng,
+    NavigationStep,
     PlaceDetails,
     PlacePrediction,
 } from '@/src/types/google';
@@ -251,12 +252,30 @@ const singleDirectionsRequest = (
           longitude: p.lng(),
         }));
         const legs = route.legs ?? [];
+        // Extract turn-by-turn steps from all legs
+        const steps: NavigationStep[] = legs.flatMap((leg) =>
+          (leg.steps ?? []).map((s) => ({
+            instruction: s.instructions ?? '',
+            distanceMeters: s.distance?.value ?? 0,
+            durationSeconds: s.duration?.value ?? 0,
+            startLocation: {
+              latitude: s.start_location?.lat() ?? 0,
+              longitude: s.start_location?.lng() ?? 0,
+            },
+            endLocation: {
+              latitude: s.end_location?.lat() ?? 0,
+              longitude: s.end_location?.lng() ?? 0,
+            },
+            maneuver: s.maneuver,
+          }))
+        );
         return {
           id: `route-${idOffset + index}`,
           distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
           durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
           encodedPolyline: encodePolyline(path),
           path,
+          steps,
           summary: route.summary,
         };
       });
@@ -360,12 +379,30 @@ export const fetchDirections = async (
               longitude: p.lng(),
             }));
             const legs = route.legs ?? [];
+            // Extract turn-by-turn steps from all legs
+            const steps: NavigationStep[] = legs.flatMap((leg) =>
+              (leg.steps ?? []).map((s) => ({
+                instruction: s.instructions ?? '',
+                distanceMeters: s.distance?.value ?? 0,
+                durationSeconds: s.duration?.value ?? 0,
+                startLocation: {
+                  latitude: s.start_location?.lat() ?? 0,
+                  longitude: s.start_location?.lng() ?? 0,
+                },
+                endLocation: {
+                  latitude: s.end_location?.lat() ?? 0,
+                  longitude: s.end_location?.lng() ?? 0,
+                },
+                maneuver: s.maneuver,
+              }))
+            );
             return {
               id: `route-200-${i}`,
               distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
               durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
               encodedPolyline: encodePolyline(path),
               path,
+              steps,
               summary: route.summary,
             };
           }));

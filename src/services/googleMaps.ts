@@ -3,6 +3,7 @@ import { AppError } from '@/src/types/errors';
 import type {
     DirectionsRoute,
     LatLng,
+    NavigationStep,
     PlaceDetails,
     PlacePrediction,
 } from '@/src/types/google';
@@ -51,6 +52,14 @@ type GoogleDirectionsResponse = {
       duration?: {
         value?: number;
       };
+      steps?: Array<{
+        html_instructions?: string;
+        distance?: { value?: number };
+        duration?: { value?: number };
+        start_location?: { lat: number; lng: number };
+        end_location?: { lat: number; lng: number };
+        maneuver?: string;
+      }>;
     }>;
   }>;
 };
@@ -233,12 +242,30 @@ const parseDirectionsResponse = (
     const encodedPolyline = route.overview_polyline?.points ?? '';
     if (!encodedPolyline) return null!;
     const legs = route.legs ?? [];
+    // Extract turn-by-turn steps from all legs
+    const steps: NavigationStep[] = legs.flatMap((leg) =>
+      (leg.steps ?? []).map((s) => ({
+        instruction: s.html_instructions ?? '',
+        distanceMeters: s.distance?.value ?? 0,
+        durationSeconds: s.duration?.value ?? 0,
+        startLocation: {
+          latitude: s.start_location?.lat ?? 0,
+          longitude: s.start_location?.lng ?? 0,
+        },
+        endLocation: {
+          latitude: s.end_location?.lat ?? 0,
+          longitude: s.end_location?.lng ?? 0,
+        },
+        maneuver: s.maneuver,
+      }))
+    );
     return {
       id: `route-${idOffset + i}`,
       distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
       durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
       encodedPolyline,
       path: decodePolyline(encodedPolyline),
+      steps,
       summary: route.summary,
     };
   }).filter(Boolean);

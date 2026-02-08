@@ -31,6 +31,9 @@ export const RouteMap = ({
   routeSegments = [],
   roadLabels = [],
   panTo,
+  isNavigating = false,
+  navigationLocation,
+  navigationHeading,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -70,6 +73,51 @@ export const RouteMap = ({
     map.panTo(new googleMaps.maps.LatLng(panTo.location.latitude, panTo.location.longitude));
     if ((map.getZoom?.() ?? 10) < 14) map.setZoom(14);
   }, [panTo, googleMaps]);
+
+  // Navigation mode: follow user location + show heading marker
+  const navMarkerRef = useRef<GoogleMarkerInstance | null>(null);
+  useEffect(() => {
+    if (!googleMaps || !mapRef.current) return;
+    const map = mapRef.current;
+
+    // Clean previous nav marker
+    if (navMarkerRef.current) {
+      navMarkerRef.current.setMap(null);
+      navMarkerRef.current = null;
+    }
+
+    if (!isNavigating || !navigationLocation) return;
+
+    // Create a directional arrow marker for the user
+    const heading = navigationHeading ?? 0;
+    const arrowSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+      <circle cx="18" cy="18" r="16" fill="#1570EF" stroke="white" stroke-width="3"/>
+      <polygon points="18,6 24,22 18,18 12,22" fill="white" transform="rotate(${heading}, 18, 18)"/>
+    </svg>`;
+
+    navMarkerRef.current = new googleMaps.maps.Marker({
+      position: new googleMaps.maps.LatLng(navigationLocation.latitude, navigationLocation.longitude),
+      map,
+      icon: {
+        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg),
+        scaledSize: new googleMaps.maps.Size(36, 36),
+        anchor: new googleMaps.maps.Point(18, 18),
+      } as unknown as string,
+      zIndex: 999,
+      clickable: false,
+    });
+
+    // Smoothly follow user
+    map.panTo(new googleMaps.maps.LatLng(navigationLocation.latitude, navigationLocation.longitude));
+    if ((map.getZoom?.() ?? 10) < 17) map.setZoom(17);
+
+    return () => {
+      if (navMarkerRef.current) {
+        navMarkerRef.current.setMap(null);
+        navMarkerRef.current = null;
+      }
+    };
+  }, [googleMaps, isNavigating, navigationLocation, navigationHeading]);
 
   // Render map contents
   useEffect(() => {

@@ -11,6 +11,12 @@ export type RouteMapProps = {
   roadLabels?: RoadLabel[];
   /** When set, the map smoothly pans to this location. Bump the key to re-trigger. */
   panTo?: { location: LatLng; key: number } | null;
+  /** Navigation mode — when true, the map follows the user and tilts */
+  isNavigating?: boolean;
+  /** Live user location during navigation */
+  navigationLocation?: LatLng | null;
+  /** User heading in degrees (0 = north) */
+  navigationHeading?: number | null;
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;
