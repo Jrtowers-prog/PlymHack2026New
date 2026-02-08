@@ -15,6 +15,7 @@ const overpassBaseUrl =
   process.env.EXPO_PUBLIC_OVERPASS_API_URL ?? 'https://overpass-api.de/api/interpreter';
 const policeApiBaseUrl =
   process.env.EXPO_PUBLIC_POLICE_API_URL ?? 'https://data.police.uk/api';
+const openaiApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 export const env = {
   googleMapsApiKey,
@@ -28,6 +29,7 @@ export const env = {
   osrmBaseUrl,
   overpassBaseUrl,
   policeApiBaseUrl,
+  openaiApiKey,
 };
 
 export const requireGoogleMapsApiKey = (): string => {

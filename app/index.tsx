@@ -4,6 +4,8 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  Keyboard,
+  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -16,6 +18,7 @@ import {
 } from 'react-native';
 
 import RouteMap from '@/src/components/maps/RouteMap';
+import { useAIExplanation } from '@/src/hooks/useAIExplanation';
 import { useAllRoutesSafety } from '@/src/hooks/useAllRoutesSafety';
 import { useAutoPlaceSearch } from '@/src/hooks/useAutoPlaceSearch';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
@@ -55,6 +58,23 @@ export default function HomeScreen() {
   const [focusedField, setFocusedField] = useState<'origin' | 'destination' | null>(null);
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
+
+  // On Android, onBlur fires before onPress on dropdown items.
+  // We delay clearing focusedField so the tap can register first.
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleBlur = () => {
+    if (Platform.OS === 'web') {
+      setFocusedField(null);
+    } else {
+      blurTimerRef.current = setTimeout(() => setFocusedField(null), 200);
+    }
+  };
+  const cancelBlurTimer = () => {
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+  };
 
   // Determine which dropdown predictions to show
   const activePredictions =
@@ -268,6 +288,16 @@ export default function HomeScreen() {
   // ── Navigation ──
   const nav = useNavigation(selectedRoute);
 
+  // ── AI Explanation ──
+  const allScoresList = useMemo(() => Object.values(routeScores), [routeScores]);
+  const ai = useAIExplanation(
+    safetyResult,
+    allScoresList,
+    selectedRoute?.distanceMeters ?? 0,
+    selectedRoute?.durationSeconds ?? 0,
+  );
+  const [showAIModal, setShowAIModal] = useState(false);
+
   const resolvePin = async (coordinate: LatLng): Promise<PlaceDetails> => {
     const fallback: PlaceDetails = {
       placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
@@ -279,6 +309,11 @@ export default function HomeScreen() {
   };
 
   const handleMapPress = async (coordinate: LatLng) => {
+    // Dismiss keyboard and search dropdown when tapping the map
+    Keyboard.dismiss();
+    cancelBlurTimer();
+    setFocusedField(null);
+
     if (pinMode === 'origin') {
       setIsUsingCurrentLocation(false);
       originSearch.clear();
@@ -297,6 +332,11 @@ export default function HomeScreen() {
   };
 
   const handleMapLongPress = async (coordinate: LatLng) => {
+    // Dismiss keyboard on map interaction
+    Keyboard.dismiss();
+    cancelBlurTimer();
+    setFocusedField(null);
+
     // Long-press always sets destination (legacy behaviour)
     const pin = await resolvePin(coordinate);
     setManualDest(pin);
@@ -329,21 +369,22 @@ export default function HomeScreen() {
           onLongPress={handleMapLongPress}
           onMapPress={handleMapPress}
         />
-        {/* Pin-mode banner */}
-        {pinMode && (
-          <View style={styles.pinBanner}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-              <Ionicons name="location" size={18} color="#ffffff" />
-              <Text style={styles.pinBannerText}>
-                Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
-              </Text>
-            </View>
-            <Pressable onPress={() => setPinMode(null)} style={styles.pinBannerCancel}>
-              <Text style={styles.pinBannerCancelText}>Cancel</Text>
-            </Pressable>
-          </View>
-        )}
       </View>
+      
+      {/* Pin-mode banner — outside mapContainer so it renders above WebView on Android */}
+      {pinMode && (
+        <View style={styles.pinBanner}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+            <Ionicons name="location" size={18} color="#ffffff" />
+            <Text style={styles.pinBannerText}>
+              Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
+            </Text>
+          </View>
+          <Pressable onPress={() => setPinMode(null)} style={styles.pinBannerCancel}>
+            <Text style={styles.pinBannerCancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
       
       {/* Top Search Bar — hidden during navigation */}
       {nav.state !== 'navigating' && nav.state !== 'off-route' && <View style={styles.topSearchContainer}>
@@ -383,8 +424,8 @@ export default function HomeScreen() {
                   accessibilityLabel="Starting point"
                   autoCorrect={false}
                   style={styles.inputField}
-                  onFocus={() => setFocusedField('origin')}
-                  onBlur={() => setFocusedField(null)}
+                  onFocus={() => { cancelBlurTimer(); setFocusedField('origin'); }}
+                  onBlur={handleBlur}
                 />
               )}
               <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
@@ -451,8 +492,8 @@ export default function HomeScreen() {
                 accessibilityLabel="Destination"
                 autoCorrect={false}
                 style={styles.inputField}
-                onFocus={() => setFocusedField('destination')}
-                onBlur={() => setFocusedField(null)}
+                onFocus={() => { cancelBlurTimer(); setFocusedField('destination'); }}
+                onBlur={handleBlur}
               />
               <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
                 {destSearch.status === 'searching' && (
@@ -503,7 +544,9 @@ export default function HomeScreen() {
                   idx === activePredictions.length - 1 && styles.predictionItemLast,
                   pressed && styles.predictionItemPressed,
                 ]}
+                onPressIn={cancelBlurTimer}
                 onPress={() => {
+                  cancelBlurTimer();
                   if (focusedField === 'origin') {
                     originSearch.selectPrediction(pred);
                     setManualOrigin(null);
@@ -651,7 +694,23 @@ export default function HomeScreen() {
             
             {showSafety && (
               <>
-                <Text style={styles.safetyTitle}>Safety Information</Text>
+                <View style={styles.safetyTitleRow}>
+                  <Text style={styles.safetyTitle}>Safety Information</Text>
+                  {safetyResult && (
+                    <Pressable
+                      style={styles.aiButton}
+                      onPress={() => {
+                        setShowAIModal(true);
+                        if (ai.status === 'idle') ai.ask();
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="AI route explanation"
+                    >
+                      <Ionicons name="sparkles" size={18} color="#ffffff" />
+                      <Text style={styles.aiButtonText}>AI</Text>
+                    </Pressable>
+                  )}
+                </View>
                 {safetyStatus === 'loading' && (
                   <View style={styles.loadingContainer}>
                     <ActivityIndicator size="small" color="#1570ef" />
@@ -727,6 +786,50 @@ export default function HomeScreen() {
           </View>
         </Animated.View>
       )}
+      {/* ── AI Explanation Modal ── */}
+      <Modal
+        visible={showAIModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setShowAIModal(false); ai.reset(); }}
+      >
+        <View style={styles.aiOverlay}>
+          <View style={styles.aiCard}>
+            <View style={styles.aiCardHeader}>
+              <View style={styles.aiCardTitleRow}>
+                <Ionicons name="sparkles" size={20} color="#7c3aed" />
+                <Text style={styles.aiCardTitle}>AI Route Insights</Text>
+              </View>
+              <Pressable onPress={() => { setShowAIModal(false); ai.reset(); }}>
+                <Ionicons name="close" size={22} color="#667085" />
+              </Pressable>
+            </View>
+
+            {ai.status === 'loading' && (
+              <View style={styles.aiLoading}>
+                <ActivityIndicator size="small" color="#7c3aed" />
+                <Text style={styles.aiLoadingText}>Thinking…</Text>
+              </View>
+            )}
+
+            {ai.status === 'ready' && ai.explanation && (
+              <ScrollView style={styles.aiBody} showsVerticalScrollIndicator={false}>
+                <Text style={styles.aiExplanation}>{ai.explanation}</Text>
+              </ScrollView>
+            )}
+
+            {ai.status === 'error' && (
+              <View style={styles.aiErrorWrap}>
+                <Text style={styles.aiErrorText}>{ai.error}</Text>
+                <Pressable style={styles.aiRetryButton} onPress={ai.ask}>
+                  <Text style={styles.aiRetryText}>Retry</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {showOnboarding ? (
         <View style={styles.onboardingOverlay}>
           <View style={styles.onboardingCard}>
@@ -880,24 +983,26 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
   },
   
   // Top Search Container
   topSearchContainer: {
     position: 'absolute',
-    top: 12,
+    top: Platform.OS === 'android' ? 36 : 12,
     left: 0,
     right: 0,
     zIndex: 10,
+    elevation: 10,
     alignItems: 'center',
     paddingHorizontal: 12,
   },
   searchCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
-    elevation: 6,
-    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)' } : {}),
+    elevation: 8,
+    overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
     width: '100%',
     maxWidth: 600,
   },
@@ -940,24 +1045,21 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     backgroundColor: '#f9fafb',
     borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#e5e7eb',
+    borderWidth: 0,
+    borderColor: 'transparent',
     paddingHorizontal: 18,
     paddingVertical: 16,
   },
   inputFieldWrapFocused: {
-    borderColor: '#1570ef',
     backgroundColor: '#ffffff',
-    boxShadow: '0 0 0 3px rgba(21, 112, 239, 0.2)',
   },
   inputField: {
     flex: 1,
     height: '100%',
-    fontSize: 18,
+    fontSize: 16,
     color: '#101828',
     fontWeight: '400',
-    outlineStyle: 'none',
-  },
+  } as any,
   locationDisplayText: {
     fontSize: 18,
     color: '#1570ef',
@@ -984,9 +1086,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)',
-    elevation: 8,
-    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)' } : {}),
+    elevation: 12,
+    zIndex: 20,
+    overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
     width: '100%',
     maxWidth: 600,
     borderWidth: 1,
@@ -1056,8 +1159,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)',
-    elevation: 6,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)' } : {}),
+    elevation: 10,
+    zIndex: 10,
   },
   pinBannerText: {
     color: '#ffffff',
@@ -1087,18 +1191,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)',
-    elevation: 8,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)', userSelect: 'none', cursor: 'default' }
+      : {}),
+    elevation: 12,
+    zIndex: 12,
     overflow: 'hidden',
-    userSelect: 'none',
-    cursor: 'default',
   } as any,
   sheetDragZone: {
     alignItems: 'center',
     paddingTop: 8,
     paddingBottom: 4,
-    cursor: 'grab',
-  },
+    ...(Platform.OS === 'web' ? { cursor: 'grab' } : {}),
+  } as any,
   sheetHandle: {
     width: 36,
     height: 4,
@@ -1230,8 +1335,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#101828',
-    marginTop: 20,
-    marginBottom: 12,
   },
   safetyGrid: {
     flexDirection: 'row',
@@ -1382,13 +1485,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    zIndex: 100,
+    elevation: 100,
   },
   onboardingCard: {
     width: '100%',
     borderRadius: 20,
     padding: 20,
     backgroundColor: '#ffffff',
-    boxShadow: '0 8px 12px rgba(16, 24, 40, 0.2)',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 8px 12px rgba(16, 24, 40, 0.2)' } : {}),
     elevation: 6,
   },
   onboardingTitle: {
@@ -1451,6 +1556,8 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: 'space-between',
+    zIndex: 15,
+    elevation: 15,
   },
   navInstructionCard: {
     margin: 16,
@@ -1458,8 +1565,8 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 18,
     backgroundColor: '#ffffff',
-    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-    elevation: 8,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' } : {}),
+    elevation: 10,
   },
   navIconRow: {
     flexDirection: 'row',
@@ -1492,8 +1599,8 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 18,
     backgroundColor: '#ffffff',
-    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-    elevation: 8,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' } : {}),
+    elevation: 10,
   },
   navRemaining: {
     fontSize: 15,
@@ -1531,8 +1638,9 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 18,
     backgroundColor: '#ffffff',
-    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-    elevation: 8,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' } : {}),
+    elevation: 10,
+    zIndex: 15,
   },
   navArrivedText: {
     flex: 1,
@@ -1549,6 +1657,101 @@ const styles = StyleSheet.create({
   navDismissText: {
     color: '#ffffff',
     fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // ── AI Explanation ──
+  safetyTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  aiButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#7c3aed',
+  },
+  aiButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  aiOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(16, 24, 40, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  aiCard: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '70%',
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    padding: 20,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 8px 30px rgba(0, 0, 0, 0.2)' } : {}),
+    elevation: 10,
+  },
+  aiCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  aiCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  aiCardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  aiLoading: {
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 32,
+  },
+  aiLoadingText: {
+    fontSize: 14,
+    color: '#7c3aed',
+    fontWeight: '500',
+  },
+  aiBody: {
+    maxHeight: 320,
+  },
+  aiExplanation: {
+    fontSize: 15,
+    lineHeight: 23,
+    color: '#344054',
+  },
+  aiErrorWrap: {
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 16,
+  },
+  aiErrorText: {
+    fontSize: 14,
+    color: '#d92d20',
+    textAlign: 'center',
+  },
+  aiRetryButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    backgroundColor: '#7c3aed',
+  },
+  aiRetryText: {
+    color: '#ffffff',
+    fontWeight: '600',
     fontSize: 14,
   },
 });

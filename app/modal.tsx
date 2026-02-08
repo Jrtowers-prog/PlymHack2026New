@@ -1,9 +1,14 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-export default function Modal() {
+export default function ModalScreen() {
   return (
     <View style={styles.container}>
-      <Text>Modal Screen</Text>
+      <Text style={styles.title}>Modal</Text>
+      <Text style={styles.subtitle}>This is a modal route.</Text>
+      <Pressable accessibilityRole="button" style={styles.button} onPress={() => router.back()}>
+        <Text style={styles.buttonText}>Close</Text>
+      </Pressable>
     </View>
   );
 }
@@ -15,8 +20,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 20,
   },
-  link: {
-    marginTop: 15,
-    paddingVertical: 15,
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  subtitle: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#475467',
+  },
+  button: {
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#1570ef',
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
