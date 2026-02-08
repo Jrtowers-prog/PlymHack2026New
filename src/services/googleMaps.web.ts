@@ -293,6 +293,90 @@ export const fetchDirections = async (
   // 3. Merge, deduplicate
   let merged = deduplicateRoutes([...baseRoutes, ...extras]);
 
+  // ── 3b. "Drive-then-walk" main-road discovery ──────────────────────
+  // Walking directions prefer footpaths/shortcuts. To discover proper-
+  // road alternatives we request a DRIVING route (which must use real
+  // roads) and feed sample points from it as via-waypoints into a
+  // walking request, guiding the walker onto the road network.
+  try {
+    const drivingRoute = await new Promise<DirectionsRoute[]>((resolve) => {
+      const req: google.maps.DirectionsRequest = {
+        origin: new googleMaps.maps.LatLng(origin.latitude, origin.longitude),
+        destination: new googleMaps.maps.LatLng(destination.latitude, destination.longitude),
+        travelMode: googleMaps.maps.TravelMode.DRIVING,
+        provideRouteAlternatives: false,
+      };
+      service.route(req, (result, status) => {
+        if (status !== googleMaps.maps.DirectionsStatus.OK || !result) {
+          resolve([]);
+          return;
+        }
+        const routes = (result.routes ?? []).map((route, i) => {
+          const path = (route.overview_path ?? []).map((p) => ({
+            latitude: p.lat(),
+            longitude: p.lng(),
+          }));
+          const legs = route.legs ?? [];
+          return {
+            id: `drive-${i}`,
+            distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
+            durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
+            encodedPolyline: encodePolyline(path),
+            path,
+            summary: route.summary,
+          };
+        });
+        resolve(routes);
+      });
+    });
+
+    const drivePath = drivingRoute[0]?.path ?? [];
+    if (drivePath.length >= 6) {
+      // Sample points at 25 %, 50 %, 75 % of the driving path
+      const viaPoints = [0.25, 0.5, 0.75].map((frac) => {
+        const idx = Math.min(Math.floor(frac * drivePath.length), drivePath.length - 1);
+        return drivePath[idx];
+      });
+      // Single walking request through all road via-points
+      const roadWalkReq: google.maps.DirectionsRequest = {
+        origin: new googleMaps.maps.LatLng(origin.latitude, origin.longitude),
+        destination: new googleMaps.maps.LatLng(destination.latitude, destination.longitude),
+        travelMode: googleMaps.maps.TravelMode.WALKING,
+        provideRouteAlternatives: false,
+        waypoints: viaPoints.map((p) => ({
+          location: new googleMaps.maps.LatLng(p.latitude, p.longitude),
+          stopover: false,
+        })),
+      };
+      const roadWalking = await new Promise<DirectionsRoute[]>((resolve) => {
+        service.route(roadWalkReq, (result, status) => {
+          if (status !== googleMaps.maps.DirectionsStatus.OK || !result) {
+            resolve([]);
+            return;
+          }
+          resolve((result.routes ?? []).map((route, i) => {
+            const path = (route.overview_path ?? []).map((p) => ({
+              latitude: p.lat(),
+              longitude: p.lng(),
+            }));
+            const legs = route.legs ?? [];
+            return {
+              id: `route-200-${i}`,
+              distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
+              durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
+              encodedPolyline: encodePolyline(path),
+              path,
+              summary: route.summary,
+            };
+          }));
+        });
+      });
+      merged = deduplicateRoutes([...merged, ...roadWalking]);
+    }
+  } catch {
+    // Non-critical — skip road-discovery
+  }
+
   // 4. If fewer than 4 unique routes and route isn't very short, retry with
   //    offsets at ⅓ and ⅔ along the straight line (never along route
   //    geometry — that caused loops).
@@ -311,7 +395,7 @@ export const fetchDirections = async (
 
   // 5. Drop routes that detour too far, sort sensibly
   const shortest = Math.min(...merged.map((r) => r.distanceMeters));
-  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.5);
+  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.6);
   reasonable.sort((a, b) => {
     const distDiff = a.distanceMeters - b.distanceMeters;
     if (Math.abs(distDiff) > shortest * 0.05) return distDiff;

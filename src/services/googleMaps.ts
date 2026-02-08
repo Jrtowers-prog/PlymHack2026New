@@ -278,6 +278,35 @@ export const fetchDirections = async (
   // 3. Merge, deduplicate
   let merged = deduplicateRoutes([...baseRoutes, ...extras]);
 
+  // ── 3b. "Drive-then-walk" main-road discovery ──────────────────────
+  // Walking directions prefer footpaths/shortcuts. To discover proper-
+  // road alternatives (like Eggbuckland Rd vs a footpath), we request
+  // a DRIVING route (which must use real roads) and feed sample points
+  // from it as via-waypoints into a walking request. This guides the
+  // walker onto the road network without needing large offsets.
+  try {
+    const drivingUrl = `${GOOGLE_DIRECTIONS_BASE_URL}/json?key=${apiKey}&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving`;
+    const drivingData = await fetchJson<GoogleDirectionsResponse>(drivingUrl);
+    if (drivingData.status === 'OK') {
+      const drivePath = parseDirectionsResponse(drivingData, 0)[0]?.path ?? [];
+      if (drivePath.length >= 6) {
+        // Sample points at 25 %, 50 %, 75 % of the driving path
+        const viaPoints = [0.25, 0.5, 0.75].map((frac) => {
+          const idx = Math.min(Math.floor(frac * drivePath.length), drivePath.length - 1);
+          return drivePath[idx];
+        });
+        // Single walking request through all road via-points
+        const viaStr = viaPoints.map((p) => `via:${p.latitude},${p.longitude}`).join('|');
+        const roadWalking = await fetchJson<GoogleDirectionsResponse>(
+          `${base}&waypoints=${encodeURIComponent(viaStr)}`
+        ).then((d) => parseDirectionsResponse(d, 200)).catch(() => [] as DirectionsRoute[]);
+        merged = deduplicateRoutes([...merged, ...roadWalking]);
+      }
+    }
+  } catch {
+    // Non-critical — just skip the road-discovery step
+  }
+
   // 4. If fewer than 4 unique routes and route isn't very short, retry with
   //    offsets at ⅓ and ⅔ along the straight line (never along route
   //    geometry — that caused loops).
@@ -300,7 +329,7 @@ export const fetchDirections = async (
 
   // 5. Drop routes that detour too far, sort sensibly
   const shortest = Math.min(...merged.map((r) => r.distanceMeters));
-  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.5);
+  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.6);
   reasonable.sort((a, b) => {
     const distDiff = a.distanceMeters - b.distanceMeters;
     if (Math.abs(distDiff) > shortest * 0.05) return distDiff;
