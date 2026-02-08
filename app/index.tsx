@@ -67,15 +67,8 @@ export default function HomeScreen() {
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Remember the last focused field so prediction taps work even if blur fires first
   const lastFocusedFieldRef = useRef<'origin' | 'destination' | null>(null);
-  // Flag set by prediction onPressIn (fires before blur on web) to suppress the blur handler
-  const suppressBlurRef = useRef(false);
   const handleBlur = () => {
-    if (suppressBlurRef.current) {
-      // A prediction item was pressed — don't clear the dropdown
-      suppressBlurRef.current = false;
-      return;
-    }
-    blurTimerRef.current = setTimeout(() => setFocusedField(null), 200);
+    blurTimerRef.current = setTimeout(() => setFocusedField(null), 300);
   };
   const cancelBlurTimer = () => {
     if (blurTimerRef.current) {
@@ -90,12 +83,10 @@ export default function HomeScreen() {
   }, [focusedField]);
 
   // Determine which dropdown predictions to show.
-  // Use focusedField first; fall back to lastFocusedFieldRef so the dropdown
-  // stays visible during the blur→click race on all platforms.
-  const activeField = focusedField ?? lastFocusedFieldRef.current;
+  // The blur timer (300 ms) keeps focusedField alive long enough for onPress to fire.
   const activePredictions =
-    activeField === 'origin' && !manualOrigin && !originSearch.place ? originSearch.predictions :
-    activeField === 'destination' && !manualDest && !destSearch.place ? destSearch.predictions :
+    focusedField === 'origin' && !manualOrigin && !originSearch.place ? originSearch.predictions :
+    focusedField === 'destination' && !manualDest && !destSearch.place ? destSearch.predictions :
     [];
 
   // ── Draggable bottom sheet ──
@@ -442,9 +433,6 @@ export default function HomeScreen() {
                   ref={originInputRef}
                   value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
                   onChangeText={(t: string) => {
-                    // On Android, programmatic value changes can re-fire onChangeText.
-                    // Skip if the text matches what auto-select already resolved.
-                    if (t === originSearch.query && originSearch.place) return;
                     setManualOrigin(null);
                     originSearch.setQuery(t);
                     setSelectedRouteId(null);
@@ -513,9 +501,6 @@ export default function HomeScreen() {
                 ref={destInputRef}
                 value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
                 onChangeText={(text: string) => {
-                  // On Android, programmatic value changes can re-fire onChangeText.
-                  // Skip if the text matches what auto-select already resolved.
-                  if (text === destSearch.query && destSearch.place) return;
                   setManualDest(null);
                   destSearch.setQuery(text);
                   setSelectedRouteId(null);

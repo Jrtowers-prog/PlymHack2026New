@@ -40,8 +40,21 @@ export const useAutoPlaceSearch = (
 
   // Track whether the user is actively editing (vs. programmatic set)
   const skipAutoRef = useRef(false);
+  // The query text that selectPrediction programmatically set
+  const selectedQueryRef = useRef<string | null>(null);
 
   const setQueryWrapped = useCallback((q: string) => {
+    // After selectPrediction, Android can re-fire onChangeText with the same
+    // programmatic text.  Swallow that one echo but let genuine edits through.
+    if (selectedQueryRef.current !== null) {
+      if (q === selectedQueryRef.current) {
+        // Same text → Android echo → ignore
+        selectedQueryRef.current = null;
+        return;
+      }
+      // Different text → user actually typed → proceed normally
+      selectedQueryRef.current = null;
+    }
     skipAutoRef.current = false;
     setPlace(null);
     setError(null);
@@ -52,6 +65,7 @@ export const useAutoPlaceSearch = (
   const selectPrediction = useCallback((prediction: PlacePrediction) => {
     if (!prediction.location) return;
     skipAutoRef.current = true;
+    selectedQueryRef.current = prediction.primaryText;
     setPredictions([]);
     setQuery(prediction.primaryText);
     setPlace({
