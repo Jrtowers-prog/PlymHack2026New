@@ -61,24 +61,13 @@ export default function HomeScreen() {
   const sheetHeight = useRef(new Animated.Value(SHEET_DEFAULT)).current;
   const sheetHeightRef = useRef(SHEET_DEFAULT);
 
-  // Reset sheet height when routes change
-  useEffect(() => {
-    if (routes.length > 0) {
-      Animated.spring(sheetHeight, {
-        toValue: SHEET_DEFAULT,
-        useNativeDriver: false,
-      }).start();
-      sheetHeightRef.current = SHEET_DEFAULT;
-    }
-  }, [routes.length]);
-
   const sheetPanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
       onPanResponderGrant: () => {
         // Capture current height at start of gesture
-        sheetHeight.stopAnimation((v) => { sheetHeightRef.current = v; });
+        sheetHeight.stopAnimation((v: number) => { sheetHeightRef.current = v; });
       },
       onPanResponderMove: (_, g) => {
         // Dragging down = positive dy = shrink sheet; up = negative dy = grow
@@ -119,6 +108,17 @@ export default function HomeScreen() {
   // Background safety scoring for ALL routes
   const { scores: routeScores, bestRouteId, loading: scoringRoutes } =
     useAllRoutesSafety(routes);
+
+  // Reset sheet height when routes change
+  useEffect(() => {
+    if (routes.length > 0) {
+      Animated.spring(sheetHeight, {
+        toValue: SHEET_DEFAULT,
+        useNativeDriver: false,
+      }).start();
+      sheetHeightRef.current = SHEET_DEFAULT;
+    }
+  }, [routes.length]);
 
   // When user types a new destination, clear the manual pin
   useEffect(() => {
@@ -620,9 +620,11 @@ const styles = StyleSheet.create({
   topSearchContainer: {
     position: 'absolute',
     top: 12,
-    left: 12,
-    right: 12,
+    left: 0,
+    right: 0,
     zIndex: 10,
+    alignItems: 'center',
+    paddingHorizontal: 12,
   },
   searchCard: {
     backgroundColor: '#ffffff',
@@ -630,6 +632,8 @@ const styles = StyleSheet.create({
     boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
     elevation: 6,
     overflow: 'hidden',
+    width: '100%',
+    maxWidth: 600,
   },
   inputRow: {
     flexDirection: 'row',
