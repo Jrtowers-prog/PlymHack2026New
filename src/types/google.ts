@@ -31,6 +31,15 @@ export type RouteSegment = {
   color: string; // hex color for rendering
 };
 
+export type NavigationStep = {
+  instruction: string;      // HTML instruction text (e.g. "Turn left onto Eggbuckland Rd")
+  distanceMeters: number;
+  durationSeconds: number;
+  startLocation: LatLng;
+  endLocation: LatLng;
+  maneuver?: string;        // e.g. "turn-left", "turn-right", "straight", "uturn-left"
+};
+
 export type DirectionsRoute = {
   id: string;
   distanceMeters: number;
@@ -38,5 +47,6 @@ export type DirectionsRoute = {
   encodedPolyline: string;
   path: LatLng[];
   segments?: RouteSegment[];
+  steps?: NavigationStep[];
   summary?: string;
 };

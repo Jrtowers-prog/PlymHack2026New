@@ -20,6 +20,7 @@ import { useAllRoutesSafety } from '@/src/hooks/useAllRoutesSafety';
 import { useAutoPlaceSearch } from '@/src/hooks/useAutoPlaceSearch';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
 import { useDirections } from '@/src/hooks/useDirections';
+import { useNavigation } from '@/src/hooks/useNavigation';
 import { useOnboarding } from '@/src/hooks/useOnboarding';
 import { useRouteSafety } from '@/src/hooks/useRouteSafety';
 import { reverseGeocode } from '@/src/services/openStreetMap';
@@ -264,6 +265,9 @@ export default function HomeScreen() {
   } =
     useRouteSafety(selectedRoute);
 
+  // ── Navigation ──
+  const nav = useNavigation(selectedRoute);
+
   const resolvePin = async (coordinate: LatLng): Promise<PlaceDetails> => {
     const fallback: PlaceDetails = {
       placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
@@ -318,6 +322,9 @@ export default function HomeScreen() {
           routeSegments={routeSegments}
           roadLabels={roadLabels}
           panTo={mapPanTo}
+          isNavigating={nav.state === 'navigating' || nav.state === 'off-route'}
+          navigationLocation={nav.userLocation}
+          navigationHeading={nav.userHeading}
           onSelectRoute={setSelectedRouteId}
           onLongPress={handleMapLongPress}
           onMapPress={handleMapPress}
@@ -338,8 +345,8 @@ export default function HomeScreen() {
         )}
       </View>
       
-      {/* Top Search Bar */}
-      <View style={styles.topSearchContainer}>
+      {/* Top Search Bar — hidden during navigation */}
+      {nav.state !== 'navigating' && nav.state !== 'off-route' && <View style={styles.topSearchContainer}>
         <View style={styles.searchCard}>
           {/* Origin Input */}
           <View style={styles.inputRow}>
@@ -380,7 +387,7 @@ export default function HomeScreen() {
                   onBlur={() => setFocusedField(null)}
                 />
               )}
-              <View style={styles.inputActions} pointerEvents="box-none">
+              <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
                 {originSearch.status === 'searching' && (
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
@@ -447,7 +454,7 @@ export default function HomeScreen() {
                 onFocus={() => setFocusedField('destination')}
                 onBlur={() => setFocusedField(null)}
               />
-              <View style={styles.inputActions} pointerEvents="box-none">
+              <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
                 {destSearch.status === 'searching' && (
                   <ActivityIndicator size="small" color="#1570ef" />
                 )}
@@ -533,10 +540,10 @@ export default function HomeScreen() {
             ))}
           </View>
         )}
-      </View>
+      </View>}
       
-      {/* Bottom Sheet with Results */}
-      {(routes.length > 0 || directionsStatus === 'loading') && (
+      {/* Bottom Sheet with Results — hidden during navigation */}
+      {(routes.length > 0 || directionsStatus === 'loading') && nav.state !== 'navigating' && nav.state !== 'off-route' && (
         <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
           <View {...handlePanResponder.panHandlers} style={styles.sheetDragZone}>
             <View style={styles.sheetHandle} />
@@ -628,6 +635,19 @@ export default function HomeScreen() {
                 </Pressable>
               );
             })}
+
+            {/* Start Navigation Button */}
+            {selectedRoute && nav.state === 'idle' && (
+              <Pressable
+                style={styles.startNavButton}
+                onPress={nav.start}
+                accessibilityRole="button"
+                accessibilityLabel="Start navigation"
+              >
+                <Ionicons name="navigate" size={20} color="#ffffff" />
+                <Text style={styles.startNavButtonText}>Start Navigation</Text>
+              </Pressable>
+            )}
             
             {showSafety && (
               <>
@@ -741,6 +761,63 @@ export default function HomeScreen() {
           </View>
         </View>
       ) : null}
+
+      {/* ── Navigation Turn-by-turn Overlay ── */}
+      {(nav.state === 'navigating' || nav.state === 'off-route') && (
+        <View style={[styles.navOverlay, { pointerEvents: 'box-none' }]}>
+          {/* Instruction card */}
+          <View style={styles.navInstructionCard}>
+            <View style={styles.navIconRow}>
+              <Ionicons
+                name={maneuverIcon(nav.currentStep?.maneuver) as any}
+                size={28}
+                color="#1570EF"
+              />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.navDistance}>
+                  {nav.distanceToNextTurn < 1000
+                    ? `${nav.distanceToNextTurn} m`
+                    : `${(nav.distanceToNextTurn / 1000).toFixed(1)} km`}
+                </Text>
+                <Text style={styles.navInstruction} numberOfLines={2}>
+                  {stripHtml(nav.currentStep?.instruction ?? 'Continue on route')}
+                </Text>
+              </View>
+            </View>
+            {nav.nextStep && (
+              <Text style={styles.navThen} numberOfLines={1}>
+                Then: {stripHtml(nav.nextStep.instruction)}
+              </Text>
+            )}
+          </View>
+
+          {/* Bottom bar: remaining info + stop */}
+          <View style={styles.navBottomBar}>
+            <View>
+              <Text style={styles.navRemaining}>
+                {formatDistance(nav.remainingDistance)} · {formatDuration(nav.remainingDuration)}
+              </Text>
+              {nav.state === 'off-route' && (
+                <Text style={styles.navOffRoute}>Off route — rerouting…</Text>
+              )}
+            </View>
+            <Pressable style={styles.navStopButton} onPress={nav.stop}>
+              <Ionicons name="stop-circle" size={20} color="#ffffff" />
+              <Text style={styles.navStopText}>Stop</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {nav.state === 'arrived' && (
+        <View style={styles.navArrivedBanner}>
+          <Ionicons name="checkmark-circle" size={28} color="#22c55e" />
+          <Text style={styles.navArrivedText}>You have arrived!</Text>
+          <Pressable style={styles.navDismissButton} onPress={nav.stop}>
+            <Text style={styles.navDismissText}>Done</Text>
+          </Pressable>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -756,6 +833,26 @@ function MiniBar({ label, value, color }: { label: string; value: number; color:
       </View>
     </View>
   );
+}
+
+/** Map Google maneuver strings to Ionicons names */
+function maneuverIcon(maneuver?: string): string {
+  switch (maneuver) {
+    case 'turn-left': return 'arrow-back';
+    case 'turn-right': return 'arrow-forward';
+    case 'turn-slight-left': return 'arrow-back';
+    case 'turn-slight-right': return 'arrow-forward';
+    case 'turn-sharp-left': return 'return-down-back';
+    case 'turn-sharp-right': return 'return-down-forward';
+    case 'uturn-left': case 'uturn-right': return 'refresh';
+    case 'roundabout-left': case 'roundabout-right': return 'sync';
+    default: return 'arrow-up';
+  }
+}
+
+/** Strip HTML tags from Google's instruction strings */
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
 }
 
 const formatDistance = (meters: number): string => {
@@ -1013,7 +1110,7 @@ const styles = StyleSheet.create({
   },
   sheetContent: {
     paddingHorizontal: 20,
-    paddingBottom: 24,
+    paddingBottom: 80,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -1327,6 +1424,131 @@ const styles = StyleSheet.create({
   onboardingSecondaryText: {
     color: '#101828',
     fontWeight: '600',
+    fontSize: 14,
+  },
+
+  // ── Navigation UI ──
+  startNavButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginHorizontal: 4,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#1570ef',
+  },
+  startNavButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  navOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+  },
+  navInstructionCard: {
+    margin: 16,
+    marginTop: Platform.OS === 'web' ? 16 : 56,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+    elevation: 8,
+  },
+  navIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navDistance: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#101828',
+  },
+  navInstruction: {
+    fontSize: 15,
+    color: '#475467',
+    marginTop: 2,
+    lineHeight: 20,
+  },
+  navThen: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f2f4f7',
+    fontSize: 13,
+    color: '#667085',
+  },
+  navBottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    margin: 16,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+    elevation: 8,
+  },
+  navRemaining: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#101828',
+  },
+  navOffRoute: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ef4444',
+    marginTop: 2,
+  },
+  navStopButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: '#ef4444',
+  },
+  navStopText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  navArrivedBanner: {
+    position: 'absolute',
+    bottom: 40,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+    elevation: 8,
+  },
+  navArrivedText: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  navDismissButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: '#22c55e',
+  },
+  navDismissText: {
+    color: '#ffffff',
+    fontWeight: '700',
     fontSize: 14,
   },
 });
