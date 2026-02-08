@@ -62,15 +62,20 @@ export default function HomeScreen() {
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
 
-  // On Android, onBlur fires before onPress on dropdown items.
-  // We delay clearing focusedField so the tap can register first.
+  // Blur fires before onPress on dropdown items on ALL platforms.
+  // We delay clearing focusedField so the prediction tap can register first.
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Remember the last focused field so prediction taps work even if blur fires first
+  const lastFocusedFieldRef = useRef<'origin' | 'destination' | null>(null);
+  // Flag set by prediction onPressIn (fires before blur on web) to suppress the blur handler
+  const suppressBlurRef = useRef(false);
   const handleBlur = () => {
-    if (Platform.OS === 'web') {
-      setFocusedField(null);
-    } else {
-      blurTimerRef.current = setTimeout(() => setFocusedField(null), 200);
+    if (suppressBlurRef.current) {
+      // A prediction item was pressed — don't clear the dropdown
+      suppressBlurRef.current = false;
+      return;
     }
+    blurTimerRef.current = setTimeout(() => setFocusedField(null), 200);
   };
   const cancelBlurTimer = () => {
     if (blurTimerRef.current) {
@@ -79,10 +84,18 @@ export default function HomeScreen() {
     }
   };
 
-  // Determine which dropdown predictions to show
+  // Keep lastFocusedFieldRef in sync so prediction taps know which field was active
+  useEffect(() => {
+    if (focusedField) lastFocusedFieldRef.current = focusedField;
+  }, [focusedField]);
+
+  // Determine which dropdown predictions to show.
+  // Use focusedField first; fall back to lastFocusedFieldRef so the dropdown
+  // stays visible during the blur→click race on all platforms.
+  const activeField = focusedField ?? lastFocusedFieldRef.current;
   const activePredictions =
-    focusedField === 'origin' && !manualOrigin ? originSearch.predictions :
-    focusedField === 'destination' && !manualDest ? destSearch.predictions :
+    activeField === 'origin' && !manualOrigin && !originSearch.place ? originSearch.predictions :
+    activeField === 'destination' && !manualDest && !destSearch.place ? destSearch.predictions :
     [];
 
   // ── Draggable bottom sheet ──
@@ -429,6 +442,9 @@ export default function HomeScreen() {
                   ref={originInputRef}
                   value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
                   onChangeText={(t: string) => {
+                    // On Android, programmatic value changes can re-fire onChangeText.
+                    // Skip if the text matches what auto-select already resolved.
+                    if (t === originSearch.query && originSearch.place) return;
                     setManualOrigin(null);
                     originSearch.setQuery(t);
                     setSelectedRouteId(null);
@@ -497,6 +513,9 @@ export default function HomeScreen() {
                 ref={destInputRef}
                 value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
                 onChangeText={(text: string) => {
+                  // On Android, programmatic value changes can re-fire onChangeText.
+                  // Skip if the text matches what auto-select already resolved.
+                  if (text === destSearch.query && destSearch.place) return;
                   setManualDest(null);
                   destSearch.setQuery(text);
                   setSelectedRouteId(null);
@@ -561,13 +580,20 @@ export default function HomeScreen() {
                 onPressIn={cancelBlurTimer}
                 onPress={() => {
                   cancelBlurTimer();
-                  if (focusedField === 'origin') {
+                  const field = focusedField ?? lastFocusedFieldRef.current;
+                  if (field === 'origin') {
                     originSearch.selectPrediction(pred);
                     setManualOrigin(null);
                     setIsUsingCurrentLocation(false);
+                    if (pred.location) {
+                      setMapPanTo({ location: pred.location, key: Date.now() });
+                    }
                   } else {
                     destSearch.selectPrediction(pred);
                     setManualDest(null);
+                    if (pred.location) {
+                      setMapPanTo({ location: pred.location, key: Date.now() });
+                    }
                   }
                   setSelectedRouteId(null);
                   originInputRef.current?.blur();
@@ -599,6 +625,30 @@ export default function HomeScreen() {
         )}
       </View>}
       
+      {/* Floating AI button above the bottom sheet */}
+      {safetyResult && !isNavActive && routes.length > 0 && (
+        <Animated.View
+          style={[
+            styles.aiFloatingWrap,
+            { bottom: Animated.add(sheetHeight, 12) },
+          ]}
+          pointerEvents="box-none"
+        >
+          <Pressable
+            style={styles.aiFloatingButton}
+            onPress={() => {
+              setShowAIModal(true);
+              if (ai.status === 'idle') ai.ask();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Why is this the safest route"
+          >
+            <Ionicons name="sparkles" size={16} color="#ffffff" />
+            <Text style={styles.aiFloatingText}>Why is this the safest route?</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+
       {/* Bottom Sheet with Results — hidden during navigation */}
       {(routes.length > 0 || directionsStatus === 'loading') && !isNavActive && (
         <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
@@ -708,23 +758,6 @@ export default function HomeScreen() {
             
             {showSafety && (
               <>
-                <View style={styles.safetyTitleRow}>
-                  <Text style={styles.safetyTitle}>Safety Information</Text>
-                  {safetyResult && (
-                    <Pressable
-                      style={styles.aiButton}
-                      onPress={() => {
-                        setShowAIModal(true);
-                        if (ai.status === 'idle') ai.ask();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="AI route explanation"
-                    >
-                      <Ionicons name="sparkles" size={18} color="#ffffff" />
-                      <Text style={styles.aiButtonText}>AI</Text>
-                    </Pressable>
-                  )}
-                </View>
                 {safetyStatus === 'loading' && (
                   <View style={styles.loadingContainer}>
                     <ActivityIndicator size="small" color="#1570ef" />
@@ -740,59 +773,35 @@ export default function HomeScreen() {
                 {safetyError && <Text style={styles.error}>{safetyError.message}</Text>}
                 
                 {safetyResult && (
-                  <>
-                    {/* ── Safety Score Gauge ── */}
-                    <View style={styles.scoreCard}>
-                      <View style={styles.scoreGauge}>
-                        {/* Background track */}
-                        <View style={styles.gaugeTrack} />
-                        {/* Filled portion */}
-                        <View
-                          style={[
-                            styles.gaugeFill,
-                            {
-                              width: `${safetyResult.safetyScore}%`,
-                              backgroundColor: safetyResult.safetyColor,
-                            },
-                          ]}
-                        />
-                      </View>
-                      <View style={styles.scoreRow}>
-                        <Text style={[styles.scoreNumber, { color: safetyResult.safetyColor }]}>
-                          {safetyResult.safetyScore}
-                        </Text>
-                        <Text style={styles.scoreOutOf}>/100</Text>
-                        <View style={[styles.scoreBadge, { backgroundColor: safetyResult.safetyColor + '22' }]}>
-                          <View style={[styles.scoreDot, { backgroundColor: safetyResult.safetyColor }]} />
-                          <Text style={[styles.scoreBadgeText, { color: safetyResult.safetyColor }]}>
-                            {safetyResult.safetyLabel}
-                          </Text>
-                        </View>
-                      </View>
-                      {/* Mini breakdown bars */}
-                      <View style={styles.breakdownRow}>
-                        <MiniBar label="Crime" value={Math.max(0, 100 - safetyResult.crimeCount * 4)} color="#ef4444" />
-                        <MiniBar label="Lights" value={Math.min(100, safetyResult.streetLights * 2)} color="#facc15" />
-                        <MiniBar label="Activity" value={Math.min(100, safetyResult.openPlaces * 10)} color="#22c55e" />
-                      </View>
+                  <View style={styles.safetyCardsRow}>
+                    {/* Card 1: Overall Score with circular progress */}
+                    <View style={[styles.safetyCard, { borderColor: safetyResult.safetyColor + '44' }]}>
+                      <CircleProgress
+                        size={52}
+                        strokeWidth={5}
+                        progress={safetyResult.safetyScore}
+                        color={safetyResult.safetyColor}
+                      />
+                      <Text style={[styles.safetyCardLabel, { color: safetyResult.safetyColor }]}>
+                        {safetyResult.safetyLabel}
+                      </Text>
                     </View>
-
-                    {/* ── Stat Grid ── */}
-                    <View style={styles.safetyGrid}>
-                      <View style={styles.safetyItem}>
-                        <Text style={styles.safetyValue}>{safetyResult.crimeCount}</Text>
-                        <Text style={styles.safetyLabel}>Crime reports</Text>
-                      </View>
-                      <View style={styles.safetyItem}>
-                        <Text style={styles.safetyValue}>{safetyResult.streetLights}</Text>
-                        <Text style={styles.safetyLabel}>Street lights</Text>
-                      </View>
-                      <View style={styles.safetyItem}>
-                        <Text style={styles.safetyValue}>{safetyResult.openPlaces}</Text>
-                        <Text style={styles.safetyLabel}>Open places</Text>
-                      </View>
+                    {/* Card 2: Crime */}
+                    <View style={[styles.safetyCard, { borderColor: '#ef444444' }]}>
+                      <Text style={[styles.safetyCardValue, { color: '#ef4444' }]}>{safetyResult.crimeCount}</Text>
+                      <Text style={styles.safetyCardLabel}>Crime</Text>
                     </View>
-                  </>
+                    {/* Card 3: Lights */}
+                    <View style={[styles.safetyCard, { borderColor: '#eab30844' }]}>
+                      <Text style={[styles.safetyCardValue, { color: '#eab308' }]}>{safetyResult.streetLights}</Text>
+                      <Text style={styles.safetyCardLabel}>Lights</Text>
+                    </View>
+                    {/* Card 4: Activity */}
+                    <View style={[styles.safetyCard, { borderColor: '#22c55e44' }]}>
+                      <Text style={[styles.safetyCardValue, { color: '#22c55e' }]}>{safetyResult.openPlaces}</Text>
+                      <Text style={styles.safetyCardLabel}>Open</Text>
+                    </View>
+                  </View>
                 )}
               </>
             )}
@@ -945,15 +954,97 @@ export default function HomeScreen() {
   );
 }
 
-// ── Mini breakdown bar for safety chart ──
-function MiniBar({ label, value, color }: { label: string; value: number; color: string }) {
-  const clamped = Math.max(0, Math.min(100, value));
+// ── Circular progress indicator for safety score ──
+function CircleProgress({
+  size,
+  strokeWidth,
+  progress,
+  color,
+}: {
+  size: number;
+  strokeWidth: number;
+  progress: number;
+  color: string;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const innerSize = size - strokeWidth * 2;
+  const clamped = Math.max(0, Math.min(100, progress));
+  // For the rotation-based approach: 0-50% = right half, 50-100% = both halves
+  const isMoreThanHalf = clamped > 50;
+  const rightRotation = isMoreThanHalf ? 180 : (clamped / 50) * 180;
+  const leftRotation = isMoreThanHalf ? ((clamped - 50) / 50) * 180 : 0;
+
   return (
-    <View style={styles.miniBarWrap}>
-      <Text style={styles.miniBarLabel}>{label}</Text>
-      <View style={styles.miniBarTrack}>
-        <View style={[styles.miniBarFill, { width: `${clamped}%`, backgroundColor: color }]} />
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      {/* Background circle */}
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: strokeWidth,
+          borderColor: '#e5e7eb',
+          position: 'absolute',
+        }}
+      />
+      {/* Right half */}
+      <View style={{ position: 'absolute', width: size, height: size, overflow: 'hidden' }}>
+        <View
+          style={{
+            position: 'absolute',
+            width: size / 2,
+            height: size,
+            right: 0,
+            overflow: 'hidden',
+          }}
+        >
+          <View
+            style={{
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderLeftColor: 'transparent',
+              borderBottomColor: 'transparent',
+              transform: [{ rotate: `${rightRotation}deg` }],
+              position: 'absolute',
+              right: 0,
+            }}
+          />
+        </View>
       </View>
+      {/* Left half (only when > 50%) */}
+      {isMoreThanHalf && (
+        <View style={{ position: 'absolute', width: size, height: size, overflow: 'hidden' }}>
+          <View
+            style={{
+              position: 'absolute',
+              width: size / 2,
+              height: size,
+              left: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <View
+              style={{
+                width: size,
+                height: size,
+                borderRadius: size / 2,
+                borderWidth: strokeWidth,
+                borderColor: color,
+                borderRightColor: 'transparent',
+                borderTopColor: 'transparent',
+                transform: [{ rotate: `${leftRotation}deg` }],
+                position: 'absolute',
+                left: 0,
+              }}
+            />
+          </View>
+        </View>
+      )}
+      {/* Center label */}
+      <Text style={{ fontSize: size * 0.26, fontWeight: '800', color }}>{clamped}</Text>
     </View>
   );
 }
@@ -1368,124 +1459,36 @@ const styles = StyleSheet.create({
     color: '#667085',
   },
   
-  // Safety Section
-  safetyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#101828',
-  },
-  safetyGrid: {
+  // Safety Cards Row
+  safetyCardsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 4,
   },
-  safetyItem: {
+  safetyCard: {
     flex: 1,
-    minWidth: '45%',
-    padding: 12,
-    borderRadius: 10,
-    backgroundColor: '#f9fafb',
-    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
     borderColor: '#eaecf0',
+    minHeight: 80,
   },
-  safetyValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#101828',
-  },
-  safetyLabel: {
-    fontSize: 12,
-    color: '#667085',
-    marginTop: 4,
-  },
-  
-  // Safety Score
-  scoreCard: {
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: '#f0f4ff',
-    borderWidth: 1,
-    borderColor: '#d0d5dd',
-  },
-  scoreGauge: {
-    height: 10,
-    borderRadius: 5,
-    overflow: 'hidden',
-    position: 'relative',
-    marginBottom: 12,
-  },
-  gaugeTrack: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 5,
-  },
-  gaugeFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    borderRadius: 5,
-  },
-  scoreRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-    marginBottom: 14,
-  },
-  scoreNumber: {
-    fontSize: 36,
+  safetyCardValue: {
+    fontSize: 22,
     fontWeight: '800',
   },
-  scoreOutOf: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#667085',
-  },
-  scoreBadge: {
-    marginLeft: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-    gap: 6,
-  },
-  scoreDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  scoreBadgeText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  breakdownRow: {
-    gap: 8,
-  },
-  miniBarWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  miniBarLabel: {
-    width: 52,
+  safetyCardLabel: {
     fontSize: 11,
     fontWeight: '600',
     color: '#667085',
+    marginTop: 4,
+    textAlign: 'center',
   },
-  miniBarTrack: {
-    flex: 1,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#e5e7eb',
-    overflow: 'hidden',
-  },
-  miniBarFill: {
-    height: '100%',
-    borderRadius: 3,
-  },
-
   // Loading & Errors
   loadingContainer: {
     flexDirection: 'column',
@@ -1706,23 +1709,27 @@ const styles = StyleSheet.create({
   },
 
   // ── AI Explanation ──
-  safetyTitleRow: {
-    flexDirection: 'row',
+  aiFloatingWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 20,
-    marginBottom: 12,
+    zIndex: 13,
   },
-  aiButton: {
+  aiFloatingButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 24,
     backgroundColor: '#7c3aed',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 4px 14px rgba(124, 58, 237, 0.4)' }
+      : {}),
+    elevation: 14,
   },
-  aiButtonText: {
+  aiFloatingText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '700',

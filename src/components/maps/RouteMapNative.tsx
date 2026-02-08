@@ -28,6 +28,7 @@ export const RouteMap = ({
   safetyMarkers = [],
   routeSegments = [],
   roadLabels = [],
+  panTo,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -43,6 +44,20 @@ export const RouteMap = ({
       longitudeDelta: 0.1,
     };
   }, [origin]);
+
+  // Smooth-pan to a location when panTo prop changes
+  const prevPanKeyRef = useRef<number>(-1);
+  useEffect(() => {
+    if (!panTo || !mapRef.current) return;
+    if (panTo.key === prevPanKeyRef.current) return;
+    prevPanKeyRef.current = panTo.key;
+    mapRef.current.animateToRegion({
+      latitude: panTo.location.latitude,
+      longitude: panTo.location.longitude,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    }, 500);
+  }, [panTo]);
 
   const osmTileUrl = buildOsmTileUrl();
   const tileUrl = osmTileUrl;

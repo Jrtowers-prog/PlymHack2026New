@@ -102,26 +102,9 @@ export const useAutoPlaceSearch = (
           return;
         }
 
-        // Expose all predictions for the dropdown
+        // Expose all predictions for the dropdown — user must click to select
         setPredictions(results);
-
-        const top = results[0];
-        if (!top.location) {
-          setStatus('error');
-          setError(new AppError('no_location', 'Place has no coordinates'));
-          return;
-        }
-
-        // Auto-select the top result
-        skipAutoRef.current = true;            // don't re-trigger
-        setQuery(top.primaryText);             // show resolved name
-        setPlace({
-          placeId: top.placeId,
-          name: top.fullText,
-          location: top.location,
-          source: top.source,
-        });
-        setStatus('found');
+        setStatus('idle');
       } catch (e) {
         setStatus('error');
         setPredictions([]);
