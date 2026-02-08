@@ -118,9 +118,9 @@ export const useNavigation = (route: DirectionsRoute | null): NavigationInfo => 
     try {
       const sub = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 2000,
-          distanceInterval: 3,
+          accuracy: Location.Accuracy.BestForNavigation,
+          timeInterval: 500,
+          distanceInterval: 1,
         },
         (loc) => {
           const pos: LatLng = {

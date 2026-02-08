@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react';
 
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
-import { fetchAIExplanation } from '@/src/services/openai';
+import { fetchAIExplanation, type RouteInfo } from '@/src/services/openai';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
+import type { DirectionsRoute } from '@/src/types/google';
 
 export type AIStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -18,9 +19,9 @@ export interface UseAIExplanationState {
 
 export const useAIExplanation = (
   safetyResult: SafetyMapResult | null,
-  allScores: RouteScore[],
-  distanceMeters: number,
-  durationSeconds: number,
+  routes: DirectionsRoute[],
+  scores: Record<string, RouteScore>,
+  bestRouteId: string | null,
 ): UseAIExplanationState => {
   const [status, setStatus] = useState<AIStatus>('idle');
   const [explanation, setExplanation] = useState<string | null>(null);
@@ -32,16 +33,28 @@ export const useAIExplanation = (
       setStatus('error');
       return;
     }
+    if (!bestRouteId) {
+      setError('No safest route selected yet.');
+      setStatus('error');
+      return;
+    }
 
     setStatus('loading');
     setError(null);
     setExplanation(null);
 
+    const routeInfos: RouteInfo[] = routes.map((r) => ({
+      routeId: r.id,
+      distanceMeters: r.distanceMeters,
+      durationSeconds: r.durationSeconds,
+      summary: r.summary,
+      score: scores[r.id],
+    }));
+
     fetchAIExplanation({
       safetyResult,
-      allScores,
-      distanceMeters,
-      durationSeconds,
+      routes: routeInfos,
+      bestRouteId,
     })
       .then((text) => {
         setExplanation(text);
@@ -51,7 +64,7 @@ export const useAIExplanation = (
         setError(err instanceof Error ? err.message : 'Something went wrong');
         setStatus('error');
       });
-  }, [safetyResult, allScores, distanceMeters, durationSeconds]);
+  }, [safetyResult, routes, scores, bestRouteId]);
 
   const reset = useCallback(() => {
     setStatus('idle');

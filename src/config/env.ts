@@ -60,7 +60,7 @@ export const requireOsmUserAgent = (): string => {
       );
     }
 
-    return 'PlymHack Safety Routing (dev)';
+    return 'Safe Night Home (dev)';
   }
 
   return env.osmUserAgent;

@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  Image,
   Keyboard,
   Modal,
   PanResponder,
@@ -15,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import RouteMap from '@/src/components/maps/RouteMap';
 import { useAIExplanation } from '@/src/hooks/useAIExplanation';
@@ -30,6 +31,8 @@ import { reverseGeocode } from '@/src/services/openStreetMap';
 import type { DirectionsRoute, LatLng, PlaceDetails } from '@/src/types/google';
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
+
   const { status: onboardingStatus, hasAccepted, error: onboardingError, accept } = useOnboarding();
   const {
     status: locationStatus,
@@ -287,14 +290,14 @@ export default function HomeScreen() {
 
   // ── Navigation ──
   const nav = useNavigation(selectedRoute);
+  const isNavActive = nav.state === 'navigating' || nav.state === 'off-route';
 
   // ── AI Explanation ──
-  const allScoresList = useMemo(() => Object.values(routeScores), [routeScores]);
   const ai = useAIExplanation(
     safetyResult,
-    allScoresList,
-    selectedRoute?.distanceMeters ?? 0,
-    selectedRoute?.durationSeconds ?? 0,
+    routes,
+    routeScores,
+    bestRouteId,
   );
   const [showAIModal, setShowAIModal] = useState(false);
 
@@ -313,6 +316,9 @@ export default function HomeScreen() {
     Keyboard.dismiss();
     cancelBlurTimer();
     setFocusedField(null);
+
+    // During navigation, don't process map taps for pin/destination setting
+    if (isNavActive) return;
 
     if (pinMode === 'origin') {
       setIsUsingCurrentLocation(false);
@@ -337,6 +343,9 @@ export default function HomeScreen() {
     cancelBlurTimer();
     setFocusedField(null);
 
+    // During navigation, don't process long-press for destination setting
+    if (isNavActive) return;
+
     // Long-press always sets destination (legacy behaviour)
     const pin = await resolvePin(coordinate);
     setManualDest(pin);
@@ -351,7 +360,7 @@ export default function HomeScreen() {
 
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.mapContainer}>
         <RouteMap
           origin={effectiveOrigin}
@@ -362,7 +371,7 @@ export default function HomeScreen() {
           routeSegments={routeSegments}
           roadLabels={roadLabels}
           panTo={mapPanTo}
-          isNavigating={nav.state === 'navigating' || nav.state === 'off-route'}
+          isNavigating={isNavActive}
           navigationLocation={nav.userLocation}
           navigationHeading={nav.userHeading}
           onSelectRoute={setSelectedRouteId}
@@ -373,7 +382,7 @@ export default function HomeScreen() {
       
       {/* Pin-mode banner — outside mapContainer so it renders above WebView on Android */}
       {pinMode && (
-        <View style={styles.pinBanner}>
+        <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
             <Ionicons name="location" size={18} color="#ffffff" />
             <Text style={styles.pinBannerText}>
@@ -387,8 +396,13 @@ export default function HomeScreen() {
       )}
       
       {/* Top Search Bar — hidden during navigation */}
-      {nav.state !== 'navigating' && nav.state !== 'off-route' && <View style={styles.topSearchContainer}>
+      {!isNavActive && <View style={[styles.topSearchContainer, { top: insets.top + 8 }]}>
         <View style={styles.searchCard}>
+          {/* Logo Header */}
+          <View style={styles.logoHeader}>
+            <Text style={styles.logoText}>SAFE NIGHT HOME</Text>
+          </View>
+
           {/* Origin Input */}
           <View style={styles.inputRow}>
             <View style={styles.inputIconWrap}>
@@ -586,7 +600,7 @@ export default function HomeScreen() {
       </View>}
       
       {/* Bottom Sheet with Results — hidden during navigation */}
-      {(routes.length > 0 || directionsStatus === 'loading') && nav.state !== 'navigating' && nav.state !== 'off-route' && (
+      {(routes.length > 0 || directionsStatus === 'loading') && !isNavActive && (
         <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
           <View {...handlePanResponder.panHandlers} style={styles.sheetDragZone}>
             <View style={styles.sheetHandle} />
@@ -596,7 +610,7 @@ export default function HomeScreen() {
               ref={scrollViewRef}
               {...bodyPanResponder.panHandlers}
               style={styles.sheetScroll}
-              contentContainerStyle={styles.sheetContent}
+              contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 24 }]}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
               onScroll={handleSheetScroll}
@@ -833,7 +847,13 @@ export default function HomeScreen() {
       {showOnboarding ? (
         <View style={styles.onboardingOverlay}>
           <View style={styles.onboardingCard}>
-            <Text style={styles.onboardingTitle}>Safety Routing</Text>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={styles.onboardingLogo}
+              resizeMode="contain"
+              accessibilityLabel="Safe Night Home logo"
+            />
+            <Text style={styles.onboardingTitle}>Safe Night Home</Text>
             <Text style={styles.onboardingBody}>
               We use your location to plan walking routes. Results are guidance only and do not
               guarantee safety.
@@ -866,10 +886,10 @@ export default function HomeScreen() {
       ) : null}
 
       {/* ── Navigation Turn-by-turn Overlay ── */}
-      {(nav.state === 'navigating' || nav.state === 'off-route') && (
+      {isNavActive && (
         <View style={[styles.navOverlay, { pointerEvents: 'box-none' }]}>
           {/* Instruction card */}
-          <View style={styles.navInstructionCard}>
+          <View style={[styles.navInstructionCard, { marginTop: insets.top + 8 }]}>
             <View style={styles.navIconRow}>
               <Ionicons
                 name={maneuverIcon(nav.currentStep?.maneuver) as any}
@@ -895,7 +915,7 @@ export default function HomeScreen() {
           </View>
 
           {/* Bottom bar: remaining info + stop */}
-          <View style={styles.navBottomBar}>
+          <View style={[styles.navBottomBar, { marginBottom: insets.bottom + 8 }]}>
             <View>
               <Text style={styles.navRemaining}>
                 {formatDistance(nav.remainingDistance)} · {formatDuration(nav.remainingDuration)}
@@ -913,7 +933,7 @@ export default function HomeScreen() {
       )}
 
       {nav.state === 'arrived' && (
-        <View style={styles.navArrivedBanner}>
+        <View style={[styles.navArrivedBanner, { bottom: insets.bottom + 16 }]}>
           <Ionicons name="checkmark-circle" size={28} color="#22c55e" />
           <Text style={styles.navArrivedText}>You have arrived!</Text>
           <Pressable style={styles.navDismissButton} onPress={nav.stop}>
@@ -921,7 +941,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -989,7 +1009,7 @@ const styles = StyleSheet.create({
   // Top Search Container
   topSearchContainer: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 36 : 12,
+    top: 12,
     left: 0,
     right: 0,
     zIndex: 10,
@@ -1006,11 +1026,24 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 600,
   },
+  logoHeader: {
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'web' ? 14 : 10,
+    paddingBottom: Platform.OS === 'web' ? 8 : 4,
+    justifyContent: 'center',
+  },
+  logoText: {
+    fontSize: Platform.OS === 'web' ? 22 : 16,
+    fontWeight: '900',
+    letterSpacing: Platform.OS === 'web' ? 3 : 2,
+    color: '#000000',
+    textAlign: 'center',
+  },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingHorizontal: Platform.OS === 'web' ? 14 : 10,
+    paddingVertical: Platform.OS === 'web' ? 6 : 4,
   },
   inputIconWrap: {
     width: 24,
@@ -1047,8 +1080,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1.5,
     borderColor: '#e5e7eb',
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingHorizontal: Platform.OS === 'web' ? 18 : 12,
+    paddingVertical: Platform.OS === 'web' ? 16 : 10,
   },
   inputFieldWrapFocused: {
     borderColor: '#1570ef',
@@ -1058,14 +1091,14 @@ const styles = StyleSheet.create({
   inputField: {
     flex: 1,
     height: '100%',
-    fontSize: 16,
+    fontSize: Platform.OS === 'web' ? 16 : 14,
     color: '#101828',
     fontWeight: '400',
     borderWidth: 0,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
   } as any,
   locationDisplayText: {
-    fontSize: 18,
+    fontSize: Platform.OS === 'web' ? 18 : 14,
     color: '#1570ef',
     fontWeight: '500',
   },
@@ -1189,9 +1222,10 @@ const styles = StyleSheet.create({
   // Bottom Sheet
   bottomSheet: {
     position: 'absolute',
-    left: 0,
-    right: 0,
     bottom: 0,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 900,
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -1500,10 +1534,17 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web' ? { boxShadow: '0 8px 12px rgba(16, 24, 40, 0.2)' } : {}),
     elevation: 6,
   },
+  onboardingLogo: {
+    width: 140,
+    height: 44,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
   onboardingTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: '#101828',
+    textAlign: 'center',
   },
   onboardingBody: {
     marginTop: 8,
@@ -1565,7 +1606,7 @@ const styles = StyleSheet.create({
   },
   navInstructionCard: {
     margin: 16,
-    marginTop: Platform.OS === 'web' ? 16 : 56,
+    marginTop: 16,
     padding: 16,
     borderRadius: 18,
     backgroundColor: '#ffffff',

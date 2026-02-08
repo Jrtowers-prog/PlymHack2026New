@@ -143,8 +143,8 @@ const buildMapHtml = (apiKey: string) => `
       var bounds = new gm.LatLngBounds();
       var hasBounds = false;
 
-      // Origin – blue dot
-      if (data.origin) {
+      // Origin – blue dot (hidden during navigation — arrow replaces it)
+      if (data.origin && !data.navLocation) {
         var pos = new gm.LatLng(data.origin.lat, data.origin.lng);
         var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">' +
           '<circle cx="12" cy="12" r="11" fill="#4285F4" opacity="0.25"/>' +
@@ -183,23 +183,92 @@ const buildMapHtml = (apiKey: string) => `
         hasBounds = true;
       });
 
+      // ── Helper: find nearest point index on a path ──
+      function nearestIdx(path, pt) {
+        var best = 0, bestD = 1e18;
+        for (var i = 0; i < path.length; i++) {
+          var dlat = path[i].lat - pt.lat, dlng = path[i].lng - pt.lng;
+          var d = dlat*dlat + dlng*dlng;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+      }
+
       // Selected route – safety-coloured segments or blue fallback
       var sel = (data.routes || []).find(function(r) { return r.selected; });
       if (sel) {
-        if (data.segments && data.segments.length > 0) {
-          data.segments.forEach(function(seg) {
-            var segPath = seg.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
+        // During navigation: split into traveled (black) + remaining (colored)
+        if (data.navLocation && sel.path.length > 1) {
+          var navPt = { lat: data.navLocation.lat, lng: data.navLocation.lng };
+          var splitIdx = nearestIdx(sel.path, navPt);
+
+          // ── Traveled portion → black ──
+          if (splitIdx > 0) {
+            var traveledPath = [];
+            for (var ti = 0; ti <= splitIdx; ti++) {
+              traveledPath.push(new gm.LatLng(sel.path[ti].lat, sel.path[ti].lng));
+            }
+            traveledPath.push(new gm.LatLng(navPt.lat, navPt.lng));
             polylines.push(new gm.Polyline({
-              path: segPath, strokeColor: seg.color, strokeOpacity: 0.9,
-              strokeWeight: 7, map: map, clickable: false,
+              path: traveledPath, strokeColor: '#1D2939', strokeOpacity: 0.7,
+              strokeWeight: 7, map: map, clickable: false, zIndex: 5,
             }));
-          });
+          }
+
+          // ── Remaining portion → safety colors or blue ──
+          if (data.segments && data.segments.length > 0) {
+            data.segments.forEach(function(seg) {
+              // Filter segment points: keep only those at or after the nav position
+              var filteredPath = [];
+              var started = false;
+              for (var si = 0; si < seg.path.length; si++) {
+                var sp = seg.path[si];
+                if (!started) {
+                  var dlat = sp.lat - navPt.lat, dlng = sp.lng - navPt.lng;
+                  if (Math.sqrt(dlat*dlat + dlng*dlng) < 0.0003) started = true;
+                  // Also start if this segment point is past the split on the main path
+                  if (!started) {
+                    var spIdx = nearestIdx(sel.path, sp);
+                    if (spIdx >= splitIdx) started = true;
+                  }
+                }
+                if (started) filteredPath.push(new gm.LatLng(sp.lat, sp.lng));
+              }
+              if (filteredPath.length >= 2) {
+                polylines.push(new gm.Polyline({
+                  path: filteredPath, strokeColor: seg.color, strokeOpacity: 0.9,
+                  strokeWeight: 7, map: map, clickable: false, zIndex: 8,
+                }));
+              }
+            });
+          } else {
+            // No segments — blue remaining
+            var remPath = [new gm.LatLng(navPt.lat, navPt.lng)];
+            for (var ri = splitIdx; ri < sel.path.length; ri++) {
+              remPath.push(new gm.LatLng(sel.path[ri].lat, sel.path[ri].lng));
+            }
+            polylines.push(new gm.Polyline({
+              path: remPath, strokeColor: '#4285F4', strokeOpacity: 0.85,
+              strokeWeight: 6, map: map, clickable: false, zIndex: 8,
+            }));
+          }
         } else {
-          var selPath = sel.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
-          polylines.push(new gm.Polyline({
-            path: selPath, strokeColor: '#4285F4', strokeOpacity: 0.85,
-            strokeWeight: 6, map: map, clickable: false,
-          }));
+          // Not navigating — normal rendering
+          if (data.segments && data.segments.length > 0) {
+            data.segments.forEach(function(seg) {
+              var segPath = seg.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
+              polylines.push(new gm.Polyline({
+                path: segPath, strokeColor: seg.color, strokeOpacity: 0.9,
+                strokeWeight: 7, map: map, clickable: false,
+              }));
+            });
+          } else {
+            var selPath = sel.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
+            polylines.push(new gm.Polyline({
+              path: selPath, strokeColor: '#4285F4', strokeOpacity: 0.85,
+              strokeWeight: 6, map: map, clickable: false,
+            }));
+          }
         }
         sel.path.forEach(function(p) { bounds.extend(new gm.LatLng(p.lat, p.lng)); });
         hasBounds = true;
@@ -233,7 +302,7 @@ const buildMapHtml = (apiKey: string) => `
       });
 
       // Fit bounds only when geography changed – with padding for phone UI
-      if (data.fitBounds && hasBounds) {
+      if (data.fitBounds && hasBounds && !data.navLocation) {
         map.fitBounds(bounds, { top: 80, bottom: 120, left: 20, right: 20 });
         gm.event.addListenerOnce(map, 'idle', function() {
           if (map.getZoom() > 16) map.setZoom(16);
@@ -259,8 +328,15 @@ const buildMapHtml = (apiKey: string) => `
           icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg),
                   scaledSize: new gm.Size(36,36), anchor: new gm.Point(18,18) },
         });
+        // Navigation camera: 3D tilt, heading rotation, close zoom
         map.panTo(new gm.LatLng(data.navLocation.lat, data.navLocation.lng));
-        if (map.getZoom() < 17) map.setZoom(17);
+        if (map.setTilt) map.setTilt(45);
+        if (map.setHeading) map.setHeading(heading);
+        if (map.getZoom() < 18) map.setZoom(18);
+      } else {
+        // Reset camera when not navigating
+        if (map.getTilt && map.getTilt() !== 0 && map.setTilt) map.setTilt(0);
+        if (map.getHeading && map.getHeading() !== 0 && map.setHeading) map.setHeading(0);
       }
     }
   </script>
