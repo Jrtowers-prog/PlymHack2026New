@@ -548,3 +548,253 @@ out body geom qt;
           }
           continue;
         }
+
+        // Bus stop / public transport nodes
+        if (
+          el.type === 'node' &&
+          (el.tags?.highway === 'bus_stop' ||
+           el.tags?.amenity === 'bus_station' ||
+           el.tags?.public_transport === 'stop_position' ||
+           el.tags?.public_transport === 'platform')
+        ) {
+          const coord: LatLng = { latitude: el.lat, longitude: el.lon };
+          // Only keep bus stops within 100 m of the route
+          if (distanceToPath(coord, path) <= 100) {
+            if (busStops.length < MAX_BUS_MARKERS) {
+              const name = el.tags?.name ?? 'Bus stop';
+              busStops.push({
+                id: `bus-${el.id}`,
+                kind: 'bus_stop',
+                coordinate: coord,
+                label: name,
+              });
+            }
+          }
+          continue;
+        }
+
+        // Highway ways – only include roads that touch/overlap the selected route
+        if (el.type === 'way' && el.tags?.highway && el.geometry?.length >= 2) {
+          const highway: string = el.tags.highway;
+          const litVal: string = el.tags.lit ?? '';
+          const lit: 'yes' | 'no' | 'unknown' =
+            litVal === 'yes' || litVal === 'night' ? 'yes' :
+            litVal === 'no' || litVal === 'disused' ? 'no' : 'unknown';
+
+          const coords: LatLng[] = (el.geometry as Array<{ lat: number; lon: number }>).map(
+            (n) => ({ latitude: n.lat, longitude: n.lon }),
+          );
+
+          // Check if any point on this road is within 40 m of the route
+          const nearRoute = coords.some((c) => distanceToPath(c, path) <= 40);
+          if (!nearRoute) continue;
+
+          if (lit === 'yes') litCount++;
+          else if (lit === 'no') unlitCount++;
+
+          if (overlays.length < MAX_ROAD_OVERLAYS) {
+            overlays.push({
+              id: `road-${el.id}`,
+              coordinates: coords,
+              color: roadColor(highway, lit),
+              roadType: highway,
+              name: el.tags.name,
+              lit,
+            });
+          }
+        }
+      }
+
+      return { overlays, lights, busStops, litCount, unlitCount };
+    }; // end doFetch
+
+    // Execute with dedup — only one in-flight fetch per bbox
+    const promise = doFetch();
+    pendingRoads.set(bk, promise);
+
+    try {
+      const result = await promise;
+      roadsCache.set(bk, result);
+      return result;
+    } finally {
+      pendingRoads.delete(bk);
+    }
+  } catch (e) {
+    console.warn('[SafetyMap] roads fetch failed', e);
+    return { overlays: [], lights: [], busStops: [], litCount: 0, unlitCount: 0 };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 3. Fetch open places  → SafetyMarker[]  (via Overpass / OpenStreetMap)
+// ---------------------------------------------------------------------------
+
+const MAX_SHOP_MARKERS = 200;
+
+/**
+ * Fetch places with human activity (shops, cafés, restaurants, etc.) along the
+ * route using Overpass (OpenStreetMap). Completely FREE — no Google API needed.
+ *
+ * Uses the shared nearbyCache module so results are de-duplicated across
+ * safetyMapData.ts and safety.ts — no double API calls for the same area.
+ */
+const fetchOpenPlaceMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
+  try {
+    const b = bbox(simplify(path), 60);
+    if (!b) return [];
+
+    // Sample up to 3 points along the route and fetch ALL in parallel
+    const samplePoints: LatLng[] = [path[0]];
+    if (path.length > 4) {
+      samplePoints.push(path[Math.floor(path.length / 3)]);
+      samplePoints.push(path[Math.floor((path.length * 2) / 3)]);
+    }
+
+    const allResults = await Promise.all(
+      samplePoints.map((center) =>
+        fetchNearbyPlacesCached(center.latitude, center.longitude, 300).catch(() => []),
+      ),
+    );
+
+    const markers: SafetyMarker[] = [];
+    const seen = new Set<string>();
+
+    for (const results of allResults) {
+      for (const place of results) {
+        if (!place.location || !place.place_id) continue;
+        if (seen.has(place.place_id)) continue;
+        seen.add(place.place_id);
+
+        const coord: LatLng = {
+          latitude: place.location.lat,
+          longitude: place.location.lng,
+        };
+
+        // Only keep places within 80m of the actual route polyline
+        if (distanceToPath(coord, path) > 80) continue;
+
+        markers.push({
+          id: `shop-${place.place_id}`,
+          kind: 'shop',
+          coordinate: coord,
+          label: `${place.name} (✓ Open)`,
+        });
+
+        if (markers.length >= MAX_SHOP_MARKERS) break;
+      }
+      if (markers.length >= MAX_SHOP_MARKERS) break;
+    }
+
+    return markers;
+  } catch (e) {
+    console.warn('[SafetyMap] open places fetch failed', e);
+    return [];
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Main entry – fetch everything in parallel (with result cache)
+// ---------------------------------------------------------------------------
+
+
+// ---------------------------------------------------------------------------
+// Generate safety-coloured route segments
+// ---------------------------------------------------------------------------
+
+/**
+ * Split the route path into segments, each coloured by local danger.
+ * For each chunk (~50 m) we check:
+ *   • nearby crimes (within 50 m)
+ *   • nearby street lights (within 25 m)
+ *   • road type the user is on (main road vs footpath)
+ * These produce a local 0-1 score mapped to green→amber→red.
+ */
+const generateRouteSegments = (
+  path: LatLng[],
+  crimes: SafetyMarker[],
+  lights: SafetyMarker[],
+  overlays: RoadOverlay[],
+  busStops: SafetyMarker[],
+): RouteSegment[] => {
+  if (path.length < 2) return [];
+
+  // Build simple lookup arrays once
+  const crimeCoords = crimes.map((c) => c.coordinate);
+  const lightCoords = lights.filter((l) => l.kind === 'light').map((l) => l.coordinate);
+  const busCoords = busStops.map((b) => b.coordinate);
+
+  // Determine segment boundaries (~50 m chunks along path)
+  const CHUNK_M = 50;
+  const chunks: { start: number; end: number }[] = [];
+  let acc = 0;
+  let chunkStart = 0;
+  for (let i = 1; i < path.length; i++) {
+    acc += haversine(path[i - 1], path[i]);
+    if (acc >= CHUNK_M || i === path.length - 1) {
+      chunks.push({ start: chunkStart, end: i });
+      chunkStart = i;
+      acc = 0;
+    }
+  }
+  if (chunks.length === 0) {
+    chunks.push({ start: 0, end: path.length - 1 });
+  }
+
+  const segments: RouteSegment[] = [];
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const { start, end } = chunks[ci];
+    const segPath = path.slice(start, end + 1);
+    if (segPath.length < 2) continue;
+
+    // Mid-point of the chunk for proximity checks
+    const midIdx = Math.floor((start + end) / 2);
+    const mid = path[midIdx];
+
+    // Count crimes within 50 m of this chunk's midpoint
+    let nearCrimes = 0;
+    for (const c of crimeCoords) {
+      if (haversine(mid, c) <= 50) nearCrimes++;
+    }
+
+    // Count lights within 25 m of this chunk's midpoint
+    let nearLights = 0;
+    for (const l of lightCoords) {
+      if (haversine(mid, l) <= 25) nearLights++;
+    }
+
+    // Count bus stops within 100 m of this chunk's midpoint
+    let nearBusStops = 0;
+    for (const bs of busCoords) {
+      if (haversine(mid, bs) <= 100) nearBusStops++;
+    }
+
+    // Determine road type at midpoint
+    let bestOverlay: RoadOverlay | null = null;
+    let bestDist = 30;
+    for (const o of overlays) {
+      for (const c of o.coordinates) {
+        const d = haversine(mid, c);
+        if (d < bestDist) { bestDist = d; bestOverlay = o; if (d < 10) break; }
+      }
+      if (bestDist < 10) break;
+    }
+
+    const isMainRoad = bestOverlay ? MAIN_ROAD_TYPES.has(bestOverlay.roadType) : false;
+    const isPath = bestOverlay ? PATH_ROAD_TYPES.has(bestOverlay.roadType) : false;
+    const isLit = bestOverlay?.lit === 'yes';
+
+    // Compute local safety factor 0 (dangerous) → 1 (safe)
+    // Crime factor: 0 crimes → 1.0, 3+ crimes → 0.0
+    const crimeFactor = Math.max(0, 1 - nearCrimes / 3);
+    // Light factor: 0 lights → 0.2, 2+ lights → 1.0
+    const lightFactor = Math.min(1, 0.2 + nearLights * 0.4);
+    // Road factor: main road → 1.0, residential → 0.7, path → 0.2
+    const roadFactor = isMainRoad ? 1.0 : isPath ? 0.2 : 0.6;
+    // Lit bonus
+    const litBonus = isLit ? 0.15 : 0;
+    // Bus stop bonus: nearby bus stops = well-travelled area
+    const busFactor = Math.min(1, nearBusStops * 0.5); // 0 stops → 0, 2+ → 1
+
+    const local = Math.min(1, crimeFactor * 0.35 + lightFactor * 0.25 + roadFactor * 0.18 + busFactor * 0.12 + litBonus + 0.10);
+
