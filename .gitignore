@@ -3,6 +3,12 @@
 # dependencies
 node_modules/
 
+# Environment secrets — NEVER commit API keys
+.env
+.env.local
+.env.*.local
+backend/.env
+
 # Expo
 .expo/
 dist/
