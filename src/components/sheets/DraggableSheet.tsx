@@ -138,3 +138,59 @@ export function DraggableSheet({
         <ScrollView
           {...bodyPanResponder.panHandlers}
           style={styles.scroll}
+          contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 24 }]}
+          showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={handleSheetScroll}
+          bounces={false}
+          nestedScrollEnabled={Platform.OS === 'android'}
+        >
+          {children}
+        </ScrollView>
+      </View>
+    </Animated.View>
+  );
+}
+
+const styles = StyleSheet.create({
+  sheet: {
+    position: 'absolute',
+    bottom: 0,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 900,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)', userSelect: 'none', cursor: 'default' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -4 },
+          shadowOpacity: 0.15,
+          shadowRadius: 12,
+        }),
+    elevation: 12,
+    zIndex: 12,
+    overflow: 'hidden',
+  } as any,
+  dragZone: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 4,
+    ...(Platform.OS === 'web' ? { cursor: 'grab' } : {}),
+  } as any,
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#d0d5dd',
+  },
+  scroll: {
+    flex: 1,
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingBottom: 80,
+  },
+});
