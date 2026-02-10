@@ -208,3 +208,103 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     if (lat && lng) placeNodes.push({ lat, lng });
   }
 
+  // ── 7. Build safety-weighted graph (with coverage maps) ─────────────
+  console.log(`[safe-routes] 🏗️  Building graph + coverage maps...`);
+  const t1 = Date.now();
+  const { osmNodes, edges, adjacency, nodeGrid, weights, cctvNodes, transitNodes, nodeDegree } = buildGraph(
+    allData.roads, allData.lights, allData.cctv, allData.places, allData.transit,
+    crimes, bbox,
+  );
+  const graphTime = Date.now() - t1;
+  console.log(`[safe-routes] 📊 Graph: ${osmNodes.size} nodes, ${edges.length} edges (built in ${graphTime}ms)`);
+
+  if (edges.length === 0) {
+    throw Object.assign(new Error('No walking routes found'), { statusCode: 404, code: 'NO_WALKING_NETWORK' });
+  }
+
+  // ── 8. Find nearest graph nodes (O(1) via spatial grid) ─────────────
+  const startNode = findNearestNode(nodeGrid, adjacency, oLatV, oLngV);
+  const endNode = findNearestNode(nodeGrid, adjacency, dLatV, dLngV);
+
+  if (!startNode || !endNode) {
+    const which = !startNode ? 'origin' : 'destination';
+    throw Object.assign(new Error(`No walkable road near ${which}`), { statusCode: 404, code: 'NO_NEARBY_ROAD' });
+  }
+
+  // ── 9. Find 3–5 safest routes (A* — much faster than Dijkstra) ─────
+  console.log(`[safe-routes] 🔎 A* pathfinding (start=${startNode}, end=${endNode})...`);
+  const t2 = Date.now();
+  const maxRouteDist = straightLineDist * 2.5;
+  const rawRoutes = findKSafestRoutes(
+    osmNodes, edges, adjacency, startNode, endNode, maxRouteDist, 5,
+  );
+  const pathfindTime = Date.now() - t2;
+  console.log(`[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`);
+
+  if (rawRoutes.length === 0) {
+    throw Object.assign(new Error('No route found'), { statusCode: 404, code: 'NO_ROUTE_FOUND' });
+  }
+
+  // ── 10. Build response ────────────────────────────────────────────────
+  const routes = rawRoutes.map((route, idx) => {
+    const polyline = routeToPolyline(osmNodes, route.path);
+    const breakdown = routeSafetyBreakdown(edges, route.edges, weights);
+    const score100 = Math.round(breakdown.overall * 100);
+    const { label, color } = safetyLabel(score100);
+    const durationSec = Math.round(route.totalDist / WALKING_SPEED_MPS);
+
+    // Build enriched segments with all metadata
+    const segments = [];
+    let deadEndCount = 0;
+    let sidewalkDist = 0;
+    let unpavedDist = 0;
+    let transitStopCount = 0;
+    let cctvNearCount = 0;
+    const roadNameChanges = [];
+    let lastRoadName = '';
+    let cumulativeDist = 0;
+
+    for (let i = 0; i < route.edges.length; i++) {
+      const edge = edges[route.edges[i]];
+      const nodeA = osmNodes.get(route.path[i]);
+      const nodeB = osmNodes.get(route.path[i + 1]);
+      if (!nodeA || !nodeB) continue;
+
+      // Track stats
+      if (edge.isDeadEnd) deadEndCount++;
+      if (edge.hasSidewalk) sidewalkDist += edge.distance;
+      if (edge.surfacePenalty > 0) unpavedDist += edge.distance;
+      transitStopCount += edge.nearbyTransitCount;
+      cctvNearCount += edge.nearbyCctvCount;
+
+      // Track road name changes for chart annotations
+      const rn = edge.roadName || '';
+      if (rn && rn !== lastRoadName) {
+        roadNameChanges.push({
+          segmentIndex: i,
+          name: rn,
+          distance: Math.round(cumulativeDist),
+        });
+        lastRoadName = rn;
+      }
+      cumulativeDist += edge.distance;
+
+      segments.push({
+        start: { lat: nodeA.lat, lng: nodeA.lng },
+        end: { lat: nodeB.lat, lng: nodeB.lng },
+        safetyScore: edge.safetyScore,
+        color: segmentColor(edge.safetyScore),
+        highway: edge.highway,
+        roadName: edge.roadName,
+        isDeadEnd: edge.isDeadEnd,
+        hasSidewalk: edge.hasSidewalk,
+        surfaceType: edge.surfaceType,
+        lightScore: edge.lightScore,
+        crimeScore: edge.crimeScore,
+        cctvScore: edge.cctvScore,
+        placeScore: edge.placeScore,
+        trafficScore: edge.trafficScore,
+        distance: Math.round(edge.distance),
+      });
+    }
+
