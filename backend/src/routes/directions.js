@@ -73,3 +73,48 @@ router.get('/', async (req, res) => {
         // Insert waypoints into coordinate string
         const coords = url.split('?')[0];
         const base = coords.substring(0, coords.lastIndexOf(';'));
+        const dest = coords.substring(coords.lastIndexOf(';'));
+        url = `${base};${waypointsFormatted}${dest}?alternatives=true&overview=full&geometries=polyline&steps=false`;
+      }
+    }
+
+    directionsApiCalls++;
+    console.log(`[directions] 🌐 OSRM API call #${directionsApiCalls} → ${oLat.value},${oLng.value} → ${dLat.value},${dLng.value} mode=${mode} profile=${profile}${req.query.waypoints ? ' +waypoints' : ''}`);
+    
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.code !== 'Ok') {
+      console.error(`[directions] ❌ OSRM error: code=${data.code}, message="${data.message || 'none'}"`);
+      return res.status(400).json({ 
+        status: 'ZERO_RESULTS',
+        error_message: data.message || 'No route found'
+      });
+    }
+
+    // Transform OSRM response to match expected format (Google Directions style)
+    const routes = (data.routes || []).slice(0, 5).map((route, idx) => ({
+      legs: [{
+        distance: { text: `${(route.distance / 1000).toFixed(1)} km`, value: route.distance },
+        duration: { text: `${Math.round(route.duration / 60)} mins`, value: Math.round(route.duration) },
+        end_location: { lat: dLat.value, lng: dLng.value },
+        start_location: { lat: oLat.value, lng: oLng.value },
+        steps: [],
+      }],
+      overview_polyline: { points: route.geometry },
+      summary: `Route ${idx + 1}`,
+    }));
+
+    console.log(`[directions] 📦 Response: ${routes.length} routes, primary: ${(routes[0]?.legs[0]?.distance?.text || 'N/A')}`);
+
+    res.json({
+      status: 'OK',
+      routes,
+    });
+  } catch (err) {
+    console.error('[directions] Error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router;
