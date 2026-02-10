@@ -328,3 +328,113 @@ export const fetchSmartDirections = async (
       directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(carBase)),
       directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(walkBase)),
     ]);
+    const carRoutes = carData.status === 'OK' ? parseDirectionsResponse(carData, 0) : [];
+    const walkRoutes = walkData.status === 'OK' ? parseDirectionsResponse(walkData, 10) : [];
+    console.log(`[🧠 smartDirections] Got ${carRoutes.length} car + ${walkRoutes.length} walking routes`);
+
+    if (carRoutes.length === 0 && walkRoutes.length === 0) {
+      throw new AppError('directions_error', 'No routes found');
+    }
+
+    // Convert to smart routes
+    const smartRoutes: SmartRoute[] = [];
+
+    // Add car routes with walking time calculation
+    carRoutes.forEach((route, idx) => {
+      const walkingTime = calculateWalkingTime(route.distanceMeters);
+      smartRoutes.push({
+        ...route,
+        id: `car-route-${idx}`,
+        mode: 'car',
+        carETASeconds: route.durationSeconds,
+        walkingETASeconds: walkingTime,
+        reason: 'car_route',
+      });
+    });
+
+    // Add walking routes
+    walkRoutes.forEach((route, idx) => {
+      smartRoutes.push({
+        ...route,
+        id: `walk-route-${idx}`,
+        mode: 'walking',
+        carETASeconds: 0, // N/A for walking
+        walkingETASeconds: route.durationSeconds,
+        reason: 'walking_route',
+      });
+    });
+
+    // Smart comparison logic
+    if (carRoutes.length > 0 && walkRoutes.length > 0) {
+      const bestCar = carRoutes[0];
+      const bestWalk = walkRoutes[0];
+      const carWalkTime = calculateWalkingTime(bestCar.distanceMeters);
+      const walkTime = bestWalk.durationSeconds;
+
+      console.log(
+        `[smartDirections] 🚗 Car distance: ${(bestCar.distanceMeters / 1000).toFixed(1)}km (${(carWalkTime / 60).toFixed(0)}min if walked) vs ` +
+        `🚶 Walking: ${(bestWalk.distanceMeters / 1000).toFixed(1)}km (${(walkTime / 60).toFixed(0)}min actual)`
+      );
+
+      // For a WALKING APP: Walking routes are always primary
+      // Car routes shown only as secondary options for reference
+      console.log(`[smartDirections] 🚶 WALKING APP MODE: Prioritizing actual walking routes`);
+      return [
+        ...smartRoutes.filter((r) => r.mode === 'walking'),
+        ...smartRoutes.filter((r) => r.mode === 'car'),
+      ];
+    }
+
+    // Default: sort by walking time (best first)
+    smartRoutes.sort((a, b) => a.walkingETASeconds - b.walkingETASeconds);
+    console.log(`[🧠 smartDirections] ✅ Returning ${smartRoutes.length} smart routes (sorted by walking time)`);
+    smartRoutes.forEach((r, i) => {
+      console.log(`  Route ${i + 1}: ${r.mode.toUpperCase()} - 🚶 ${(r.walkingETASeconds / 60).toFixed(0)}min walk, ${(r.distanceMeters / 1000).toFixed(1)}km`);
+    });
+    
+    // For a walking app, always prioritize actual walking routes first
+    // Only include car routes as alternatives if user explicitly needs them
+    const walkingFirst = [
+      ...smartRoutes.filter((r) => r.mode === 'walking'),
+      ...smartRoutes.filter((r) => r.mode === 'car'),
+    ];
+    
+    return walkingFirst;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('smart_directions_error', 'Failed to fetch smart directions', error);
+  }
+};
+export const fetchDirections = async (
+  origin: LatLng,
+  destination: LatLng
+): Promise<DirectionsRoute[]> => {
+  // Check directions cache first
+  const cacheKey = directionsKey(origin, destination);
+  const cachedResult = directionsCache.get(cacheKey);
+  if (cachedResult && Date.now() - cachedResult.timestamp < DIRECTIONS_CACHE_TTL) {
+    console.log(`[OSM] ✅ Directions CACHE HIT (${cachedResult.data.length} routes)`);
+    return cachedResult.data;
+  }
+
+  const base = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=walking`;
+
+  // 1. Primary request – gets up to ~3 alternatives (rate limited)
+  const baseData = await directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(base));
+  if (baseData.status !== 'OK') {
+    throw new AppError(
+        'osm_directions_error',
+        baseData.error_message ?? `OSM Directions failed: ${baseData.status}`
+    );
+  }
+  const baseRoutes = parseDirectionsResponse(baseData, 0);
+
+  // 2. Offset waypoints AND driving-discovery IN PARALLEL
+  //    All calls are free (OSRM) — maximise throughput
+  const heaviness = pathHeaviness(baseRoutes);
+  const offsetPct = 0.03 + heaviness * 0.07; // 3 %–10 %, gentle to avoid loops
+  const offsets = generateOffsetWaypoints(origin, destination, offsetPct).slice(0, 2);
+
+  // Fire offset requests + driving request concurrently
+  const drivingUrl = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=driving`;
+
