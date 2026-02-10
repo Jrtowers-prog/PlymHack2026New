@@ -238,3 +238,133 @@ export function useHomeScreen() {
   const nav = useNavigation(selectedRoute);
   const isNavActive = nav.state === 'navigating' || nav.state === 'off-route';
 
+  // ── AI Explanation ──
+  const ai = useAIExplanation(safetyResult, routes, routeScores, bestRouteId);
+
+  // ── Map interaction handlers ──
+  const resolvePin = useCallback(async (coordinate: LatLng): Promise<PlaceDetails> => {
+    const fallback: PlaceDetails = {
+      placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
+      name: 'Dropped pin',
+      location: coordinate,
+    };
+    const resolved = await reverseGeocode(coordinate);
+    return resolved ?? fallback;
+  }, []);
+
+  const handleMapPress = useCallback(
+    async (coordinate: LatLng) => {
+      Keyboard.dismiss();
+      if (isNavActive) return;
+
+      if (pinMode === 'origin') {
+        setIsUsingCurrentLocation(false);
+        originSearch.clear();
+        const pin = await resolvePin(coordinate);
+        setManualOrigin(pin);
+        setPinMode(null);
+        setSelectedRouteId(null);
+      } else if (pinMode === 'destination') {
+        destSearch.clear();
+        const pin = await resolvePin(coordinate);
+        setManualDest(pin);
+        setPinMode(null);
+        setSelectedRouteId(null);
+      }
+    },
+    [isNavActive, pinMode, originSearch, destSearch, resolvePin],
+  );
+
+  const handleMapLongPress = useCallback(
+    async (coordinate: LatLng) => {
+      Keyboard.dismiss();
+      if (isNavActive) return;
+      const pin = await resolvePin(coordinate);
+      setManualDest(pin);
+      destSearch.clear();
+      setSelectedRouteId(null);
+    },
+    [isNavActive, destSearch, resolvePin],
+  );
+
+  const handleAcceptOnboarding = useCallback(async () => {
+    await accept();
+    setShowOnboarding(false);
+    refreshLocation();
+  }, [accept, refreshLocation]);
+
+  const handlePanTo = useCallback((loc: LatLng) => {
+    setMapPanTo({ location: loc, key: Date.now() });
+  }, []);
+
+  const clearSelectedRoute = useCallback(() => {
+    setSelectedRouteId(null);
+  }, []);
+
+  return {
+    // Onboarding
+    showOnboarding,
+    setShowOnboarding,
+    onboardingError,
+    handleAcceptOnboarding,
+
+    // Location
+    location,
+
+    // Origin
+    isUsingCurrentLocation,
+    setIsUsingCurrentLocation,
+    originSearch,
+    manualOrigin,
+    setManualOrigin,
+
+    // Destination
+    destSearch,
+    manualDest,
+    setManualDest,
+
+    // Routing
+    routes,
+    safeRoutes: safeRoutes as SafeRoute[],
+    selectedRouteId,
+    setSelectedRouteId,
+    selectedRoute,
+    selectedSafeRoute,
+    directionsStatus,
+    directionsError,
+    outOfRange,
+    outOfRangeMessage,
+
+    // Map
+    effectiveOrigin,
+    effectiveDestination,
+    mapPanTo,
+    mapType,
+    setMapType,
+    pinMode,
+    setPinMode,
+    handleMapPress,
+    handleMapLongPress,
+    handlePanTo,
+    clearSelectedRoute,
+
+    // Safety
+    safetyResult,
+    poiMarkers,
+    routeSegments,
+    roadLabels,
+
+    // Sheet
+    sheetHeight,
+    sheetHeightRef,
+
+    // Navigation
+    nav,
+    isNavActive,
+
+    // AI
+    ai,
+    showAIModal,
+    setShowAIModal,
+  };
+}
