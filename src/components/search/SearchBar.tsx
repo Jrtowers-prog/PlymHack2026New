@@ -128,3 +128,212 @@ export function SearchBar({
 
   return (
     <ScrollView
+      style={[styles.container, { top: topInset + 8 }]}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="always"
+      scrollEnabled={false}
+      pointerEvents="box-none"
+    >
+      <View style={styles.card}>
+        {/* Logo */}
+        <View style={styles.logoHeader}>
+          <Text style={styles.logoText}>SAFE NIGHT HOME</Text>
+        </View>
+
+        {/* Origin Input */}
+        <View style={styles.inputRow}>
+          <View style={styles.inputIconWrap}>
+            <View style={styles.iconDot} />
+            <View style={styles.iconConnector} />
+          </View>
+          <Pressable
+            style={[styles.inputFieldWrap, focusedField === 'origin' && styles.inputFieldWrapFocused]}
+            onPress={() => {
+              if (!isUsingCurrentLocation) originInputRef.current?.focus();
+            }}
+          >
+            {isUsingCurrentLocation ? (
+              <Pressable
+                style={[styles.inputField, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+                onPress={() => setIsUsingCurrentLocation(false)}
+                accessibilityRole="button"
+              >
+                <Ionicons name={location ? 'navigate' : 'hourglass-outline'} size={16} color="#1570ef" />
+                <Text style={styles.locationDisplayText}>
+                  {location ? 'Your location' : 'Getting location...'}
+                </Text>
+              </Pressable>
+            ) : (
+              <TextInput
+                ref={originInputRef}
+                value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
+                onChangeText={(t: string) => {
+                  setManualOrigin(null);
+                  originSearch.setQuery(t);
+                  onClearRoute();
+                }}
+                placeholder="Starting point"
+                placeholderTextColor="#98a2b3"
+                accessibilityLabel="Starting point"
+                autoCorrect={false}
+                style={styles.inputField}
+                onFocus={() => { cancelBlurTimer(); setFocusedFieldState('origin'); }}
+                onBlur={handleBlur}
+              />
+            )}
+            <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
+              {originSearch.status === 'searching' && <ActivityIndicator size="small" color="#1570ef" />}
+              {(originSearch.status === 'found' || manualOrigin) && (
+                <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+              )}
+              <Pressable
+                style={styles.mapPinButton}
+                onPress={() => setPinMode(pinMode === 'origin' ? null : 'origin')}
+                accessibilityRole="button"
+                accessibilityLabel="Pick on map"
+              >
+                <Ionicons name="location-outline" size={20} color={pinMode === 'origin' ? '#1570ef' : '#667085'} />
+              </Pressable>
+              {!isUsingCurrentLocation && (
+                <Pressable
+                  style={styles.mapPinButton}
+                  onPress={() => {
+                    setIsUsingCurrentLocation(true);
+                    setManualOrigin(null);
+                    originSearch.clear();
+                    if (location) onPanTo(location);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Use current location"
+                >
+                  <Ionicons name="locate-outline" size={20} color="#667085" />
+                </Pressable>
+              )}
+            </View>
+          </Pressable>
+        </View>
+
+        {/* Divider */}
+        <View style={styles.inputDivider} />
+
+        {/* Destination Input */}
+        <View style={styles.inputRow}>
+          <View style={styles.inputIconWrap}>
+            <View style={styles.iconPin} />
+          </View>
+          <Pressable
+            style={[styles.inputFieldWrap, focusedField === 'destination' && styles.inputFieldWrapFocused]}
+            onPress={() => destInputRef.current?.focus()}
+          >
+            <TextInput
+              ref={destInputRef}
+              value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
+              onChangeText={(text: string) => {
+                setManualDest(null);
+                destSearch.setQuery(text);
+                onClearRoute();
+              }}
+              placeholder="Where to?"
+              placeholderTextColor="#98a2b3"
+              accessibilityLabel="Destination"
+              autoCorrect={false}
+              style={styles.inputField}
+              onFocus={() => { cancelBlurTimer(); setFocusedFieldState('destination'); }}
+              onBlur={handleBlur}
+            />
+            <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
+              {destSearch.status === 'searching' && <ActivityIndicator size="small" color="#1570ef" />}
+              {(destSearch.status === 'found' || manualDest) && (
+                <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+              )}
+              <Pressable
+                style={styles.mapPinButton}
+                onPress={() => setPinMode(pinMode === 'destination' ? null : 'destination')}
+                accessibilityRole="button"
+                accessibilityLabel="Pick on map"
+              >
+                <Ionicons name="location-outline" size={20} color={pinMode === 'destination' ? '#d92d20' : '#667085'} />
+              </Pressable>
+              {(destSearch.place || manualDest) && (
+                <Pressable
+                  style={styles.mapPinButton}
+                  onPress={() => {
+                    destSearch.clear();
+                    setManualDest(null);
+                    onClearRoute();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear destination"
+                >
+                  <Ionicons name="close-circle-outline" size={20} color="#98a2b3" />
+                </Pressable>
+              )}
+            </View>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Predictions Dropdown */}
+      {activePredictions.length > 0 && (
+        <View style={styles.predictionsDropdown}>
+          {activePredictions.map((pred, idx) => (
+            <Pressable
+              key={pred.placeId}
+              style={({ pressed }: { pressed: boolean }) => [
+                styles.predictionItem,
+                idx === 0 && styles.predictionItemFirst,
+                idx === activePredictions.length - 1 && styles.predictionItemLast,
+                pressed && styles.predictionItemPressed,
+              ]}
+              onPressIn={() => {
+                suppressBlurRef.current = true;
+                cancelBlurTimer();
+              }}
+              onPress={() => handlePredictionSelect(pred)}
+            >
+              <View style={styles.predictionIcon}>
+                <Ionicons name="location-outline" size={18} color="#667085" />
+              </View>
+              <View style={styles.predictionText}>
+                <Text style={styles.predictionPrimary} numberOfLines={1}>
+                  {pred.primaryText}
+                </Text>
+                {pred.secondaryText ? (
+                  <Text style={styles.predictionSecondary} numberOfLines={1}>
+                    {pred.secondaryText}
+                  </Text>
+                ) : null}
+              </View>
+              {idx === 0 && (
+                <View style={styles.predictionBadge}>
+                  <Text style={styles.predictionBadgeText}>Top</Text>
+                </View>
+              )}
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+// We need React for the useState inside the component
+import React from 'react';
+
+// ── Styles ──────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    top: 12,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    elevation: 10,
+  },
+  content: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  card: {
+    backgroundColor: '#ffffff',
