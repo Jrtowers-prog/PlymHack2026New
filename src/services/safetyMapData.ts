@@ -248,3 +248,303 @@ const fetchWithTimeout = async <T>(
       const label = url.includes('police') ? 'Police API' : url.split('?')[0].slice(-40);
       console.log(`[SafetyMap] 🌐 API call → ${label}`);
       const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new AppError('safety_http', `HTTP ${res.status}`);
+      return (await res.json()) as T;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof AppError) throw err;
+      if (err instanceof Error && err.name === 'AbortError')
+        throw new AppError('safety_timeout', 'Request timed out');
+      throw new AppError('safety_network', 'Network error', err);
+    }
+  }
+  throw new AppError('safety_http', 'Max retries exceeded');
+};
+
+// ---------------------------------------------------------------------------
+// Shared roads+lights cache (keyed by rounded bbox, shared across routes)
+// ---------------------------------------------------------------------------
+type RoadsResult = { overlays: RoadOverlay[]; lights: SafetyMarker[]; busStops: SafetyMarker[]; litCount: number; unlitCount: number };
+const roadsCache = new Map<string, RoadsResult>();
+const pendingRoads = new Map<string, Promise<RoadsResult>>();
+
+const bboxKey = (b: BBox): string =>
+  `${b.minLat.toFixed(4)},${b.minLng.toFixed(4)},${b.maxLat.toFixed(4)},${b.maxLng.toFixed(4)}`;
+
+// ---------------------------------------------------------------------------
+// Geo helpers
+// ---------------------------------------------------------------------------
+
+const metersToLatDeg = (m: number) => m / 111_320;
+const metersToLonDeg = (m: number, lat: number) => {
+  const d = 111_320 * Math.cos((lat * Math.PI) / 180);
+  return d ? m / d : metersToLatDeg(m);
+};
+const metersBetweenLongitudes = (minLng: number, maxLng: number, lat: number) =>
+  Math.abs(maxLng - minLng) * 111_320 * Math.cos((lat * Math.PI) / 180);
+const metersBetweenLatitudes = (minLat: number, maxLat: number) =>
+  Math.abs(maxLat - minLat) * 111_320;
+
+/** Haversine distance in metres between two points. */
+const haversine = (a: LatLng, b: LatLng): number => {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+};
+
+/** Minimum distance (metres) from a point to the nearest segment of a polyline. */
+const distanceToPath = (point: LatLng, path: LatLng[]): number => {
+  let minDist = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    minDist = Math.min(minDist, distanceToSegment(point, path[i], path[i + 1]));
+    if (minDist < 1) return minDist; // close enough, skip the rest
+  }
+  return minDist;
+};
+
+/** Distance from point P to line segment AB (metres, approximate). */
+const distanceToSegment = (p: LatLng, a: LatLng, b: LatLng): number => {
+  const dAB = haversine(a, b);
+  if (dAB < 0.5) return haversine(p, a); // degenerate segment
+  // project p onto AB using flat-earth approximation (fine for <100m)
+  const dx = b.longitude - a.longitude;
+  const dy = b.latitude - a.latitude;
+  const px = p.longitude - a.longitude;
+  const py = p.latitude - a.latitude;
+  let t = (px * dx + py * dy) / (dx * dx + dy * dy);
+  t = Math.max(0, Math.min(1, t));
+  const proj: LatLng = {
+    latitude: a.latitude + t * dy,
+    longitude: a.longitude + t * dx,
+  };
+  return haversine(p, proj);
+};
+
+interface BBox { minLat: number; maxLat: number; minLng: number; maxLng: number }
+
+const bbox = (path: LatLng[], buffer: number): BBox | null => {
+  if (path.length === 0) return null;
+  let minLat = path[0].latitude, maxLat = minLat;
+  let minLng = path[0].longitude, maxLng = minLng;
+  for (const p of path) {
+    if (p.latitude < minLat) minLat = p.latitude;
+    if (p.latitude > maxLat) maxLat = p.latitude;
+    if (p.longitude < minLng) minLng = p.longitude;
+    if (p.longitude > maxLng) maxLng = p.longitude;
+  }
+  const mid = (minLat + maxLat) / 2;
+  const dLat = metersToLatDeg(buffer);
+  const dLng = metersToLonDeg(buffer, mid);
+  const bounds = {
+    minLat: minLat - dLat,
+    maxLat: maxLat + dLat,
+    minLng: minLng - dLng,
+    maxLng: maxLng + dLng,
+  };
+
+  const widthMeters = metersBetweenLongitudes(bounds.minLng, bounds.maxLng, mid);
+  const heightMeters = metersBetweenLatitudes(bounds.minLat, bounds.maxLat);
+
+  if (Math.max(widthMeters, heightMeters) > MAX_BBOX_METERS) {
+    return null;
+  }
+
+  return bounds;
+};
+
+/** Downsample a path to at most `max` points. */
+const simplify = (path: LatLng[], max = 50): LatLng[] => {
+  if (path.length <= max) return path;
+  const step = (path.length - 1) / (max - 1);
+  const out: LatLng[] = [];
+  for (let i = 0; i < max - 1; i++) out.push(path[Math.round(i * step)]);
+  out.push(path[path.length - 1]);
+  return out;
+};
+
+const polyStr = (b: BBox) =>
+  `${b.minLat},${b.minLng}:${b.minLat},${b.maxLng}:${b.maxLat},${b.maxLng}:${b.maxLat},${b.minLng}`;
+
+/** Return month strings from 2-months-ago backwards (police data lags ~2 months). */
+const recentMonths = (): string[] => {
+  const months: string[] = [];
+  for (let i = 2; i <= 4; i++) {
+    const d = new Date();
+    d.setMonth(d.getMonth() - i);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return months;
+};
+
+// ---------------------------------------------------------------------------
+// Road-type → colour (green = safe, red = dangerous)
+// ---------------------------------------------------------------------------
+
+const ROAD_TYPE_COLORS: Record<string, string> = {
+  // Safest (green shades)
+  primary:        '#22c55e',
+  secondary:      '#4ade80',
+  tertiary:       '#86efac',
+  living_street:  '#a7f3d0',
+  residential:    '#d1fae5',
+  // Middle (yellow-ish)
+  pedestrian:     '#fbbf24',
+  // Risky (orange → red)
+  footway:        '#fb923c',
+  path:           '#f97316',
+  steps:          '#ef4444',
+};
+
+const roadColor = (highway: string, lit: string): string => {
+  const base = ROAD_TYPE_COLORS[highway] ?? '#94a3b8';
+  // Darken unlit roads towards red
+  if (lit === 'no') return '#ef4444';
+  return base;
+};
+
+// ---------------------------------------------------------------------------
+// 1. Fetch crimes  → SafetyMarker[]
+// ---------------------------------------------------------------------------
+
+const fetchCrimeMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
+  try {
+    const b = bbox(simplify(path), 75);
+    if (!b) return [];
+    const poly = polyStr(b);
+
+    // Try several months – police data is usually ~2 months behind
+    let data: unknown = null;
+    for (const month of recentMonths()) {
+      try {
+        const url = `${POLICE_BASE_URL}/crimes-street/all-crime?poly=${encodeURIComponent(poly)}&date=${month}`;
+        data = await fetchWithTimeout(url, undefined, 8_000);
+        if (Array.isArray(data) && data.length > 0) break;
+      } catch { /* try next month */ }
+    }
+    if (!Array.isArray(data)) return [];
+
+    const seen = new Set<string>();
+    const markers: SafetyMarker[] = [];
+    for (const c of data as Array<{ category?: string; location?: { latitude?: string; longitude?: string } }>) {
+      const lat = Number(c.location?.latitude);
+      const lng = Number(c.location?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const coord: LatLng = { latitude: lat, longitude: lng };
+      // Only keep crimes within 50 m of the actual route
+      if (distanceToPath(coord, path) > 50) continue;
+      // de-dup by rounded coords (police API snaps to street centres)
+      const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      markers.push({
+        id: `crime-${markers.length}`,
+        kind: 'crime',
+        coordinate: coord,
+        label: c.category ?? 'crime',
+      });
+      if (markers.length >= MAX_CRIME_MARKERS) break;
+    }
+    return markers;
+  } catch (e) {
+    console.warn('[SafetyMap] crimes fetch failed', e);
+    return [];
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 2. Fetch roads + street-lights  → { roadOverlays, lightMarkers }
+// ---------------------------------------------------------------------------
+
+const fetchRoadsAndLights = async (
+  path: LatLng[],
+): Promise<RoadsResult> => {
+  try {
+    const b = bbox(simplify(path), 30);
+    if (!b) return { overlays: [], lights: [], busStops: [], litCount: 0, unlitCount: 0 };
+
+    // Check bbox-level cache — routes in the same area share the raw Overpass data
+    const bk = bboxKey(b);
+    const cachedRoads = roadsCache.get(bk);
+    if (cachedRoads) return cachedRoads;
+
+    // If another route is already fetching this bbox, wait for it
+    const pending = pendingRoads.get(bk);
+    if (pending) return pending;
+
+    const doFetch = async (): Promise<RoadsResult> => {
+      // Build a coordinate string for the Overpass "around" filter.
+      const routePts = simplify(path, 40);
+      const aroundCoords = routePts.map((p) => `${p.latitude},${p.longitude}`).join(',');
+      const LIGHT_RADIUS_M = 15;
+
+      const BUS_STOP_RADIUS_M = 80;
+
+      const query = `
+[out:json][timeout:12];
+(
+  way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary|primary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
+  node["highway"="street_lamp"](around:${LIGHT_RADIUS_M},${aroundCoords});
+  node["highway"="bus_stop"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
+  node["amenity"="bus_station"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
+  node["public_transport"~"^(stop_position|platform)$"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
+);
+out body geom qt;
+`;
+      const params = new URLSearchParams({ data: query });
+
+      let response: any;
+      try {
+        response = await queueOverpassRequest<any>(params.toString(), 10_000, 'roads+lights');
+      } catch {
+        // Fallback: smaller query, skip lights entirely
+        const fallback = `
+[out:json][timeout:8];
+way["highway"~"^(residential|primary|secondary|tertiary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
+out body geom qt;
+`;
+        response = await queueOverpassRequest<any>(
+          new URLSearchParams({ data: fallback }).toString(),
+          10_000,
+          'roads-fallback',
+        );
+      }
+
+      const overlays: RoadOverlay[] = [];
+      const lights: SafetyMarker[] = [];
+      const busStops: SafetyMarker[] = [];
+      const MAX_BUS_MARKERS = 100;
+      let litCount = 0;
+      let unlitCount = 0;
+
+      for (const el of (response?.elements ?? []) as any[]) {
+        // Street-lamp nodes – double-check proximity to the path
+        if (el.type === 'node' && el.tags?.highway === 'street_lamp') {
+          const coord: LatLng = { latitude: el.lat, longitude: el.lon };
+          // Only keep lights within 20 m of the actual route polyline
+          if (distanceToPath(coord, path) <= 20) {
+            if (lights.length < MAX_LIGHT_MARKERS) {
+              // Build a descriptive label from available lamp tags
+              const method = el.tags?.['light:method'] ?? el.tags?.['light:type'] ?? '';
+              const lampType = el.tags?.lamp_type ?? el.tags?.lamp ?? '';
+              const count = el.tags?.['light:count'];
+              const parts: string[] = ['Street light'];
+              if (method) parts.push(method);
+              else if (lampType) parts.push(lampType);
+              if (count && parseInt(count, 10) > 1) parts.push(`×${count}`);
+
+              lights.push({
+                id: `light-${el.id}`,
+                kind: 'light',
+                coordinate: coord,
+                label: parts.join(' · '),
+              });
+            }
+          }
+          continue;
+        }
