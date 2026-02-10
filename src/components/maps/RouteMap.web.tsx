@@ -1,26 +1,209 @@
+/**
+ * RouteMap.web — Leaflet + OpenStreetMap tiles (100 % free, no API key).
+ *
+ * Replaces Google Maps JS SDK entirely.  All features preserved:
+ *   – Route polylines (safety-coloured segments)
+ *   – Safety markers (crime, shop, light, bus_stop)
+ *   – Road labels, navigation mode, pan-to, long-press, click handlers
+ *   – Map type switching (roadmap / satellite / hybrid / terrain)
+ */
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
-import { loadGoogleMapsApi } from '@/src/services/googleMaps.web';
-import type {
-  GoogleMapInstance,
-  GoogleMapsApi,
-  GoogleMapsEventListener,
-  GoogleMarkerInstance,
-  GooglePolylineInstance,
-} from '@/src/types/googleMapsWeb';
+import type { MapType, RouteMapProps } from '@/src/components/maps/RouteMap.types';
 
-const ROUTE_COLOR = '#4285F4';       // Blue route line
-const ROUTE_COLOR_ALT = '#98a2b3';   // Grey for unselected
+// ── Tile URLs for different map styles (all free / no key) ───────────────────
 
-const MARKER_COLORS: Record<string, string> = {
-  crime: '#ef4444',   // red
-  shop:  '#22c55e',   // green
-  light: '#facc15',   // yellow
+const TILE_URLS: Record<MapType, string> = {
+  roadmap: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  satellite:
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  hybrid:
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  terrain: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
 };
 
-const MARKER_SCALE = 4; // small dot radius
+const TILE_ATTR: Record<MapType, string> = {
+  roadmap:
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  satellite: '&copy; Esri, Maxar, Earthstar Geographics',
+  hybrid:
+    '&copy; Esri | &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+  terrain:
+    '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
+};
+
+// ── Build Leaflet HTML page (embedded in iframe blob) ────────────────────────
+
+const buildLeafletHtml = () => `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden}
+#viewport{width:100%;height:100%;overflow:hidden;position:relative}
+#map{width:100%;height:100%;transition:transform 0.5s ease-out;transform-origin:center 65%}
+.nav-arrow{background:none;border:none}
+.map-ctrl{position:absolute;right:12px;bottom:100px;z-index:1000;display:flex;flex-direction:column;gap:4px}
+.map-btn{width:38px;height:38px;border:none;border-radius:8px;background:rgba(255,255,255,.95);
+  box-shadow:0 2px 8px rgba(0,0,0,.2);font-size:20px;font-weight:700;color:#1D2939;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;user-select:none;line-height:1}
+.map-btn:hover{background:#e4e7ec}
+.recenter-btn{position:absolute;right:12px;bottom:50px;z-index:1000;width:38px;height:38px;
+  border:none;border-radius:50%;background:rgba(255,255,255,.95);
+  box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;display:none;align-items:center;justify-content:center}
+.recenter-btn:hover{background:#e4e7ec}
+.road-label{background:rgba(0,0,0,.7);color:#fff;padding:2px 8px;border-radius:9px;
+  font-size:9px;font-weight:600;white-space:nowrap;border:none;box-shadow:none}
+</style>
+</head><body>
+<div id="viewport">
+<div id="map"></div>
+<div class="map-ctrl">
+<button class="map-btn" onclick="map.zoomIn()">+</button>
+<button class="map-btn" onclick="map.zoomOut()">&minus;</button>
+</div>
+<button class="recenter-btn" id="recenterBtn" onclick="recenterMap()">
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1D2939" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+</button>
+</div>
+<script>
+var map,tileLayer,markers=[],polylines=[],navMarker=null,longPressTimer=null,longPressLatLng=null;
+var isNavMode=false,currentRotation=0,userInteracted=false,lastNavLL=null;
+
+function clearArr(a){for(var i=0;i<a.length;i++)map.removeLayer(a[i]);a.length=0;}
+
+function sendMsg(t,d){
+  try{var m=Object.assign({type:t},d||{});
+    window.parent.postMessage(JSON.stringify(m),'*');
+    window.dispatchEvent(new CustomEvent('leaflet-msg',{detail:m}));
+  }catch(e){}
+}
+
+map=L.map('map',{center:[50.3755,-4.1427],zoom:13,zoomControl:false,attributionControl:true});
+tileLayer=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'&copy; OpenStreetMap',maxZoom:19}).addTo(map);
+
+map.on('contextmenu',function(e){sendMsg('longpress',{lat:e.latlng.lat,lng:e.latlng.lng});});
+var touchStart=null;
+map.on('mousedown',function(e){touchStart=Date.now();longPressLatLng=e.latlng;
+  longPressTimer=setTimeout(function(){if(longPressLatLng)sendMsg('longpress',{lat:longPressLatLng.lat,lng:longPressLatLng.lng});},600);});
+map.on('mousemove',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null;}});
+map.on('mouseup',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null;}});
+map.on('click',function(e){if(Date.now()-(touchStart||0)<500)sendMsg('press',{lat:e.latlng.lat,lng:e.latlng.lng});});
+sendMsg('ready',{});
+
+map.on('dragstart',function(){if(isNavMode)userInteracted=true;});
+
+function recenterMap(){userInteracted=false;if(lastNavLL){map.panTo(lastNavLL);if(map.getZoom()<17)map.setZoom(17);}}
+
+function setNavView(heading,entering){
+  var mapEl=document.getElementById('map'),btn=document.getElementById('recenterBtn');
+  if(!entering){isNavMode=false;currentRotation=0;userInteracted=false;mapEl.style.transform='none';if(btn)btn.style.display='none';return;}
+  isNavMode=true;if(btn)btn.style.display='flex';
+  var target=-(heading||0),diff=target-currentRotation;
+  while(diff>180)diff-=360;while(diff<-180)diff+=360;
+  currentRotation+=diff;
+  mapEl.style.transform='perspective(800px) rotateX(40deg) rotate('+currentRotation+'deg) scale(1.5)';
+}
+
+function setTileUrl(u,a){if(tileLayer)map.removeLayer(tileLayer);
+  tileLayer=L.tileLayer(u,{attribution:a,maxZoom:19}).addTo(map);}
+
+function updateMap(d){
+  clearArr(markers);clearArr(polylines);
+  var bounds=L.latLngBounds([]),hasBounds=false;
+
+  /* Origin blue dot */
+  if(d.origin&&!d.navLocation){
+    var p=L.latLng(d.origin.lat,d.origin.lng);
+    markers.push(L.circleMarker(p,{radius:8,fillColor:'#4285F4',fillOpacity:1,color:'#fff',weight:3}).bindTooltip('Your location').addTo(map));
+    markers.push(L.circleMarker(p,{radius:3.5,fillColor:'#fff',fillOpacity:1,color:'#fff',weight:0}).addTo(map));
+    bounds.extend(p);hasBounds=true;
+  }
+  /* Destination */
+  if(d.destination){
+    var dp=L.latLng(d.destination.lat,d.destination.lng);
+    markers.push(L.marker(dp).bindTooltip('Destination').addTo(map));
+    bounds.extend(dp);hasBounds=true;
+  }
+
+  /* Unselected routes */
+  (d.routes||[]).forEach(function(r){if(r.selected)return;
+    var ll=r.path.map(function(p){return[p.lat,p.lng];});
+    var pl=L.polyline(ll,{color:'#98a2b3',opacity:.5,weight:5}).addTo(map);
+    pl.on('click',function(){sendMsg('selectRoute',{id:r.id});});
+    polylines.push(pl);bounds.extend(pl.getBounds());hasBounds=true;
+  });
+
+  function nearestIdx(path,pt){var best=0,bestD=1e18;
+    for(var i=0;i<path.length;i++){var dl=path[i].lat-pt.lat,dn=path[i].lng-pt.lng,dd=dl*dl+dn*dn;if(dd<bestD){bestD=dd;best=i;}}return best;}
+
+  /* Selected route */
+  var sel=(d.routes||[]).find(function(r){return r.selected;});
+  if(sel){
+    if(d.navLocation&&sel.path.length>1){
+      var np={lat:d.navLocation.lat,lng:d.navLocation.lng},si=nearestIdx(sel.path,np);
+      if(si>0){var tp=[];for(var ti=0;ti<=si;ti++)tp.push([sel.path[ti].lat,sel.path[ti].lng]);tp.push([np.lat,np.lng]);
+        polylines.push(L.polyline(tp,{color:'#1D2939',opacity:.7,weight:7}).addTo(map));}
+      if(d.segments&&d.segments.length>0){
+        d.segments.forEach(function(sg){var fp=[];var st=false;
+          for(var i=0;i<sg.path.length;i++){var sp=sg.path[i];if(!st){var idx=nearestIdx(sel.path,sp);if(idx>=si)st=true;}
+            if(st)fp.push([sp.lat,sp.lng]);}
+          if(fp.length>=2)polylines.push(L.polyline(fp,{color:sg.color,opacity:.9,weight:7}).addTo(map));});
+      }else{var rp=[[np.lat,np.lng]];for(var ri=si;ri<sel.path.length;ri++)rp.push([sel.path[ri].lat,sel.path[ri].lng]);
+        polylines.push(L.polyline(rp,{color:'#4285F4',opacity:.85,weight:6}).addTo(map));}
+    }else{
+      if(d.segments&&d.segments.length>0){d.segments.forEach(function(sg){var sp=sg.path.map(function(p){return[p.lat,p.lng];});
+        polylines.push(L.polyline(sp,{color:sg.color,opacity:.9,weight:7}).addTo(map));});
+      }else{var sp2=sel.path.map(function(p){return[p.lat,p.lng];});
+        polylines.push(L.polyline(sp2,{color:'#4285F4',opacity:.85,weight:6}).addTo(map));}
+    }
+    sel.path.forEach(function(p){bounds.extend(L.latLng(p.lat,p.lng));});hasBounds=true;
+  }
+
+  /* Safety markers */
+  var mc={crime:'#ef4444',shop:'#22c55e',light:'#facc15',bus_stop:'#3b82f6',cctv:'#8b5cf6',dead_end:'#f97316'};
+  (d.safetyMarkers||[]).forEach(function(m){
+    var k=m.kind||'crime';
+    var r=(k==='light'||k==='crime')?3:4;
+    markers.push(L.circleMarker([m.lat,m.lng],{radius:r,fillColor:mc[k]||'#94a3b8',
+      fillOpacity:0.85,color:'#fff',weight:1}).bindTooltip(m.label||k).addTo(map));
+  });
+
+  /* Road labels */
+  (d.roadLabels||[]).forEach(function(l){var t=l.name.slice(0,12);
+    var ic=L.divIcon({className:'',html:'<div class="road-label" style="background:'+l.color+'">'+t+'</div>',iconSize:null});
+    markers.push(L.marker([l.lat,l.lng],{icon:ic,interactive:false}).addTo(map));});
+
+  /* Fit bounds */
+  if(d.fitBounds&&hasBounds&&!d.navLocation)map.fitBounds(bounds,{padding:[40,40],maxZoom:16});
+  if(d.panTo){map.panTo([d.panTo.lat,d.panTo.lng]);if(map.getZoom()<14)map.setZoom(14);}
+
+  /* Navigation arrow + 3D nav view */
+  if(navMarker){map.removeLayer(navMarker);navMarker=null;}
+  if(d.navLocation){var h=d.navHeading||0;
+    lastNavLL=[d.navLocation.lat,d.navLocation.lng];
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">'
+      +'<circle cx="22" cy="22" r="19" fill="#1570EF" stroke="white" stroke-width="3"/>'
+      +'<polygon points="22,7 29,27 22,22 15,27" fill="white" transform="rotate('+h+',22,22)"/></svg>';
+    var ni=L.divIcon({className:'nav-arrow',
+      html:'<img src="data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg)+'" width="44" height="44"/>',
+      iconSize:[44,44],iconAnchor:[22,22]});
+    navMarker=L.marker(lastNavLL,{icon:ni,interactive:false,zIndexOffset:1000}).addTo(map);
+    if(!userInteracted){map.panTo(lastNavLL);if(map.getZoom()<17)map.setZoom(17);}
+    setNavView(h,true);
+  }else{setNavView(0,false);}
+}
+<\/script>
+</body></html>`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// React component — embeds Leaflet via an iframe blob on web
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const RouteMap = ({
   origin,
@@ -34,425 +217,149 @@ export const RouteMap = ({
   isNavigating = false,
   navigationLocation,
   navigationHeading,
+  mapType = 'roadmap',
   onSelectRoute,
   onLongPress,
   onMapPress,
 }: RouteMapProps) => {
-  const mapElementRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<GoogleMapInstance | null>(null);
-  const markersRef = useRef<GoogleMarkerInstance[]>([]);
-  const polylinesRef = useRef<GooglePolylineInstance[]>([]);
-  const circlesRef = useRef<any[]>([]);
-  const listenersRef = useRef<GoogleMapsEventListener[]>([]);
-  const [googleMaps, setGoogleMaps] = useState<GoogleMapsApi | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const readyRef = useRef(false);
   const [hasError, setHasError] = useState(false);
+  const prevGeoKeyRef = useRef('');
+  const prevPanKeyRef = useRef(-1);
+  const prevMapTypeRef = useRef(mapType);
 
-  // Track previous viewport-relevant values so we only re-centre when
-  // the actual geography changes, not on marker / segment / label updates.
-  const prevOriginRef = useRef<string | null>(null);
-  const prevDestRef = useRef<string | null>(null);
-  const prevRoutesKeyRef = useRef<string>('');
-  const prevSelectedRef = useRef<string | null>(null);
+  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute });
+  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute };
 
-  // Load Google Maps API
+  // Listen for messages from the Leaflet iframe
   useEffect(() => {
-    let active = true;
-    loadGoogleMapsApi()
-      .then((api: GoogleMapsApi) => { if (active) setGoogleMaps(api); })
-      .catch(() => { if (active) setHasError(true); });
-    return () => { active = false; };
+    const handler = (event: MessageEvent) => {
+      try {
+        const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        const cbs = callbacksRef.current;
+        switch (msg.type) {
+          case 'ready':
+            readyRef.current = true;
+            pushUpdate();
+            break;
+          case 'press':
+            cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'longpress':
+            cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'selectRoute':
+            cbs.onSelectRoute?.(msg.id);
+            break;
+        }
+      } catch { /* ignore */ }
+    };
+
+    window.addEventListener('message', handler);
+    const custom = (e: Event) => handler({ data: (e as CustomEvent).detail } as MessageEvent);
+    window.addEventListener('leaflet-msg', custom);
+    return () => { window.removeEventListener('message', handler); window.removeEventListener('leaflet-msg', custom); };
   }, []);
 
-  // Smooth-pan to a location when panTo prop changes
-  const prevPanKeyRef = useRef<number>(-1);
-  useEffect(() => {
-    if (!panTo || !googleMaps || !mapRef.current) return;
-    if (panTo.key === prevPanKeyRef.current) return;
-    prevPanKeyRef.current = panTo.key;
-    const map = mapRef.current;
-    map.panTo(new googleMaps.maps.LatLng(panTo.location.latitude, panTo.location.longitude));
-    if ((map.getZoom?.() ?? 10) < 14) map.setZoom(14);
-  }, [panTo, googleMaps]);
+  const pushUpdate = () => {
+    if (!readyRef.current || !iframeRef.current?.contentWindow) return;
+    const toLL = (c: { latitude: number; longitude: number }) => ({ lat: c.latitude, lng: c.longitude });
 
-  // Navigation mode: follow user location + show heading marker
-  const wasNavigatingRef = useRef(false);
-  const navMarkerRef = useRef<GoogleMarkerInstance | null>(null);
-  useEffect(() => {
-    if (!googleMaps || !mapRef.current) return;
-    const map = mapRef.current;
+    const mappedRoutes = routes.map((r) => ({
+      id: r.id,
+      selected: r.id === selectedRouteId,
+      path: r.path.map(toLL),
+    }));
+    const segments = routeSegments.map((seg) => ({ color: seg.color, path: seg.path.map(toLL) }));
+    const mkrs = safetyMarkers.map((m) => ({
+      kind: m.kind, label: m.label,
+      lat: m.coordinate.latitude, lng: m.coordinate.longitude,
+    }));
+    const labels = roadLabels.map((l) => ({
+      name: l.displayName, color: l.color,
+      lat: l.coordinate.latitude, lng: l.coordinate.longitude,
+    }));
 
-    // Clean previous nav marker
-    if (navMarkerRef.current) {
-      navMarkerRef.current.setMap(null);
-      navMarkerRef.current = null;
+    const geoKey = [
+      origin ? `${origin.latitude},${origin.longitude}` : '',
+      destination ? `${destination.latitude},${destination.longitude}` : '',
+      routes.map((r) => r.id).join(','),
+      selectedRouteId ?? '',
+    ].join('|');
+    const fitBounds = geoKey !== prevGeoKeyRef.current;
+    if (fitBounds) prevGeoKeyRef.current = geoKey;
+
+    let panToData: { lat: number; lng: number } | null = null;
+    if (panTo && panTo.key !== prevPanKeyRef.current) {
+      prevPanKeyRef.current = panTo.key;
+      panToData = toLL(panTo.location);
     }
 
-    if (!isNavigating || !navigationLocation) {
-      // Reset camera when navigation ends
-      if (wasNavigatingRef.current) {
-        wasNavigatingRef.current = false;
-        (map as any).setTilt?.(0);
-        (map as any).setHeading?.(0);
-      }
-      return;
-    }
-
-    wasNavigatingRef.current = true;
-
-    // Create a directional arrow marker for the user
-    const heading = navigationHeading ?? 0;
-    const arrowSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
-      <circle cx="18" cy="18" r="16" fill="#1570EF" stroke="white" stroke-width="3"/>
-      <polygon points="18,6 24,22 18,18 12,22" fill="white" transform="rotate(${heading}, 18, 18)"/>
-    </svg>`;
-
-    navMarkerRef.current = new googleMaps.maps.Marker({
-      position: new googleMaps.maps.LatLng(navigationLocation.latitude, navigationLocation.longitude),
-      map,
-      icon: {
-        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg),
-        scaledSize: new googleMaps.maps.Size(36, 36),
-        anchor: new googleMaps.maps.Point(18, 18),
-      } as unknown as string,
-      zIndex: 999,
-      clickable: false,
-    });
-
-    // Navigation camera: 3D tilt, heading rotation, close zoom
-    map.panTo(new googleMaps.maps.LatLng(navigationLocation.latitude, navigationLocation.longitude));
-    (map as any).setTilt?.(45);
-    (map as any).setHeading?.(heading);
-    if ((map.getZoom?.() ?? 10) < 18) map.setZoom(18);
-
-    return () => {
-      if (navMarkerRef.current) {
-        navMarkerRef.current.setMap(null);
-        navMarkerRef.current = null;
-      }
+    const payload = {
+      origin: origin ? toLL(origin) : null,
+      destination: destination ? toLL(destination) : null,
+      routes: mappedRoutes,
+      segments,
+      safetyMarkers: mkrs,
+      roadLabels: labels,
+      fitBounds,
+      panTo: panToData,
+      navLocation: isNavigating && navigationLocation ? toLL(navigationLocation) : null,
+      navHeading: navigationHeading,
     };
-  }, [googleMaps, isNavigating, navigationLocation, navigationHeading]);
 
-  // Render map contents
-  useEffect(() => {
-    if (!googleMaps) return;
+    try {
+      const win = iframeRef.current.contentWindow as any;
+      if (win.updateMap) win.updateMap(payload);
+    } catch { /* cross-origin */ }
+  };
 
-    if (!mapElementRef.current) {
-      const el = document.getElementById('web-map-root');
-      if (el instanceof HTMLDivElement) mapElementRef.current = el;
-    }
-    if (!mapElementRef.current) return;
-
-    const fallback = { latitude: 51.5072, longitude: -0.1276 };
-    const center = origin ?? fallback;
-
-    if (!mapRef.current) {
-      mapRef.current = new googleMaps.maps.Map(mapElementRef.current, {
-        center: new googleMaps.maps.LatLng(center.latitude, center.longitude),
-        zoom: 12,
-        disableDefaultUI: true,
-        clickableIcons: false,
-      });
-    }
-
-    const map = mapRef.current;
-
-    // Clean up previous elements
-    listenersRef.current.forEach((l) => l.remove());
-    listenersRef.current = [];
-    markersRef.current.forEach((m) => m.setMap(null));
-    markersRef.current = [];
-    polylinesRef.current.forEach((p) => p.setMap(null));
-    polylinesRef.current = [];
-    circlesRef.current.forEach((c) => c.setMap(null));
-    circlesRef.current = [];
-
-    const bounds = new googleMaps.maps.LatLngBounds();
-    let hasBounds = false;
-
-    // Origin marker – Google-style blue dot (hidden during navigation — arrow replaces it)
-    if (origin && !isNavigating) {
-      const pos = new googleMaps.maps.LatLng(origin.latitude, origin.longitude);
-      const blueDotSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
-        <circle cx="12" cy="12" r="11" fill="#4285F4" opacity="0.25"/>
-        <circle cx="12" cy="12" r="7" fill="#4285F4"/>
-        <circle cx="12" cy="12" r="3.5" fill="#ffffff"/>
-      </svg>`;
-      markersRef.current.push(new googleMaps.maps.Marker({
-        position: pos,
-        map,
-        title: 'Your location',
-        icon: {
-          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(blueDotSvg),
-          scaledSize: new googleMaps.maps.Size(24, 24),
-          anchor: new googleMaps.maps.Point(12, 12),
-        } as unknown as string,
-        zIndex: 50,
-      }));
-      bounds.extend(pos);
-      hasBounds = true;
-    }
-
-    // Destination marker
-    if (destination) {
-      const pos = new googleMaps.maps.LatLng(destination.latitude, destination.longitude);
-      markersRef.current.push(new googleMaps.maps.Marker({ position: pos, map, title: 'Destination' }));
-      bounds.extend(pos);
-      hasBounds = true;
-    }
-
-    // --- Route polylines ---
-    // Unselected routes: grey
-    for (const route of routes) {
-      if (route.id === selectedRouteId) continue;
-      const path = route.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
-      const polyline = new googleMaps.maps.Polyline({
-        path,
-        strokeColor: ROUTE_COLOR_ALT,
-        strokeOpacity: 0.5,
-        strokeWeight: 3,
-        map,
-        clickable: Boolean(onSelectRoute),
-      });
-      if (onSelectRoute) {
-        const listener = googleMaps.maps.event.addListener(polyline, 'click', () => onSelectRoute(route.id));
-        listenersRef.current.push(listener);
-      }
-      polylinesRef.current.push(polyline);
-      path.forEach((p) => bounds.extend(p));
-      hasBounds = true;
-    }
-
-    // Selected route: safety-coloured segments (or fallback blue)
-    // During navigation, split into traveled (black) + remaining (colored)
-    const selRoute = routes.find((r) => r.id === selectedRouteId);
-    if (selRoute) {
-      const isNav = isNavigating && navigationLocation;
-
-      // Find nearest path index to navigation location
-      const findNearestIdx = (path: { latitude: number; longitude: number }[], pt: { latitude: number; longitude: number }) => {
-        let best = 0, bestD = Infinity;
-        for (let i = 0; i < path.length; i++) {
-          const dlat = path[i].latitude - pt.latitude;
-          const dlng = path[i].longitude - pt.longitude;
-          const d = dlat * dlat + dlng * dlng;
-          if (d < bestD) { bestD = d; best = i; }
-        }
-        return best;
-      };
-
-      if (isNav && selRoute.path.length > 1) {
-        const splitIdx = findNearestIdx(selRoute.path, navigationLocation!);
-
-        // ── Traveled portion → black ──
-        if (splitIdx > 0) {
-          const traveledCoords = selRoute.path.slice(0, splitIdx + 1).map((p) =>
-            new googleMaps.maps.LatLng(p.latitude, p.longitude)
-          );
-          traveledCoords.push(new googleMaps.maps.LatLng(navigationLocation!.latitude, navigationLocation!.longitude));
-          polylinesRef.current.push(new googleMaps.maps.Polyline({
-            path: traveledCoords,
-            strokeColor: '#1D2939',
-            strokeOpacity: 0.7,
-            strokeWeight: 7,
-            map,
-            clickable: false,
-          }));
-        }
-
-        // ── Remaining portion → safety colors or blue ──
-        if (routeSegments.length > 0) {
-          for (const seg of routeSegments) {
-            const filteredPath: any[] = [];
-            let started = false;
-            for (const sp of seg.path) {
-              if (!started) {
-                const spIdx = findNearestIdx(selRoute.path, sp);
-                if (spIdx >= splitIdx) started = true;
-              }
-              if (started) filteredPath.push(new googleMaps.maps.LatLng(sp.latitude, sp.longitude));
-            }
-            if (filteredPath.length >= 2) {
-              polylinesRef.current.push(new googleMaps.maps.Polyline({
-                path: filteredPath,
-                strokeColor: seg.color,
-                strokeOpacity: 0.9,
-                strokeWeight: 6,
-                map,
-                clickable: false,
-              }));
-            }
-          }
-        } else {
-          const remCoords = [new googleMaps.maps.LatLng(navigationLocation!.latitude, navigationLocation!.longitude)];
-          for (let i = splitIdx; i < selRoute.path.length; i++) {
-            remCoords.push(new googleMaps.maps.LatLng(selRoute.path[i].latitude, selRoute.path[i].longitude));
-          }
-          polylinesRef.current.push(new googleMaps.maps.Polyline({
-            path: remCoords,
-            strokeColor: ROUTE_COLOR,
-            strokeOpacity: 0.85,
-            strokeWeight: 5,
-            map,
-            clickable: false,
-          }));
-        }
-      } else {
-        // Not navigating — normal rendering
-        if (routeSegments.length > 0) {
-          for (const seg of routeSegments) {
-            const segPath = seg.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
-            const polyline = new googleMaps.maps.Polyline({
-              path: segPath,
-              strokeColor: seg.color,
-              strokeOpacity: 0.9,
-              strokeWeight: 6,
-              map,
-              clickable: false,
-            });
-            polylinesRef.current.push(polyline);
-          }
-        } else {
-          const path = selRoute.path.map((p) => new googleMaps.maps.LatLng(p.latitude, p.longitude));
-          const polyline = new googleMaps.maps.Polyline({
-            path,
-            strokeColor: ROUTE_COLOR,
-            strokeOpacity: 0.85,
-            strokeWeight: 5,
-            map,
-            clickable: false,
-          });
-          polylinesRef.current.push(polyline);
-        }
-      }
-      selRoute.path.forEach((p) => bounds.extend(new googleMaps.maps.LatLng(p.latitude, p.longitude)));
-      hasBounds = true;
-    }
-
-    // --- Safety markers (small SVG circles) ---
-    for (const m of safetyMarkers) {
-      const color = MARKER_COLORS[m.kind] ?? '#94a3b8';
-      const marker = new googleMaps.maps.Marker({
-        position: new googleMaps.maps.LatLng(m.coordinate.latitude, m.coordinate.longitude),
-        map,
-        title: m.label ?? m.kind,
-        icon: {
-          path: 0 as unknown as string, // google.maps.SymbolPath.CIRCLE = 0
-          scale: MARKER_SCALE,
-          fillColor: color,
-          fillOpacity: 0.9,
-          strokeColor: '#ffffff',
-          strokeWeight: 1,
-        } as unknown as string,
-      });
-      markersRef.current.push(marker);
-    }
-
-    // --- Road-type labels (small pill tags) ---
-    for (const label of roadLabels) {
-      const pos = new googleMaps.maps.LatLng(label.coordinate.latitude, label.coordinate.longitude);
-      const text = label.displayName.slice(0, 12);
-      // Measure approximate width: ~6.5px per char + 16px padding
-      const w = Math.round(text.length * 6.5 + 16);
-      const h = 18;
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
-        <rect rx="${h / 2}" ry="${h / 2}" width="${w}" height="${h}" fill="${label.color}" opacity="0.8"/>
-        <text x="${w / 2}" y="12.5" text-anchor="middle" fill="white" font-size="9" font-weight="600" font-family="-apple-system,BlinkMacSystemFont,sans-serif" letter-spacing="0.3">${text}</text>
-      </svg>`;
-      const marker = new googleMaps.maps.Marker({
-        position: pos,
-        map,
-        icon: {
-          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-          scaledSize: new googleMaps.maps.Size(w, h),
-          anchor: new googleMaps.maps.Point(w / 2, h / 2),
-        } as unknown as string,
-        clickable: false,
-        zIndex: 30,
-      });
-      markersRef.current.push(marker);
-    }
-
-    // --- Viewport: only move the camera when geography actually changed ---
-    const originKey = origin ? `${origin.latitude},${origin.longitude}` : '';
-    const destKey = destination ? `${destination.latitude},${destination.longitude}` : '';
-    const routesKey = routes.map((r) => r.id).join(',');
-    const selectedKey = selectedRouteId ?? '';
-
-    const geographyChanged =
-      originKey !== prevOriginRef.current ||
-      destKey !== prevDestRef.current ||
-      routesKey !== prevRoutesKeyRef.current ||
-      selectedKey !== prevSelectedRef.current;
-
-    if (geographyChanged && !isNavigating) {
-      prevOriginRef.current = originKey;
-      prevDestRef.current = destKey;
-      prevRoutesKeyRef.current = routesKey;
-      prevSelectedRef.current = selectedKey;
-
-      const hasRoutes = routes.length > 0;
-      const hasBothEndpoints = Boolean(origin) && Boolean(destination);
-      if (hasBounds && (hasRoutes || hasBothEndpoints)) {
-        map.fitBounds(bounds);
-        // Cap zoom so fitBounds never zooms in too close
-        const listener = googleMaps.maps.event.addListenerOnce(map, 'idle', () => {
-          if ((map.getZoom?.() ?? 10) > 16) map.setZoom(16);
-        });
-        listenersRef.current.push(listener);
-      } else if (!mapRef.current) {
-        // Only set center on first initialisation — after that, leave
-        // the map wherever the user has panned to.
-        map.setCenter(new googleMaps.maps.LatLng(center.latitude, center.longitude));
-        map.setZoom(12);
-      }
-    }
-
-    // Long-press (right-click)
-    if (onLongPress) {
-      const listener = googleMaps.maps.event.addListener(map, 'rightclick', (event) => {
-        const target = (event as { latLng?: { lat: () => number; lng: () => number } })?.latLng;
-        const pt = target ?? map.getCenter?.();
-        if (!pt) return;
-        onLongPress({ latitude: pt.lat(), longitude: pt.lng() });
-      });
-      listenersRef.current.push(listener);
-    }
-
-    // Single click / tap
-    if (onMapPress) {
-      const listener = googleMaps.maps.event.addListener(map, 'click', (event) => {
-        const target = (event as { latLng?: { lat: () => number; lng: () => number } })?.latLng;
-        if (!target) return;
-        onMapPress({ latitude: target.lat(), longitude: target.lng() });
-      });
-      listenersRef.current.push(listener);
-    }
-  }, [
-    googleMaps,
-    origin,
-    destination,
-    routes,
-    selectedRouteId,
-    safetyMarkers,
-    routeSegments,
-    roadLabels,
-    onSelectRoute,
-    onLongPress,
-    onMapPress,
-    isNavigating,
-    navigationLocation,
+  // Push when props change
+  useEffect(() => { pushUpdate(); }, [
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
   ]);
+
+  // Switch tile layer on mapType change
+  useEffect(() => {
+    if (!readyRef.current || !iframeRef.current?.contentWindow) return;
+    if (mapType === prevMapTypeRef.current) return;
+    prevMapTypeRef.current = mapType;
+    try {
+      const win = iframeRef.current.contentWindow as any;
+      if (win.setTileUrl) win.setTileUrl(TILE_URLS[mapType], TILE_ATTR[mapType]);
+    } catch { /* ignore */ }
+  }, [mapType]);
+
+  // Blob URL for iframe src
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const blob = new Blob([buildLeafletHtml()], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, []);
 
   return (
     <View style={styles.container}>
-      <View nativeID="web-map-root" style={StyleSheet.absoluteFill} />
+      {blobUrl ? (
+        <iframe
+          ref={iframeRef as any}
+          src={blobUrl}
+          style={{ width: '100%', height: '100%', border: 'none', position: 'absolute', top: 0, left: 0 }}
+          title="Map"
+          onError={() => setHasError(true)}
+        />
+      ) : null}
       {hasError ? (
         <View style={styles.placeholder}>
           <Text style={styles.placeholderText}>Map unavailable</Text>
         </View>
       ) : null}
       <View style={styles.attribution}>
-        <Text style={styles.attributionText}>© Google Maps</Text>
+        <Text style={styles.attributionText}>© OpenStreetMap contributors</Text>
       </View>
     </View>
   );

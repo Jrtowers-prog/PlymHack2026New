@@ -11,6 +11,14 @@ export interface LightingData {
   confidence: number; // 0-1: how confident we are in the data (1 = explicit OSM tag, 0.5 = inferred)
   roadType: string;
   source: 'osm_explicit' | 'osm_inferred' | 'road_type_heuristic' | 'unknown';
+  /** OSM lamp_type tag: e.g. 'electric', 'gas', 'solar' */
+  lampType?: string;
+  /** OSM light:method tag: e.g. 'LED', 'sodium', 'metal_halide', 'fluorescent' */
+  lightMethod?: string;
+  /** OSM light:count — number of lamps on the fixture */
+  lightCount?: number;
+  /** OSM light:direction — 'both', 'forward', 'backward' */
+  lightDirection?: string;
 }
 
 export interface SegmentLightingScore {
@@ -72,6 +80,56 @@ export const roadTypeToLightingLikelihood = (roadType: string): number => {
 };
 
 /**
+ * Score lamp quality from OSM tags (light:method / lamp_type).
+ * Returns a multiplier 0.5 – 1.5:
+ *   LED/metal_halide = 1.4 (bright, even coverage)
+ *   Fluorescent      = 1.2
+ *   Sodium           = 1.0 (reference baseline)
+ *   Mercury / gas    = 0.7 (dim / unreliable)
+ *   Solar            = 0.8 (variable output)
+ *   Unknown          = 1.0
+ */
+export const lampQualityMultiplier = (data: LightingData): number => {
+  const method = (data.lightMethod ?? '').toLowerCase();
+  const lamp = (data.lampType ?? '').toLowerCase();
+
+  // Best: modern white-light sources
+  if (method.includes('led') || method.includes('metal_halide')) return 1.4;
+  if (method.includes('fluorescent')) return 1.2;
+  if (lamp.includes('led')) return 1.4;
+
+  // Reference: common sodium lamps
+  if (method.includes('sodium') || method.includes('hps')) return 1.0;
+  if (lamp.includes('electric')) return 1.0;
+
+  // Weaker / less reliable
+  if (lamp.includes('solar')) return 0.8;
+  if (method.includes('mercury') || method.includes('gas') || lamp.includes('gas')) return 0.7;
+
+  return 1.0; // unknown / no tag
+};
+
+/**
+ * Factor in the number of lamps on a fixture and their direction.
+ * Returns a multiplier ≥ 1.0.
+ */
+export const lampCountMultiplier = (data: LightingData): number => {
+  let m = 1.0;
+
+  // Multiple lamps per fixture = better coverage
+  if (data.lightCount && data.lightCount > 1) {
+    m *= Math.min(1.5, 1 + (data.lightCount - 1) * 0.15);
+  }
+
+  // Bidirectional lighting covers both sides of the road
+  if (data.lightDirection === 'both') {
+    m *= 1.1;
+  }
+
+  return m;
+};
+
+/**
  * Calculate lighting score for a segment
  * Combines OSM explicit tags with road type heuristics
  */
@@ -100,7 +158,13 @@ export const calculateLightingScore = (
   let heuristicCount = 0;
 
   lightingDataArray.forEach((data) => {
-    const litScore = data.isLit ? 1 : 0;
+    const baseLitScore = data.isLit ? 1 : 0;
+
+    // Apply lamp quality and count multipliers for lit fixtures
+    const qualityMult = data.isLit ? lampQualityMultiplier(data) : 1;
+    const countMult   = data.isLit ? lampCountMultiplier(data) : 1;
+    // Effective score capped at 1.0 — the multipliers just reward better lighting
+    const litScore = Math.min(1, baseLitScore * qualityMult * countMult);
 
     if (data.source === 'osm_explicit') {
       explicitScore += litScore;
@@ -151,6 +215,7 @@ export const getLightingDataForSegment = (
     highway: string;
     lit: 'yes' | 'no' | 'unknown';
     nodes: LatLng[];
+    tags?: Record<string, string>;
   }>,
   radiusMeters: number = 30,
 ): LightingData[] => {
@@ -169,6 +234,14 @@ export const getLightingDataForSegment = (
     }
 
     if (!isClose) return;
+
+    // Extract detailed lamp tags from OSM
+    const tags = way.tags ?? {};
+    const lampType = tags['lamp_type'] ?? tags['lamp'] ?? undefined;
+    const lightMethod = tags['light:method'] ?? tags['light:type'] ?? undefined;
+    const lightCountRaw = tags['light:count'];
+    const lightCount = lightCountRaw ? parseInt(lightCountRaw, 10) || undefined : undefined;
+    const lightDirection = tags['light:direction'] ?? undefined;
 
     // Determine if it's lit
     let isLit = false;
@@ -195,6 +268,10 @@ export const getLightingDataForSegment = (
       confidence,
       roadType: way.highway,
       source,
+      lampType,
+      lightMethod,
+      lightCount,
+      lightDirection,
     });
   });
 

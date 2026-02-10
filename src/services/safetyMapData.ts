@@ -11,12 +11,14 @@
 import { env } from '@/src/config/env';
 import { AppError } from '@/src/types/errors';
 import type { LatLng } from '@/src/types/google';
+import { fetchNearbyPlacesCached } from '@/src/utils/nearbyCache';
+import { queueOverpassRequest } from '@/src/utils/overpassQueue';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export type MarkerKind = 'crime' | 'shop' | 'light';
+export type MarkerKind = 'crime' | 'shop' | 'light' | 'bus_stop';
 
 export interface SafetyMarker {
   id: string;
@@ -79,6 +81,7 @@ export interface SafetyMapResult {
   litRoads: number;
   unlitRoads: number;
   openPlaces: number;
+  busStops: number;
   safetyScore: number;        // 1–100
   safetyLabel: string;        // e.g. "Safe"
   safetyColor: string;        // hex colour for the score
@@ -108,10 +111,12 @@ const PATH_ROAD_TYPES = new Set([
  * Compute a 1–100 safety score from route data.
  *
  * Factors (weights):
- *   • Crime density      40 %   – fewer crimes = higher score
- *   • Street lighting    30 %   – more lights = higher score
- *   • Open places        15 %   – more activity = higher score
- *   • Road quality       15 %   – more lit/main roads = higher score
+ *   • Crime density      35 %   – fewer crimes = higher score
+ *   • Street lighting    25 %   – more lights = higher score
+ *   • Open places        12 %   – more activity = higher score
+ *   • Bus stops          8 %    – nearby transit = higher score
+ *   • Road quality       12 %   – more lit/main roads = higher score
+ *   • Main road ratio    8 %    – more main roads = higher score
  *
  * Each factor is normalised 0-1 with sensible caps so the score
  * stays meaningful regardless of route length.
@@ -122,6 +127,7 @@ const computeSafetyScore = (
   litRoads: number,
   unlitRoads: number,
   openPlaces: number,
+  busStopCount: number,
   routeDistanceKm: number,
   mainRoadRatio: number,
 ): { score: number; label: string; color: string; pathfindingScore: number; dataConfidence: number } => {
@@ -129,16 +135,18 @@ const computeSafetyScore = (
   const km = Math.max(routeDistanceKm, 0.3); // avoid divide-by-zero
 
   // ── Data-confidence: how many data sources actually returned data? ──
-  // Each source contributes up to 0.25 confidence.
+  // Each source contributes up to 0.20 confidence.
   const hasCrimeData   = crimeCount > 0;                    // API returned results
   const hasLightData   = streetLights > 0;                  // Overpass lights
   const hasRoadData    = (litRoads + unlitRoads) > 0;       // Overpass roads
   const hasPlaceData   = openPlaces > 0;                    // Overpass shops/places
+  const hasBusData     = busStopCount > 0;                  // Overpass bus stops
   const dataConfidence =
-    (hasCrimeData  ? 0.25 : 0) +
-    (hasLightData  ? 0.25 : 0) +
-    (hasRoadData   ? 0.25 : 0) +
-    (hasPlaceData  ? 0.25 : 0);
+    (hasCrimeData  ? 0.20 : 0) +
+    (hasLightData  ? 0.20 : 0) +
+    (hasRoadData   ? 0.20 : 0) +
+    (hasPlaceData  ? 0.20 : 0) +
+    (hasBusData    ? 0.20 : 0);
 
   // --- Crime factor (0 = lots of crime, 1 = no crime) ---
   const crimesPerKm = crimeCount / km;
@@ -155,6 +163,11 @@ const computeSafetyScore = (
   // 0 places/km → 0.0,  ≥8 places/km → 1.0
   const activityFactor = Math.min(1, placesPerKm / 8);
 
+  // --- Bus stop factor (0 = no transit, 1 = well-served) ---
+  const busStopsPerKm = busStopCount / km;
+  // 0 stops/km → 0.0,  ≥4 stops/km → 1.0
+  const busStopFactor = Math.min(1, busStopsPerKm / 4);
+
   // --- Road quality factor (fraction of roads that are lit) ---
   const totalRoads = litRoads + unlitRoads;
   const roadLitFactor = totalRoads > 0 ? litRoads / totalRoads : 0.5;
@@ -165,9 +178,10 @@ const computeSafetyScore = (
   // Weighted sum — main road usage is a significant safety signal
   const raw =
     crimeFactor    * 0.30 +
-    lightFactor    * 0.25 +
-    mainRoadFactor * 0.20 +
-    activityFactor * 0.15 +
+    lightFactor    * 0.22 +
+    mainRoadFactor * 0.15 +
+    activityFactor * 0.13 +
+    busStopFactor  * 0.10 +
     roadLitFactor  * 0.10;
 
   // Map to 1–100
@@ -212,46 +226,34 @@ const computeSafetyScore = (
 // ---------------------------------------------------------------------------
 
 const POLICE_BASE_URL = env.policeApiBaseUrl;
-const OVERPASS_BASE_URL = env.overpassBaseUrl;
 const MAX_BBOX_METERS = 50_000;
 const MAX_CRIME_MARKERS = 400;
 const MAX_LIGHT_MARKERS = 300;
 const MAX_ROAD_OVERLAYS = 300;
 
 // ---------------------------------------------------------------------------
-// Network helper
+// Network helper (non-Overpass calls, e.g. Police API)
 // ---------------------------------------------------------------------------
 
 const fetchWithTimeout = async <T>(
   url: string,
   options?: RequestInit,
   timeoutMs = 12_000,
-  retries = 3,
+  retries = 2,
 ): Promise<T> => {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      const label = url.includes('police') ? 'Police API' : url.split('?')[0].slice(-40);
+      console.log(`[SafetyMap] 🌐 API call → ${label}`);
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timer);
-      if (res.status === 429) {
-        // Rate-limited — wait and retry
-        if (attempt < retries) {
-          const delay = 2000 * (attempt + 1); // 2s, 4s, 6s
-          console.warn(`[SafetyMap] 429 rate-limited, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
-        }
-        throw new AppError('safety_http', 'HTTP 429 — rate limited');
-      }
       if (!res.ok) throw new AppError('safety_http', `HTTP ${res.status}`);
       return (await res.json()) as T;
     } catch (err) {
       clearTimeout(timer);
-      if (err instanceof AppError) {
-        if (err.message.includes('429') && attempt < retries) continue;
-        throw err;
-      }
+      if (err instanceof AppError) throw err;
       if (err instanceof Error && err.name === 'AbortError')
         throw new AppError('safety_timeout', 'Request timed out');
       throw new AppError('safety_network', 'Network error', err);
@@ -261,26 +263,9 @@ const fetchWithTimeout = async <T>(
 };
 
 // ---------------------------------------------------------------------------
-// Overpass request serializer — only 1 in-flight request at a time
-// ---------------------------------------------------------------------------
-let overpassQueue: Promise<any> = Promise.resolve();
-
-const serialOverpassFetch = async <T>(
-  url: string,
-  options?: RequestInit,
-  timeoutMs = 15_000,
-): Promise<T> => {
-  // Chain onto the queue so requests run one-at-a-time
-  const ticket = overpassQueue.then(() => fetchWithTimeout<T>(url, options, timeoutMs));
-  // Update the queue head (swallow errors so the queue keeps moving)
-  overpassQueue = ticket.catch(() => {});
-  return ticket;
-};
-
-// ---------------------------------------------------------------------------
 // Shared roads+lights cache (keyed by rounded bbox, shared across routes)
 // ---------------------------------------------------------------------------
-type RoadsResult = { overlays: RoadOverlay[]; lights: SafetyMarker[]; litCount: number; unlitCount: number };
+type RoadsResult = { overlays: RoadOverlay[]; lights: SafetyMarker[]; busStops: SafetyMarker[]; litCount: number; unlitCount: number };
 const roadsCache = new Map<string, RoadsResult>();
 const pendingRoads = new Map<string, Promise<RoadsResult>>();
 
@@ -438,7 +423,7 @@ const fetchCrimeMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
     for (const month of recentMonths()) {
       try {
         const url = `${POLICE_BASE_URL}/crimes-street/all-crime?poly=${encodeURIComponent(poly)}&date=${month}`;
-        data = await fetchWithTimeout(url, undefined, 12_000);
+        data = await fetchWithTimeout(url, undefined, 8_000);
         if (Array.isArray(data) && data.length > 0) break;
       } catch { /* try next month */ }
     }
@@ -478,10 +463,10 @@ const fetchCrimeMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
 
 const fetchRoadsAndLights = async (
   path: LatLng[],
-): Promise<{ overlays: RoadOverlay[]; lights: SafetyMarker[]; litCount: number; unlitCount: number }> => {
+): Promise<RoadsResult> => {
   try {
     const b = bbox(simplify(path), 30);
-    if (!b) return { overlays: [], lights: [], litCount: 0, unlitCount: 0 };
+    if (!b) return { overlays: [], lights: [], busStops: [], litCount: 0, unlitCount: 0 };
 
     // Check bbox-level cache — routes in the same area share the raw Overpass data
     const bk = bboxKey(b);
@@ -498,11 +483,16 @@ const fetchRoadsAndLights = async (
       const aroundCoords = routePts.map((p) => `${p.latitude},${p.longitude}`).join(',');
       const LIGHT_RADIUS_M = 15;
 
+      const BUS_STOP_RADIUS_M = 80;
+
       const query = `
 [out:json][timeout:12];
 (
   way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary|primary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
   node["highway"="street_lamp"](around:${LIGHT_RADIUS_M},${aroundCoords});
+  node["highway"="bus_stop"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
+  node["amenity"="bus_station"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
+  node["public_transport"~"^(stop_position|platform)$"](around:${BUS_STOP_RADIUS_M},${aroundCoords});
 );
 out body geom qt;
 `;
@@ -510,11 +500,7 @@ out body geom qt;
 
       let response: any;
       try {
-        response = await serialOverpassFetch<any>(
-          OVERPASS_BASE_URL,
-          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() },
-          15_000,
-        );
+        response = await queueOverpassRequest<any>(params.toString(), 10_000, 'roads+lights');
       } catch {
         // Fallback: smaller query, skip lights entirely
         const fallback = `
@@ -522,15 +508,17 @@ out body geom qt;
 way["highway"~"^(residential|primary|secondary|tertiary)$"](${b.minLat},${b.minLng},${b.maxLat},${b.maxLng});
 out body geom qt;
 `;
-        response = await serialOverpassFetch<any>(
-          OVERPASS_BASE_URL,
-          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ data: fallback }).toString() },
+        response = await queueOverpassRequest<any>(
+          new URLSearchParams({ data: fallback }).toString(),
           10_000,
+          'roads-fallback',
         );
       }
 
       const overlays: RoadOverlay[] = [];
       const lights: SafetyMarker[] = [];
+      const busStops: SafetyMarker[] = [];
+      const MAX_BUS_MARKERS = 100;
       let litCount = 0;
       let unlitCount = 0;
 
@@ -541,11 +529,44 @@ out body geom qt;
           // Only keep lights within 20 m of the actual route polyline
           if (distanceToPath(coord, path) <= 20) {
             if (lights.length < MAX_LIGHT_MARKERS) {
+              // Build a descriptive label from available lamp tags
+              const method = el.tags?.['light:method'] ?? el.tags?.['light:type'] ?? '';
+              const lampType = el.tags?.lamp_type ?? el.tags?.lamp ?? '';
+              const count = el.tags?.['light:count'];
+              const parts: string[] = ['Street light'];
+              if (method) parts.push(method);
+              else if (lampType) parts.push(lampType);
+              if (count && parseInt(count, 10) > 1) parts.push(`×${count}`);
+
               lights.push({
                 id: `light-${el.id}`,
                 kind: 'light',
                 coordinate: coord,
-                label: 'Street light',
+                label: parts.join(' · '),
+              });
+            }
+          }
+          continue;
+        }
+
+        // Bus stop / public transport nodes
+        if (
+          el.type === 'node' &&
+          (el.tags?.highway === 'bus_stop' ||
+           el.tags?.amenity === 'bus_station' ||
+           el.tags?.public_transport === 'stop_position' ||
+           el.tags?.public_transport === 'platform')
+        ) {
+          const coord: LatLng = { latitude: el.lat, longitude: el.lon };
+          // Only keep bus stops within 100 m of the route
+          if (distanceToPath(coord, path) <= 100) {
+            if (busStops.length < MAX_BUS_MARKERS) {
+              const name = el.tags?.name ?? 'Bus stop';
+              busStops.push({
+                id: `bus-${el.id}`,
+                kind: 'bus_stop',
+                coordinate: coord,
+                label: name,
               });
             }
           }
@@ -584,7 +605,7 @@ out body geom qt;
         }
       }
 
-      return { overlays, lights, litCount, unlitCount };
+      return { overlays, lights, busStops, litCount, unlitCount };
     }; // end doFetch
 
     // Execute with dedup — only one in-flight fetch per bbox
@@ -600,55 +621,70 @@ out body geom qt;
     }
   } catch (e) {
     console.warn('[SafetyMap] roads fetch failed', e);
-    return { overlays: [], lights: [], litCount: 0, unlitCount: 0 };
+    return { overlays: [], lights: [], busStops: [], litCount: 0, unlitCount: 0 };
   }
 };
 
 // ---------------------------------------------------------------------------
-// 3. Fetch open places  → SafetyMarker[]
+// 3. Fetch open places  → SafetyMarker[]  (via Overpass / OpenStreetMap)
 // ---------------------------------------------------------------------------
 
 const MAX_SHOP_MARKERS = 200;
 
+/**
+ * Fetch places with human activity (shops, cafés, restaurants, etc.) along the
+ * route using Overpass (OpenStreetMap). Completely FREE — no Google API needed.
+ *
+ * Uses the shared nearbyCache module so results are de-duplicated across
+ * safetyMapData.ts and safety.ts — no double API calls for the same area.
+ */
 const fetchOpenPlaceMarkers = async (path: LatLng[]): Promise<SafetyMarker[]> => {
   try {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return [];
+    const b = bbox(simplify(path), 60);
+    if (!b) return [];
 
-    const { fetchNearbyOpenPlaces } = await import('./googleMaps.web');
-
-    // Sample more points along the route so we don't miss shops.
-    // ~8 evenly-spaced samples give good coverage without hitting API limits.
-    const sampleCount = Math.min(8, path.length);
-    const step = Math.max(1, Math.floor((path.length - 1) / (sampleCount - 1)));
-    const samples: LatLng[] = [];
-    for (let i = 0; i < path.length; i += step) samples.push(path[i]);
-    if (samples[samples.length - 1] !== path[path.length - 1]) {
-      samples.push(path[path.length - 1]);
+    // Sample up to 3 points along the route and fetch ALL in parallel
+    const samplePoints: LatLng[] = [path[0]];
+    if (path.length > 4) {
+      samplePoints.push(path[Math.floor(path.length / 3)]);
+      samplePoints.push(path[Math.floor((path.length * 2) / 3)]);
     }
 
-    const seen = new Set<string>();
-    const markers: SafetyMarker[] = [];
+    const allResults = await Promise.all(
+      samplePoints.map((center) =>
+        fetchNearbyPlacesCached(center.latitude, center.longitude, 300).catch(() => []),
+      ),
+    );
 
-    for (const pt of samples) {
-      try {
-        // 100 m radius around each sample point
-        const places = await fetchNearbyOpenPlaces(pt, 100);
-        for (const p of places) {
-          if (seen.has(p.placeId)) continue;
-          seen.add(p.placeId);
-          // Only keep places within 60 m of the actual route polyline
-          if (distanceToPath(p.location, path) > 60) continue;
-          markers.push({
-            id: `shop-${p.placeId}`,
-            kind: 'shop',
-            coordinate: p.location,
-            label: p.name,
-          });
-          if (markers.length >= MAX_SHOP_MARKERS) break;
-        }
-      } catch { /* skip point */ }
+    const markers: SafetyMarker[] = [];
+    const seen = new Set<string>();
+
+    for (const results of allResults) {
+      for (const place of results) {
+        if (!place.location || !place.place_id) continue;
+        if (seen.has(place.place_id)) continue;
+        seen.add(place.place_id);
+
+        const coord: LatLng = {
+          latitude: place.location.lat,
+          longitude: place.location.lng,
+        };
+
+        // Only keep places within 80m of the actual route polyline
+        if (distanceToPath(coord, path) > 80) continue;
+
+        markers.push({
+          id: `shop-${place.place_id}`,
+          kind: 'shop',
+          coordinate: coord,
+          label: `${place.name} (✓ Open)`,
+        });
+
+        if (markers.length >= MAX_SHOP_MARKERS) break;
+      }
       if (markers.length >= MAX_SHOP_MARKERS) break;
     }
+
     return markers;
   } catch (e) {
     console.warn('[SafetyMap] open places fetch failed', e);
@@ -678,12 +714,14 @@ const generateRouteSegments = (
   crimes: SafetyMarker[],
   lights: SafetyMarker[],
   overlays: RoadOverlay[],
+  busStops: SafetyMarker[],
 ): RouteSegment[] => {
   if (path.length < 2) return [];
 
   // Build simple lookup arrays once
   const crimeCoords = crimes.map((c) => c.coordinate);
   const lightCoords = lights.filter((l) => l.kind === 'light').map((l) => l.coordinate);
+  const busCoords = busStops.map((b) => b.coordinate);
 
   // Determine segment boundaries (~50 m chunks along path)
   const CHUNK_M = 50;
@@ -725,6 +763,12 @@ const generateRouteSegments = (
       if (haversine(mid, l) <= 25) nearLights++;
     }
 
+    // Count bus stops within 100 m of this chunk's midpoint
+    let nearBusStops = 0;
+    for (const bs of busCoords) {
+      if (haversine(mid, bs) <= 100) nearBusStops++;
+    }
+
     // Determine road type at midpoint
     let bestOverlay: RoadOverlay | null = null;
     let bestDist = 30;
@@ -749,8 +793,10 @@ const generateRouteSegments = (
     const roadFactor = isMainRoad ? 1.0 : isPath ? 0.2 : 0.6;
     // Lit bonus
     const litBonus = isLit ? 0.15 : 0;
+    // Bus stop bonus: nearby bus stops = well-travelled area
+    const busFactor = Math.min(1, nearBusStops * 0.5); // 0 stops → 0, 2+ → 1
 
-    const local = Math.min(1, crimeFactor * 0.40 + lightFactor * 0.30 + roadFactor * 0.20 + litBonus + 0.10);
+    const local = Math.min(1, crimeFactor * 0.35 + lightFactor * 0.25 + roadFactor * 0.18 + busFactor * 0.12 + litBonus + 0.10);
 
     // Map local score to colour: 0 → red, 0.5 → amber, 1 → green
     const color = localScoreToColor(local);
@@ -888,7 +934,7 @@ export const fetchSafetyMapData = async (
   routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, busStops: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
   }
 
   // Return cached result if we already analysed this exact route
@@ -909,10 +955,10 @@ export const fetchSafetyMapData = async (
 
   onProgress?.('✅ Done!', 100);
 
-  const markers = [...crimes, ...roadsData.lights, ...shops];
+  const markers = [...crimes, ...roadsData.lights, ...roadsData.busStops, ...shops];
 
   // --- Generate safety-coloured route segments ---
-  const routeSegments = generateRouteSegments(path, crimes, roadsData.lights, roadsData.overlays);
+  const routeSegments = generateRouteSegments(path, crimes, roadsData.lights, roadsData.overlays, roadsData.busStops);
 
   // --- Generate road-type labels where the street type changes ---
   const roadLabels = generateRoadLabels(roadsData.overlays, path);
@@ -956,6 +1002,7 @@ export const fetchSafetyMapData = async (
     roadsData.litCount,
     roadsData.unlitCount,
     shops.length,
+    roadsData.busStops.length,
     distKm,
     mainRoadRatio,
   );
@@ -970,6 +1017,7 @@ export const fetchSafetyMapData = async (
     litRoads: roadsData.litCount,
     unlitRoads: roadsData.unlitCount,
     openPlaces: shops.length,
+    busStops: roadsData.busStops.length,
     safetyScore: score,
     safetyLabel: label,
     safetyColor: color,

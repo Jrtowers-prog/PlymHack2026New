@@ -1,4 +1,5 @@
-const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+// Backend proxy base URL — all Places / Directions / Static Map calls go here
+const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
 // TODO: Set EXPO_PUBLIC_OS_MAPS_API_KEY in .env / EAS env vars.
 const osMapsApiKey = process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ?? '';
 const osMapsLayer = process.env.EXPO_PUBLIC_OS_MAPS_LAYER ?? 'Road_3857';
@@ -18,7 +19,7 @@ const policeApiBaseUrl =
 const openaiApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 export const env = {
-  googleMapsApiKey,
+  apiBaseUrl,
   osMapsApiKey,
   osMapsLayer,
   osMapsBaseUrl,
@@ -30,16 +31,6 @@ export const env = {
   overpassBaseUrl,
   policeApiBaseUrl,
   openaiApiKey,
-};
-
-export const requireGoogleMapsApiKey = (): string => {
-  if (!env.googleMapsApiKey) {
-    throw new Error(
-      'Missing EXPO_PUBLIC_GOOGLE_MAPS_API_KEY. TODO: Set it in .env or EAS env vars.'
-    );
-  }
-
-  return env.googleMapsApiKey;
 };
 
 export const requireOsMapsApiKey = (): string => {

@@ -104,48 +104,56 @@ export const useAllRoutesSafety = (routes: DirectionsRoute[]): UseAllRoutesSafet
       return;
     }
 
-    // Fire analyses only for uncached routes
-    const promises = uncached.map(async (route) => {
-      try {
-        const data: SafetyMapResult = await withTimeout(
-          fetchSafetyMapData(route.path, undefined, route.distanceMeters),
-          25_000,
-        );
-        if (cancelRef.current !== batchId) return; // stale
+    // Analyse uncached routes IN PARALLEL — all APIs are free,
+    // and the Overpass queue + caching handle dedup automatically.
+    const analyseInParallel = async () => {
+      await Promise.all(
+        uncached.map(async (route) => {
+          if (cancelRef.current !== batchId) return;
 
-        const result = {
-          score: data.safetyScore,
-          pathfindingScore: data.pathfindingScore,
-          label: data.safetyLabel,
-          color: data.safetyColor,
-          mainRoadRatio: data.mainRoadRatio,
-          dataConfidence: data.dataConfidence,
-        };
+          try {
+            const data: SafetyMapResult = await withTimeout(
+              fetchSafetyMapData(route.path, undefined, route.distanceMeters),
+              25_000,
+            );
+            if (cancelRef.current !== batchId) return;
 
-        // Persist in cache
-        scoreCache.set(routeFingerprint(route), result);
+            const result = {
+              score: data.safetyScore,
+              pathfindingScore: data.pathfindingScore,
+              label: data.safetyLabel,
+              color: data.safetyColor,
+              mainRoadRatio: data.mainRoadRatio,
+              dataConfidence: data.dataConfidence,
+            };
 
-        setScores((prev: Record<string, RouteScore>) => ({
-          ...prev,
-          [route.id]: {
-            routeId: route.id,
-            ...result,
-            status: 'done',
-          },
-        }));
-      } catch {
-        if (cancelRef.current !== batchId) return;
-        setScores((prev: Record<string, RouteScore>) => ({
-          ...prev,
-          [route.id]: { ...prev[route.id], status: 'error' },
-        }));
+            // Persist in cache
+            scoreCache.set(routeFingerprint(route), result);
+
+            setScores((prev: Record<string, RouteScore>) => ({
+              ...prev,
+              [route.id]: {
+                routeId: route.id,
+                ...result,
+                status: 'done',
+              },
+            }));
+          } catch {
+            if (cancelRef.current !== batchId) return;
+            setScores((prev: Record<string, RouteScore>) => ({
+              ...prev,
+              [route.id]: { ...prev[route.id], status: 'error' },
+            }));
+          }
+        }),
+      );
+
+      if (cancelRef.current === batchId) {
+        setLoading(false);
       }
-    });
+    };
 
-    Promise.allSettled(promises).then(() => {
-      if (cancelRef.current !== batchId) return;
-      setLoading(false);
-    });
+    analyseInParallel();
 
     return () => {
       cancelRef.current++; // cancel on unmount / route change

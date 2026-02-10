@@ -21,6 +21,8 @@ const buildHeaders = (): HeadersInit => {
 
 const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
   try {
+    const endpoint = url.split('?')[0].replace(NOMINATIM_BASE_URL, 'Nominatim').replace(OSRM_BASE_URL, 'OSRM');
+    console.log(`[OSM] 🌐 API call → ${endpoint}`);
     const response = await fetch(url, {
       ...options,
       headers: {

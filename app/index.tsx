@@ -20,16 +20,19 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MapTypeControl } from '@/src/components/maps/MapTypeControl';
 import RouteMap from '@/src/components/maps/RouteMap';
+import type { MapType } from '@/src/components/maps/RouteMap.types';
 import { useAIExplanation } from '@/src/hooks/useAIExplanation';
-import { useAllRoutesSafety } from '@/src/hooks/useAllRoutesSafety';
+import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
 import { useAutoPlaceSearch } from '@/src/hooks/useAutoPlaceSearch';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
-import { useDirections } from '@/src/hooks/useDirections';
 import { useNavigation } from '@/src/hooks/useNavigation';
 import { useOnboarding } from '@/src/hooks/useOnboarding';
-import { useRouteSafety } from '@/src/hooks/useRouteSafety';
+import { useSafeRoutes } from '@/src/hooks/useSafeRoutes';
 import { reverseGeocode } from '@/src/services/openStreetMap';
+import type { EnrichedSegment, SafeRoute } from '@/src/services/safeRoutes';
+import type { SafetyMapResult } from '@/src/services/safetyMapData';
 import type { DirectionsRoute, LatLng, PlaceDetails } from '@/src/types/google';
 
 export default function HomeScreen() {
@@ -55,6 +58,7 @@ export default function HomeScreen() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [mapPanTo, setMapPanTo] = useState<{ location: LatLng; key: number } | null>(null);
+  const [mapType, setMapType] = useState<MapType>('roadmap');
 
   // Which field gets the next map tap: 'origin' | 'destination' | null
   const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
@@ -237,15 +241,41 @@ export default function HomeScreen() {
     : manualOrigin?.location ?? originSearch.place?.location ?? null;
   const effectiveDestination = manualDest?.location ?? destSearch.place?.location ?? null;
 
+  // ── Safety-first pathfinding (replaces useDirections + useAllRoutesSafety) ──
   const {
-    status: directionsStatus,
-    routes,
-    error: directionsError,
-  } = useDirections(effectiveOrigin, effectiveDestination);
+    status: safeRoutesStatus,
+    routes: safeRoutes,
+    safestRoute,
+    error: safeRoutesError,
+    outOfRange,
+    outOfRangeMessage,
+    meta: safeRoutesMeta,
+  } = useSafeRoutes(effectiveOrigin, effectiveDestination);
 
-  // Background safety scoring for ALL routes
-  const { scores: routeScores, bestRouteId, loading: scoringRoutes } =
-    useAllRoutesSafety(routes);
+  // Derive values the rest of the UI expects
+  const routes: DirectionsRoute[] = safeRoutes;
+  const directionsStatus = safeRoutesStatus;
+  const directionsError = safeRoutesError;
+  const bestRouteId = safestRoute?.id ?? null;
+  const scoringRoutes = false; // scoring is done server-side, no separate loading state
+
+  // Build routeScores map from SafeRoute.safety data (for AI explanation compatibility)
+  const routeScores: Record<string, RouteScore> = useMemo(() => {
+    const scores: Record<string, RouteScore> = {};
+    for (const r of safeRoutes) {
+      scores[r.id] = {
+        routeId: r.id,
+        score: r.safety.score,
+        pathfindingScore: r.safety.score, // same for our engine
+        label: r.safety.label,
+        color: r.safety.color,
+        mainRoadRatio: r.safety.mainRoadRatio / 100,
+        dataConfidence: 1, // server always has full data
+        status: 'done',
+      };
+    }
+    return scores;
+  }, [safeRoutes]);
 
   // Reset sheet height when routes change
   useEffect(() => {
@@ -289,17 +319,145 @@ export default function HomeScreen() {
     return routes.find((route) => route.id === selectedRouteId) ?? null;
   }, [routes, selectedRouteId]);
 
-  const { 
-    status: safetyStatus, 
-    markers: safetyMarkers, 
-    routeSegments,
-    roadLabels, 
-    result: safetyResult, 
-    error: safetyError,
-    progressMessage: safetyProgressMessage,
-    progressPercent: safetyProgressPercent,
-  } =
-    useRouteSafety(selectedRoute);
+  // Full SafeRoute for the selected route (with routeStats, routePOIs, enrichedSegments)
+  const selectedSafeRoute = useMemo<SafeRoute | null>(() => {
+    return (safeRoutes as SafeRoute[]).find((r) => r.id === selectedRouteId) ?? null;
+  }, [safeRoutes, selectedRouteId]);
+
+  // Generate map markers from route POIs
+  const poiMarkers = useMemo(() => {
+    const pois = selectedSafeRoute?.routePOIs;
+    if (!pois) return [];
+    const markers: Array<{ id: string; kind: string; coordinate: { latitude: number; longitude: number }; label: string }> = [];
+    pois.cctv?.forEach((c, i) => markers.push({
+      id: `poi-cctv-${i}`, kind: 'cctv',
+      coordinate: { latitude: c.lat, longitude: c.lng }, label: 'CCTV Camera',
+    }));
+    pois.transit?.forEach((t, i) => markers.push({
+      id: `poi-transit-${i}`, kind: 'bus_stop',
+      coordinate: { latitude: t.lat, longitude: t.lng }, label: 'Transit Stop',
+    }));
+    pois.deadEnds?.forEach((d, i) => markers.push({
+      id: `poi-deadend-${i}`, kind: 'dead_end',
+      coordinate: { latitude: d.lat, longitude: d.lng }, label: 'Dead End',
+    }));
+    pois.lights?.forEach((l, i) => markers.push({
+      id: `poi-light-${i}`, kind: 'light',
+      coordinate: { latitude: l.lat, longitude: l.lng }, label: 'Street Light',
+    }));
+    pois.places?.forEach((p, i) => markers.push({
+      id: `poi-place-${i}`, kind: 'shop',
+      coordinate: { latitude: p.lat, longitude: p.lng }, label: 'Open Place',
+    }));
+    pois.crimes?.forEach((cr, i) => markers.push({
+      id: `poi-crime-${i}`, kind: 'crime',
+      coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime',
+    }));
+    return markers;
+  }, [selectedSafeRoute]);
+
+  // ── Derive safety data INSTANTLY from the already-fetched SafeRoute ──
+  // No extra network calls — the backend already computed everything.
+  // All counts are PER-ROUTE (from enriched segments + routeStats), not area-wide.
+  const safetyResult = useMemo<SafetyMapResult | null>(() => {
+    if (!selectedSafeRoute) return null;
+    const s = selectedSafeRoute.safety;
+    const stats = selectedSafeRoute.routeStats;
+    const segs = selectedSafeRoute.enrichedSegments ?? [];
+
+    // Count lights along THIS route: segments with good lighting (> 0.5)
+    let litSegments = 0;
+    let unlitSegments = 0;
+    for (const seg of segs) {
+      if (seg.lightScore > 0.5) litSegments++;
+      else unlitSegments++;
+    }
+
+    // Count crime hotspots along THIS route
+    // crimeScore is inverted: 1.0 = safe, 0.0 = high crime
+    // Only count segments near actual crime hotspots (score < 0.4)
+    let crimeHotspots = 0;
+    for (const seg of segs) {
+      if (seg.crimeScore < 0.4) crimeHotspots++;
+    }
+
+    // Count open/active places along THIS route (placeScore > 0 means nearby activity)
+    let openPlaceCount = 0;
+    for (const seg of segs) {
+      if (seg.placeScore > 0.1) openPlaceCount++;
+    }
+
+    return {
+      markers: [],
+      roadOverlays: [],
+      roadLabels: [],
+      routeSegments: [],
+      crimeCount: crimeHotspots,
+      streetLights: litSegments,
+      litRoads: litSegments,
+      unlitRoads: unlitSegments,
+      openPlaces: openPlaceCount,
+      busStops: stats?.transitStopsNearby ?? 0,
+      safetyScore: s.score,
+      safetyLabel: s.label,
+      safetyColor: s.color,
+      mainRoadRatio: s.mainRoadRatio / 100,
+      pathfindingScore: s.score,
+      dataConfidence: 1,
+    };
+  }, [selectedSafeRoute]);
+
+  const safetyStatus: 'idle' | 'loading' | 'ready' | 'error' =
+    safeRoutesStatus === 'loading' ? 'loading'
+    : selectedSafeRoute ? 'ready'
+    : 'idle';
+  const safetyError = safeRoutesError;
+  const safetyProgressMessage = safeRoutesStatus === 'loading' ? 'Computing safest routes…' : '';
+  const safetyProgressPercent = safeRoutesStatus === 'loading' ? 50 : 0;
+
+  // safetyMarkers no longer needed — all POI markers come from routePOIs
+  const safetyMarkers: Array<{ id: string; kind: string; coordinate: { latitude: number; longitude: number }; label?: string }> = [];
+
+  // Build route segments for the coloured route overlay on the map
+  const routeSegments = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    return selectedSafeRoute.enrichedSegments.map((seg, i) => ({
+      id: `seg-${i}`,
+      path: [seg.startCoord, seg.endCoord],
+      color: seg.color,
+      score: seg.safetyScore,
+    }));
+  }, [selectedSafeRoute]);
+
+  // Build road labels from enriched segments (deduplicated by road name)
+  const roadLabels = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    const seen = new Set<string>();
+    const labels: Array<{ id: string; coordinate: { latitude: number; longitude: number }; roadType: string; displayName: string; color: string }> = [];
+    for (const seg of selectedSafeRoute.enrichedSegments) {
+      if (seg.roadName && !seen.has(seg.roadName)) {
+        seen.add(seg.roadName);
+        const typeColors: Record<string, string> = {
+          primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+          residential: '#64748b', footway: '#f59e0b', path: '#f59e0b',
+          pedestrian: '#34d399', service: '#94a3b8',
+        };
+        labels.push({
+          id: `rl-${labels.length}`,
+          coordinate: seg.midpointCoord,
+          roadType: seg.highway,
+          displayName: seg.roadName,
+          color: typeColors[seg.highway] || '#64748b',
+        });
+      }
+    }
+    return labels;
+  }, [selectedSafeRoute]);
+
+  // Merge POI markers with safety markers
+  const allMarkers = useMemo(() => {
+    return [...safetyMarkers, ...poiMarkers] as any[];
+  }, [safetyMarkers, poiMarkers]);
 
   // ── Navigation ──
   const nav = useNavigation(selectedRoute);
@@ -366,7 +524,7 @@ export default function HomeScreen() {
     setSelectedRouteId(null);
   };
 
-  const distanceLabel = selectedRoute ? formatDistance(selectedRoute.distanceMeters) : '--';
+  const distanceLabel = selectedRoute ? `🚶 ${formatDistance(selectedRoute.distanceMeters)}` : '--';
   const durationLabel = selectedRoute ? formatDuration(selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(selectedRoute);
   
@@ -374,24 +532,32 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.mapContainer}>
-        <RouteMap
-          origin={effectiveOrigin}
-          destination={effectiveDestination}
-          routes={routes}
-          selectedRouteId={selectedRouteId}
-          safetyMarkers={safetyMarkers}
-          routeSegments={routeSegments}
-          roadLabels={roadLabels}
-          panTo={mapPanTo}
-          isNavigating={isNavActive}
-          navigationLocation={nav.userLocation}
-          navigationHeading={nav.userHeading}
-          onSelectRoute={setSelectedRouteId}
-          onLongPress={handleMapLongPress}
-          onMapPress={handleMapPress}
-        />
-      </View>
+      {/* Map fills the screen as a flex child.
+          All subsequent absolutely-positioned siblings render on top —
+          this is the ONLY reliable z-ordering approach on Android
+          when a WebView (SurfaceView) is involved. */}
+      <RouteMap
+        origin={effectiveOrigin}
+        destination={effectiveDestination}
+        routes={routes}
+        selectedRouteId={selectedRouteId}
+        safetyMarkers={allMarkers}
+        routeSegments={routeSegments}
+        roadLabels={roadLabels}
+        panTo={mapPanTo}
+        isNavigating={isNavActive}
+        navigationLocation={nav.userLocation}
+        navigationHeading={nav.userHeading}
+        mapType={mapType}
+        onSelectRoute={setSelectedRouteId}
+        onLongPress={handleMapLongPress}
+        onMapPress={handleMapPress}
+      />
+
+      {/* Map Type Control */}
+      {!isNavActive && (
+        <MapTypeControl mapType={mapType} onMapTypeChange={setMapType} />
+      )}
       
       {/* Pin-mode banner — outside mapContainer so it renders above WebView on Android */}
       {pinMode && (
@@ -681,139 +847,265 @@ export default function HomeScreen() {
             </View>
             
             {directionsStatus === 'loading' && (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color="#1570ef" />
-                <Text style={styles.loadingText}>Finding routes...</Text>
-              </View>
+              <JailLoadingAnimation />
             )}
             
-            {directionsError && <Text style={styles.error}>{directionsError.message}</Text>}
-            
-            {scoringRoutes && (
-              <View style={styles.scoringBanner}>
-                <ActivityIndicator size="small" color="#1570ef" />
-                <Text style={styles.scoringBannerText}>Scoring all routes for safety…</Text>
+            {outOfRange && (
+              <View style={[styles.scoringBanner, { backgroundColor: '#fef2f2' }]}>
+                <Ionicons name="alert-circle" size={18} color="#dc2626" />
+                <Text style={[styles.scoringBannerText, { color: '#dc2626' }]}>
+                  {outOfRangeMessage || 'Destination is out of range (max 20 km).'}
+                </Text>
               </View>
             )}
 
-            {routes.slice(0, 5).map((route, index) => {
-              const isSelected = route.id === selectedRouteId;
-              const isBest = route.id === bestRouteId;
-              const scoreInfo = routeScores[route.id];
-              const label = isBest ? 'Safest Route' : `Route ${index + 1}`;
+            {directionsError && !outOfRange && <Text style={styles.error}>{directionsError.message}</Text>}
 
-              return (
-                <Pressable
-                  key={route.id}
-                  onPress={() => setSelectedRouteId(route.id)}
-                  accessibilityRole="button"
-                  style={[
-                    styles.routeCard,
-                    isSelected && styles.routeCardSelected,
-                    isBest && styles.routeCardBest,
-                  ]}
-                >
-                  <View style={styles.routeHeader}>
-                    <View style={styles.routeLabelRow}>
-                      {isBest && (
-                        <View style={styles.bestBadge}>
-                          <Text style={styles.bestBadgeTick}>✓</Text>
+            {/* ── Web: side-by-side layout | Mobile: stacked ── */}
+            <View style={[
+              styles.routeAndSafetyContainer,
+              Platform.OS === 'web' && styles.routeAndSafetyContainerWeb,
+            ]}>
+              {/* ── Left column: Route cards ── */}
+              <View style={[
+                styles.routesColumn,
+                Platform.OS === 'web' && styles.routesColumnWeb,
+              ]}>
+                {(safeRoutes as SafeRoute[]).slice(0, 5).map((route, index) => {
+                  const isSelected = route.id === selectedRouteId;
+                  const isBest = route.isSafest;
+                  const safety = route.safety;
+                  const label = isBest ? 'Safest Route' : `Route ${index + 1}`;
+
+                  return (
+                    <Pressable
+                      key={route.id}
+                      onPress={() => setSelectedRouteId(route.id)}
+                      accessibilityRole="button"
+                      style={[
+                        styles.routeCard,
+                        isSelected && styles.routeCardSelected,
+                        isBest && styles.routeCardBest,
+                      ]}
+                    >
+                      <View style={styles.routeHeader}>
+                        <View style={styles.routeLabelRow}>
+                          {isBest && (
+                            <View style={styles.bestBadge}>
+                              <Text style={styles.bestBadgeTick}>✓</Text>
+                            </View>
+                          )}
+                          <Text
+                            style={[
+                              styles.routeLabel,
+                              isSelected && styles.routeLabelSelected,
+                              isBest && styles.routeLabelBest,
+                            ]}
+                          >
+                            {label}
+                          </Text>
                         </View>
-                      )}
-                      <Text
-                        style={[
-                          styles.routeLabel,
-                          isSelected && styles.routeLabelSelected,
-                          isBest && styles.routeLabelBest,
-                        ]}
-                      >
-                        {label}
+                        <View style={[styles.scoreChip, { backgroundColor: safety.color + '20' }]}>
+                          <View style={[styles.scoreChipDot, { backgroundColor: safety.color }]} />
+                          <Text style={[styles.scoreChipText, { color: safety.color }]}>
+                            {safety.score}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.routeDetails}>
+                        🚶 {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
+                        {` · ${safety.label}`}
                       </Text>
-                    </View>
-                    {scoreInfo?.status === 'done' && (
-                      <View style={[styles.scoreChip, { backgroundColor: scoreInfo.color + '20' }]}>
-                        <View style={[styles.scoreChipDot, { backgroundColor: scoreInfo.color }]} />
-                        <Text style={[styles.scoreChipText, { color: scoreInfo.color }]}>
-                          {scoreInfo.score}
+                      {isSelected && (
+                        <Text style={styles.routeDetailsSubtle}>
+                          Main roads: {safety.mainRoadRatio}% · Lighting: {safety.breakdown.lighting}% · CCTV: {safety.breakdown.cctv}%
                         </Text>
-                      </View>
-                    )}
-                    {scoreInfo?.status === 'pending' && (
-                      <ActivityIndicator size="small" color="#94a3b8" />
-                    )}
-                  </View>
-                  <Text style={styles.routeDetails}>
-                    {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
-                    {scoreInfo?.status === 'done' ? ` · ${scoreInfo.label}` : ''}
-                  </Text>
-                </Pressable>
-              );
-            })}
+                      )}
+                    </Pressable>
+                  );
+                })}
 
-            {/* Start Navigation Button */}
-            {selectedRoute && nav.state === 'idle' && (
-              <Pressable
-                style={styles.startNavButton}
-                onPress={nav.start}
-                accessibilityRole="button"
-                accessibilityLabel="Start navigation"
-              >
-                <Ionicons name="navigate" size={20} color="#ffffff" />
-                <Text style={styles.startNavButtonText}>Start Navigation</Text>
-              </Pressable>
-            )}
-            
-            {showSafety && (
+                {/* Start Navigation Button */}
+                {selectedRoute && nav.state === 'idle' && (
+                  <Pressable
+                    style={styles.startNavButton}
+                    onPress={nav.start}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start navigation"
+                  >
+                    <Ionicons name="navigate" size={20} color="#ffffff" />
+                    <Text style={styles.startNavButtonText}>Start Navigation</Text>
+                  </Pressable>
+                )}
+              </View>
+
+              {/* ── Right column: Safety parameters ── */}
+              {showSafety && safetyResult && (
+                <View style={[
+                  styles.safetyColumn,
+                  Platform.OS === 'web' && styles.safetyColumnWeb,
+                ]}>
+                  {safetyError && <Text style={styles.error}>{safetyError.message}</Text>}
+
+                  {/* Overall Score — big hero card */}
+                  <View style={[styles.safetyHeroCard, { borderColor: safetyResult.safetyColor + '44' }]}>
+                    <CircleProgress
+                      size={Platform.OS === 'web' ? 64 : 52}
+                      strokeWidth={5}
+                      progress={safetyResult.safetyScore}
+                      color={safetyResult.safetyColor}
+                    />
+                    <Text style={[styles.safetyHeroLabel, { color: safetyResult.safetyColor }]}>
+                      {safetyResult.safetyLabel}
+                    </Text>
+                  </View>
+
+                  {/* 2×2 grid of key metrics */}
+                  <View style={styles.safetyGridWeb}>
+                    {/* Crime */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#ef444444' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#ef4444' }]}>🔴</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#ef4444' }]}>{safetyResult.crimeCount}</Text>
+                        <Text style={styles.safetyGridLabel}>Crimes</Text>
+                      </View>
+                    </View>
+                    {/* Lights */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#eab30844' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#eab308' }]}>💡</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#eab308' }]}>{safetyResult.streetLights}</Text>
+                        <Text style={styles.safetyGridLabel}>Lights</Text>
+                      </View>
+                    </View>
+                    {/* CCTV */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#6366f144' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#6366f1' }]}>📷</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#6366f1' }]}>{selectedSafeRoute?.routeStats?.cctvCamerasNearby ?? 0}</Text>
+                        <Text style={styles.safetyGridLabel}>CCTV</Text>
+                      </View>
+                    </View>
+                    {/* Open Places */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#22c55e44' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#22c55e' }]}>🏪</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#22c55e' }]}>{safetyResult.openPlaces}</Text>
+                        <Text style={styles.safetyGridLabel}>Open</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {/* ── Below the side-by-side: Detailed cards (full width) ── */}
+            {showSafety && safetyResult && (
               <>
-                {safetyStatus === 'loading' && (
-                  <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="small" color="#1570ef" />
-                    <Text style={styles.loadingText}>{safetyProgressMessage || 'Analyzing safety...'}</Text>
-                    {safetyProgressPercent > 0 && (
-                      <View style={styles.progressBarContainer}>
-                        <View style={[styles.progressBar, { width: `${safetyProgressPercent}%` }]} />
+                  {/* Row 2: Detailed parameter cards — why is this route safer? */}
+                  {selectedSafeRoute?.routeStats && (
+                    <>
+                    <Text style={styles.sectionLabel}>Route Details</Text>
+                    <View style={styles.safetyCardsRow}>
+                      {/* Road Type */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🛣️</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.safety.mainRoadRatio}%</Text>
+                        <Text style={styles.detailLabel}>Main Roads</Text>
+                      </View>
+                      {/* Sidewalks */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🚶</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.routeStats.sidewalkPct}%</Text>
+                        <Text style={styles.detailLabel}>Sidewalks</Text>
+                      </View>
+                      {/* Transit Stops */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🚏</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.routeStats.transitStopsNearby}</Text>
+                        <Text style={styles.detailLabel}>Transit</Text>
+                      </View>
+                    </View>
+                    <View style={styles.safetyCardsRow}>
+                      {/* Dead Ends */}
+                      <View style={[styles.detailCard, selectedSafeRoute.routeStats.deadEnds > 0 && styles.detailCardWarning]}>
+                        <Text style={styles.detailIcon}>⛔</Text>
+                        <Text style={[styles.detailValue, selectedSafeRoute.routeStats.deadEnds > 0 && { color: '#f97316' }]}>
+                          {selectedSafeRoute.routeStats.deadEnds}
+                        </Text>
+                        <Text style={styles.detailLabel}>Dead Ends</Text>
+                      </View>
+                      {/* Surface */}
+                      <View style={[styles.detailCard, selectedSafeRoute.routeStats.unpavedPct > 0 && styles.detailCardWarning]}>
+                        <Text style={styles.detailIcon}>🪨</Text>
+                        <Text style={[styles.detailValue, selectedSafeRoute.routeStats.unpavedPct > 0 && { color: '#f97316' }]}>
+                          {selectedSafeRoute.routeStats.unpavedPct}%
+                        </Text>
+                        <Text style={styles.detailLabel}>Unpaved</Text>
+                      </View>
+                      {/* Foot Traffic (from breakdown) */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>👣</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.safety.breakdown.traffic}%</Text>
+                        <Text style={styles.detailLabel}>Foot Traffic</Text>
+                      </View>
+                    </View>
+
+                    {/* Road type breakdown */}
+                    {Object.keys(selectedSafeRoute.safety.roadTypes).length > 0 && (
+                      <View style={styles.roadTypeBreakdown}>
+                        <Text style={styles.roadTypeTitle}>Road Type Breakdown</Text>
+                        <View style={styles.roadTypeBar}>
+                          {Object.entries(selectedSafeRoute.safety.roadTypes)
+                            .sort(([, a], [, b]) => (b as number) - (a as number))
+                            .map(([type, pct]) => {
+                              const colors: Record<string, string> = {
+                                primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+                                residential: '#93c5fd', footway: '#fbbf24', path: '#f59e0b',
+                                steps: '#f97316', pedestrian: '#34d399', service: '#94a3b8',
+                                cycleway: '#a78bfa', living_street: '#67e8f9', track: '#d97706',
+                                trunk: '#1d4ed8', unclassified: '#cbd5e1',
+                              };
+                              return (
+                                <View key={type} style={[styles.roadTypeSegment, {
+                                  flex: pct as number,
+                                  backgroundColor: colors[type] || '#94a3b8',
+                                }]} />
+                              );
+                            })}
+                        </View>
+                        <View style={styles.roadTypeLegend}>
+                          {Object.entries(selectedSafeRoute.safety.roadTypes)
+                            .sort(([, a], [, b]) => (b as number) - (a as number))
+                            .slice(0, 4)
+                            .map(([type, pct]) => {
+                              const labels: Record<string, string> = {
+                                primary: 'Main', secondary: 'Secondary', tertiary: 'Minor',
+                                residential: 'Residential', footway: 'Path', path: 'Path',
+                                steps: 'Steps', pedestrian: 'Pedestrian', service: 'Service',
+                                cycleway: 'Cycleway', living_street: 'Living St', track: 'Track',
+                                trunk: 'Highway', unclassified: 'Other',
+                              };
+                              return (
+                                <Text key={type} style={styles.roadTypeLegendItem}>
+                                  {labels[type] || type}: {pct}%
+                                </Text>
+                              );
+                            })}
+                        </View>
                       </View>
                     )}
-                  </View>
-                )}
-                
-                {safetyError && <Text style={styles.error}>{safetyError.message}</Text>}
-                
-                {safetyResult && (
-                  <View style={styles.safetyCardsRow}>
-                    {/* Card 1: Overall Score with circular progress */}
-                    <View style={[styles.safetyCard, { borderColor: safetyResult.safetyColor + '44' }]}>
-                      <CircleProgress
-                        size={52}
-                        strokeWidth={5}
-                        progress={safetyResult.safetyScore}
-                        color={safetyResult.safetyColor}
-                      />
-                      <Text style={[styles.safetyCardLabel, { color: safetyResult.safetyColor }]}>
-                        {safetyResult.safetyLabel}
-                      </Text>
-                    </View>
-                    {/* Card 2: Crime */}
-                    <View style={[styles.safetyCard, { borderColor: '#ef444444' }]}>
-                      <Text style={[styles.safetyCardValue, { color: '#ef4444' }]}>{safetyResult.crimeCount}</Text>
-                      <Text style={styles.safetyCardLabel}>Crime</Text>
-                    </View>
-                    {/* Card 3: Lights */}
-                    <View style={[styles.safetyCard, { borderColor: '#eab30844' }]}>
-                      <Text style={[styles.safetyCardValue, { color: '#eab308' }]}>{safetyResult.streetLights}</Text>
-                      <Text style={styles.safetyCardLabel}>Lights</Text>
-                    </View>
-                    {/* Card 4: Activity */}
-                    <View style={[styles.safetyCard, { borderColor: '#22c55e44' }]}>
-                      <Text style={[styles.safetyCardValue, { color: '#22c55e' }]}>{safetyResult.openPlaces}</Text>
-                      <Text style={styles.safetyCardLabel}>Open</Text>
-                    </View>
-                  </View>
-                )}
+                    </>
+                  )}
 
                 {/* Interactive safety profile chart */}
-                {routeSegments.length > 1 && (
-                  <SafetyProfileChart segments={routeSegments} />
+                {selectedSafeRoute?.enrichedSegments && selectedSafeRoute.enrichedSegments.length > 1 && (
+                  <SafetyProfileChart
+                    segments={routeSegments}
+                    enrichedSegments={selectedSafeRoute.enrichedSegments}
+                    roadNameChanges={selectedSafeRoute.routeStats?.roadNameChanges ?? []}
+                    totalDistance={selectedSafeRoute.distanceMeters}
+                  />
                 )}
               </>
             )}
@@ -962,6 +1254,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       )}
+
     </View>
   );
 }
@@ -1061,27 +1354,202 @@ function CircleProgress({
   );
 }
 
+// ── Animated "Jailing Criminals" Loading Screen ──────────────────────────────
+const LOADING_STAGES = [
+  { icon: '🔍', text: 'Scanning the streets…' },
+  { icon: '🗺️', text: 'Mapping every dark alley…' },
+  { icon: '💡', text: 'Counting street lights…' },
+  { icon: '📹', text: 'Locating CCTV cameras…' },
+  { icon: '🚨', text: 'Checking crime reports…' },
+  { icon: '🔒', text: 'Locking down unsafe zones…' },
+  { icon: '👮', text: 'Dispatching safety patrol…' },
+  { icon: '⛓️', text: 'Jailing the criminals…' },
+  { icon: '🛡️', text: 'Building your safe route…' },
+  { icon: '✅', text: 'Almost there…' },
+];
+
+function JailLoadingAnimation() {
+  const [stageIdx, setStageIdx] = useState(0);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const barWidth = useRef(new Animated.Value(0)).current;
+  const bounceAnim = useRef(new Animated.Value(0)).current;
+
+  // Cycle through stages
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Fade out
+      Animated.timing(fadeAnim, {
+        toValue: 0, duration: 150, useNativeDriver: true,
+      }).start(() => {
+        setStageIdx((prev) => (prev + 1) % LOADING_STAGES.length);
+        // Fade in
+        Animated.timing(fadeAnim, {
+          toValue: 1, duration: 200, useNativeDriver: true,
+        }).start();
+      });
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Progress bar animation
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(barWidth, { toValue: 1, duration: 3000, useNativeDriver: false }),
+        Animated.timing(barWidth, { toValue: 0, duration: 0, useNativeDriver: false }),
+      ]),
+    ).start();
+  }, []);
+
+  // Bounce the icon
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounceAnim, { toValue: -6, duration: 400, useNativeDriver: true }),
+        Animated.timing(bounceAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]),
+    ).start();
+  }, []);
+
+  const stage = LOADING_STAGES[stageIdx];
+
+  return (
+    <View style={jailStyles.container}>
+      {/* Jail bars background */}
+      <View style={jailStyles.barsContainer}>
+        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+          <View key={i} style={jailStyles.bar} />
+        ))}
+      </View>
+
+      {/* Bouncing icon */}
+      <Animated.View style={[jailStyles.iconWrap, { transform: [{ translateY: bounceAnim }] }]}>
+        <Text style={jailStyles.icon}>{stage.icon}</Text>
+      </Animated.View>
+
+      {/* Status text */}
+      <Animated.Text style={[jailStyles.statusText, { opacity: fadeAnim }]}>
+        {stage.text}
+      </Animated.Text>
+
+      {/* Progress bar */}
+      <View style={jailStyles.progressTrack}>
+        <Animated.View
+          style={[
+            jailStyles.progressFill,
+            {
+              width: barWidth.interpolate({
+                inputRange: [0, 1],
+                outputRange: ['0%', '100%'],
+              }),
+            },
+          ]}
+        />
+      </View>
+
+      {/* Subtitle */}
+      <Text style={jailStyles.subtitle}>Finding the safest path for you</Text>
+    </View>
+  );
+}
+
+const jailStyles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  barsContainer: {
+    position: 'absolute',
+    top: 10,
+    left: 20,
+    right: 20,
+    bottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    opacity: 0.06,
+  },
+  bar: {
+    width: 4,
+    height: '100%',
+    backgroundColor: '#1e293b',
+    borderRadius: 2,
+  },
+  iconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+  },
+  icon: {
+    fontSize: 30,
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'center',
+  },
+  progressTrack: {
+    width: '80%',
+    height: 5,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 3,
+  },
+  subtitle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+});
+
 // ── Interactive safety profile chart (smooth, like hiking elevation charts) ──
 function SafetyProfileChart({
   segments,
+  enrichedSegments,
+  roadNameChanges,
+  totalDistance,
 }: {
   segments: { score: number; color: string }[];
+  enrichedSegments?: EnrichedSegment[];
+  roadNameChanges?: Array<{ segmentIndex: number; name: string; distance: number }>;
+  totalDistance?: number;
 }) {
   const [chartWidth, setChartWidth] = useState(0);
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const CHART_H = 120;
+  const CHART_H = 140;
   const PAD_TOP = 14;
   const PAD_BOT = 6;
   const DRAW_H = CHART_H - PAD_TOP - PAD_BOT;
+  const ANNOTATION_H = 28;
 
   const onLayout = (e: LayoutChangeEvent) => {
     setChartWidth(e.nativeEvent.layout.width);
   };
 
+  // Use enriched segments if available for per-segment scores
+  const segScores = useMemo(() => {
+    if (enrichedSegments && enrichedSegments.length > 0) {
+      return enrichedSegments.map((s) => s.safetyScore);
+    }
+    return segments.map((s) => s.score);
+  }, [segments, enrichedSegments]);
+
   // Smooth the raw scores using a moving-average window
   const smoothed = useMemo(() => {
-    if (segments.length === 0) return [];
-    const raw = segments.map((s) => s.score);
+    if (segScores.length === 0) return [];
+    const raw = segScores;
     const windowSize = Math.max(3, Math.ceil(raw.length / 8));
     const half = Math.floor(windowSize / 2);
     return raw.map((_, i) => {
@@ -1092,7 +1560,51 @@ function SafetyProfileChart({
       }
       return sum / count;
     });
-  }, [segments]);
+  }, [segScores]);
+
+  // Build annotations from enriched segment data
+  const annotations = useMemo(() => {
+    if (!enrichedSegments || !chartWidth || smoothed.length === 0) return [];
+    const step = chartWidth / Math.max(1, smoothed.length - 1);
+    const annots: Array<{ x: number; label: string; icon: string; color: string }> = [];
+    const usedXRanges: number[] = [];
+
+    // Road name labels from roadNameChanges
+    if (roadNameChanges) {
+      for (const ch of roadNameChanges) {
+        if (ch.segmentIndex < smoothed.length) {
+          const x = ch.segmentIndex * step;
+          if (!usedXRanges.some(ux => Math.abs(ux - x) < 50)) {
+            usedXRanges.push(x);
+            annots.push({ x, label: ch.name.length > 14 ? ch.name.slice(0, 12) + '…' : ch.name, icon: '📍', color: '#475467' });
+          }
+        }
+      }
+    }
+
+    // Mark dead ends, surface changes, CCTV
+    for (let i = 0; i < enrichedSegments.length; i++) {
+      const seg = enrichedSegments[i];
+      const x = i * step;
+      if (seg.isDeadEnd && !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: 'Dead end', icon: '⛔', color: '#f97316' });
+      }
+      if (seg.surfaceType !== 'paved' && seg.surfaceType !== 'asphalt' && seg.surfaceType !== 'concrete' &&
+          i > 0 && enrichedSegments[i - 1].surfaceType !== seg.surfaceType &&
+          !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: seg.surfaceType, icon: '🪨', color: '#92400e' });
+      }
+      if (seg.cctvScore > 0 && (i === 0 || enrichedSegments[i - 1].cctvScore === 0) &&
+          !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: 'CCTV', icon: '📷', color: '#7c3aed' });
+      }
+    }
+
+    return annots;
+  }, [enrichedSegments, chartWidth, smoothed, roadNameChanges]);
 
   // Overall average for the reference line
   const avg = useMemo(() => {
@@ -1290,11 +1802,37 @@ function SafetyProfileChart({
         )}
       </View>
 
+      {/* Annotation markers row */}
+      {annotations.length > 0 && (
+        <View style={{ height: ANNOTATION_H, position: 'relative', marginTop: 2 }}>
+          {annotations.map((a, i) => (
+            <View
+              key={`ann-${i}`}
+              style={{
+                position: 'absolute',
+                left: Math.max(0, Math.min(chartWidth - 60, a.x - 30)),
+                top: 0,
+                alignItems: 'center',
+                width: 60,
+              }}
+            >
+              <Text style={{ fontSize: 10, lineHeight: 12 }}>{a.icon}</Text>
+              <Text
+                style={{ fontSize: 7, color: a.color, textAlign: 'center', fontWeight: '600' }}
+                numberOfLines={1}
+              >
+                {a.label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* X axis labels */}
       <View style={styles.chartXAxis}>
         <Text style={styles.chartXLabel}>🏠 Start</Text>
         <Text style={[styles.chartXLabel, { color: '#cbd5e1' }]}>
-          ── {segments.length} segments ──
+          {totalDistance ? `${(totalDistance / 1000).toFixed(1)} km • ${segments.length} seg` : `── ${segments.length} segments ──`}
         </Text>
         <Text style={styles.chartXLabel}>📍 End</Text>
       </View>
@@ -1355,10 +1893,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#ffffff',
-  },
-  mapContainer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 0,
   },
   
   // Top Search Container
@@ -1731,6 +2265,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#667085',
   },
+  routeDetailsSubtle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 2,
+  },
   
   // Safety Cards Row
   safetyCardsRow: {
@@ -1754,6 +2293,78 @@ const styles = StyleSheet.create({
   safetyCardValue: {
     fontSize: 22,
     fontWeight: '800',
+
+  },
+
+  // ── Web side-by-side layout ──
+  routeAndSafetyContainer: {
+    // Mobile: stacked column (default)
+  },
+  routeAndSafetyContainerWeb: {
+    flexDirection: 'row',
+    gap: 16,
+    alignItems: 'flex-start',
+  } as any,
+  routesColumn: {
+    // Mobile: full width
+  },
+  routesColumnWeb: {
+    flex: 1,
+    maxWidth: '50%',
+  } as any,
+  safetyColumn: {
+    marginTop: 12,
+  },
+  safetyColumnWeb: {
+    flex: 1,
+    maxWidth: '50%',
+    marginTop: 0,
+    position: 'sticky' as any,
+    top: 0,
+  } as any,
+  safetyHeroCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#eaecf0',
+    marginBottom: 12,
+  },
+  safetyHeroLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  safetyGridWeb: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  safetyGridCard: {
+    width: '48%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#eaecf0',
+  } as any,
+  safetyGridIcon: {
+    fontSize: 20,
+  },
+  safetyGridValue: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  safetyGridLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#667085',
   },
   safetyCardLabel: {
     fontSize: 11,
@@ -2181,5 +2792,81 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#64748b',
     fontWeight: '600',
+  },
+
+  // ── Route Details section ──
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 8,
+    marginTop: 4,
+    letterSpacing: 0.3,
+  },
+  detailCard: {
+    flex: 1,
+    minWidth: 85,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 10,
+    alignItems: 'center' as const,
+    marginHorizontal: 3,
+    marginVertical: 3,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  detailCardWarning: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fed7aa',
+  },
+  detailIcon: {
+    fontSize: 18,
+    marginBottom: 2,
+  },
+  detailValue: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: '#1e293b',
+  },
+  detailLabel: {
+    fontSize: 9,
+    fontWeight: '600' as const,
+    color: '#64748b',
+    textAlign: 'center' as const,
+    marginTop: 1,
+  },
+  roadTypeBreakdown: {
+    marginTop: 10,
+    padding: 10,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  roadTypeTitle: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#334155',
+    marginBottom: 6,
+  },
+  roadTypeBar: {
+    flexDirection: 'row' as const,
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden' as const,
+  },
+  roadTypeSegment: {
+    height: '100%' as any,
+  },
+  roadTypeLegend: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    marginTop: 6,
+    gap: 8,
+  },
+  roadTypeLegendItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 3,
   },
 });

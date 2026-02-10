@@ -8,6 +8,8 @@ import type {
   PoliceCrimeApiItem,
   SafetySummary,
 } from '@/src/types/safety';
+import { fetchNearbyPlacesCached } from '@/src/utils/nearbyCache';
+import { queueOverpassRequest } from '@/src/utils/overpassQueue';
 
 /**
  * Progress callback type for safety analysis
@@ -22,50 +24,15 @@ type BoundingBox = {
 };
 
 const POLICE_BASE_URL = env.policeApiBaseUrl;
-const OVERPASS_BASE_URL = env.overpassBaseUrl;
 
 // ---------------------------------------------------------------------------
 // Network helpers
 // ---------------------------------------------------------------------------
 
-const fetchJsonWithTimeout = async <T>(
-  url: string,
-  options?: RequestInit,
-  timeoutMs = 12000,
-): Promise<T> => {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new AppError('safety_http_error', `Safety request failed: ${response.status}`);
-    }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    clearTimeout(timeoutId);
-
-    if (error instanceof AppError) {
-      throw error;
-    }
-
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new AppError('safety_timeout', 'Request timed out');
-    }
-
-    throw new AppError('safety_network_error', 'Network error', error);
-  }
-};
-
 const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
   try {
+    const label = url.includes('police') ? 'Police API' : url.split('?')[0].slice(-40);
+    console.log(`[Safety] 🌐 API call → ${label}`);
     const response = await fetch(url, options);
 
     if (!response.ok) {
@@ -78,6 +45,28 @@ const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
       throw error;
     }
 
+    throw new AppError('safety_network_error', 'Network error', error);
+  }
+};
+
+const fetchJsonWithTimeout = async <T>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = 8000,
+): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const label = url.includes('police') ? 'Police API' : url.split('?')[0].slice(-40);
+    console.log(`[Safety] 🌐 API call → ${label}`);
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!response.ok) throw new AppError('safety_http_error', `Safety request failed: ${response.status}`);
+    return (await response.json()) as T;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof AppError) throw error;
+    if (error instanceof Error && error.name === 'AbortError') throw new AppError('safety_timeout', 'Request timed out');
     throw new AppError('safety_network_error', 'Network error', error);
   }
 };
@@ -354,7 +343,7 @@ export const fetchCrimesForRoute = async (
     const dateParam = getRecentMonthDate(1);
     const url = `${POLICE_BASE_URL}/crimes-street/all-crime?poly=${encodeURIComponent(polygon)}&date=${dateParam}`;
 
-    const data = await fetchJsonWithTimeout<unknown>(url, undefined, 12000);
+    const data = await fetchJsonWithTimeout<unknown>(url, undefined, 8000);
 
     // Validate response is an array
     if (!Array.isArray(data)) {
@@ -501,11 +490,7 @@ export const fetchHighwaysForRoute = async (
     const params = new URLSearchParams({ data: query });
     let response: any;
     try {
-      response = await fetchJsonWithTimeout<any>(OVERPASS_BASE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      }, 18000);
+      response = await queueOverpassRequest<any>(params.toString(), 12000, 'highways');
     } catch {
       // Retry with a much smaller query — residential & primary only
       const fallbackQuery = `
@@ -516,11 +501,7 @@ export const fetchHighwaysForRoute = async (
         out tags center qt;
       `;
       const fallbackParams = new URLSearchParams({ data: fallbackQuery });
-      response = await fetchJsonWithTimeout<any>(OVERPASS_BASE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: fallbackParams.toString(),
-      }, 12000);
+      response = await queueOverpassRequest<any>(fallbackParams.toString(), 8000, 'highways-fallback');
     }
 
     const stats: OverpassHighwayStats = {
@@ -617,13 +598,7 @@ export const fetchHighwaysForSegment = async (
     `;
 
     const params = new URLSearchParams({ data: query });
-    const response = await fetchJson<OverpassApiResponse>(OVERPASS_BASE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    });
+    const response = await queueOverpassRequest<OverpassApiResponse>(params.toString(), 10000, 'segment-highways');
 
     const stats: OverpassHighwayStats = {
       totalHighways: 0,
@@ -672,16 +647,47 @@ export const fetchHighwaysForSegment = async (
   }
 };
 
+/**
+ * Count places with human activity along a route using Overpass (OSM).
+ * Completely FREE — no Google API calls needed.
+ *
+ * Uses the shared nearbyCache module so results are de-duplicated across
+ * safetyMapData.ts and safety.ts — no double API calls for the same area.
+ */
 export const fetchOpenPlacesForRoute = async (path: LatLng[]): Promise<number> => {
   try {
     if (path.length === 0) return 0;
 
-    // Only run on web platform where Google Places is available
-    if (typeof window === 'undefined' || typeof document === 'undefined') return 0;
+    const cacheKey = `openplaces:${hashPath(path)}`;
+    const cached = getCached<number>(cacheKey);
+    if (cached !== null) return cached;
 
-    // Dynamic import to avoid issues on native
-    const { countOpenPlacesAlongRoute } = await import('./googleMaps.web');
-    return await countOpenPlacesAlongRoute(path, 200);
+    // Sample up to 3 points along the route (start + 1/3 + 2/3)
+    // and fetch ALL in parallel for speed
+    const samplePoints: LatLng[] = [path[0]];
+    if (path.length > 4) {
+      samplePoints.push(path[Math.floor(path.length / 3)]);
+      samplePoints.push(path[Math.floor((path.length * 2) / 3)]);
+    }
+
+    const seenIds = new Set<string>();
+
+    // Parallel fetch for all sample points
+    const results = await Promise.all(
+      samplePoints.map((center) =>
+        fetchNearbyPlacesCached(center.latitude, center.longitude, 300).catch(() => []),
+      ),
+    );
+
+    for (const places of results) {
+      for (const place of places) {
+        if (place.place_id) seenIds.add(place.place_id);
+      }
+    }
+
+    const count = seenIds.size;
+    setCache(cacheKey, count);
+    return count;
   } catch (error) {
     console.error('[Safety] fetchOpenPlacesForRoute: Error:', error);
     return 0;
@@ -709,7 +715,7 @@ export const fetchWaysWithNodesForSegment = async (
     if (!bbox) return [];
 
     const query = `
-      [out:json][timeout:30];
+      [out:json][timeout:12];
       (
         way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary|primary)$"](${bbox.minLat},${bbox.minLng},${bbox.maxLat},${bbox.maxLng});
       );
@@ -718,13 +724,7 @@ export const fetchWaysWithNodesForSegment = async (
 
     const params = new URLSearchParams({ data: query });
     
-    const response = await fetchJson<any>(OVERPASS_BASE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    });
+    const response = await queueOverpassRequest<any>(params.toString(), 12000, 'ways-nodes');
 
     // Build a map of node IDs to coordinates
     const nodeCoordinates: Record<number, LatLng> = {};
