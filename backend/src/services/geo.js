@@ -65,3 +65,56 @@ function decodePolyline(encoded) {
     do {
       byte = encoded.charCodeAt(index++) - 63;
       result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+/**
+ * Encode [{lat, lng}, ...] into a Google-style polyline string.
+ */
+function encodePolyline(points) {
+  let prevLat = 0, prevLng = 0, result = '';
+  for (const { lat, lng } of points) {
+    const iLat = Math.round(lat * 1e5);
+    const iLng = Math.round(lng * 1e5);
+    result += _encodeValue(iLat - prevLat);
+    result += _encodeValue(iLng - prevLng);
+    prevLat = iLat;
+    prevLng = iLng;
+  }
+  return result;
+}
+
+function _encodeValue(value) {
+  let v = value < 0 ? ~(value << 1) : value << 1;
+  let result = '';
+  while (v >= 0x20) {
+    result += String.fromCharCode((0x20 | (v & 0x1f)) + 63);
+    v >>= 5;
+  }
+  result += String.fromCharCode(v + 63);
+  return result;
+}
+
+/**
+ * Build a spatial grid for O(1) proximity lookups.
+ * cellSize in degrees (~0.0005 ≈ 55m).
+ */
+function buildSpatialGrid(items, latKey = 'lat', lngKey = 'lng', cellSize = 0.0005) {
+  const grid = new Map();
+  for (const item of items) {
+    const r = Math.floor(item[latKey] / cellSize);
+    const c = Math.floor(item[lngKey] / cellSize);
+    const key = `${r},${c}`;
+    if (!grid.has(key)) grid.set(key, []);
