@@ -108,3 +108,123 @@ export interface SafeRoutesResponse {
   message?: string;
 }
 
+// ── API response shape (before mapping) ─────────────────────────────────────
+
+interface RawSafeRouteSegment {
+  start: { lat: number; lng: number };
+  end: { lat: number; lng: number };
+  safetyScore: number;
+  color: string;
+  highway: string;
+  roadName?: string;
+  isDeadEnd?: boolean;
+  hasSidewalk?: boolean;
+  surfaceType?: string;
+  lightScore?: number;
+  crimeScore?: number;
+  cctvScore?: number;
+  placeScore?: number;
+  trafficScore?: number;
+  distance?: number;
+}
+
+interface RawSafeRoute {
+  routeIndex: number;
+  isSafest: boolean;
+  overview_polyline: { points: string };
+  legs: Array<{
+    distance: { text: string; value: number };
+    duration: { text: string; value: number };
+    start_location: { lat: number; lng: number };
+    end_location: { lat: number; lng: number };
+    steps: Array<unknown>;
+  }>;
+  summary: string;
+  safety: {
+    score: number;
+    label: string;
+    color: string;
+    breakdown: SafetyBreakdown;
+    roadTypes: Record<string, number>;
+    mainRoadRatio: number;
+  };
+  segments: RawSafeRouteSegment[];
+  routeStats?: {
+    deadEnds: number;
+    sidewalkPct: number;
+    unpavedPct: number;
+    transitStopsNearby: number;
+    cctvCamerasNearby: number;
+    roadNameChanges: Array<{ segmentIndex: number; name: string; distance: number }>;
+  };
+  routePOIs?: {
+    cctv: Array<{ lat: number; lng: number }>;
+    transit: Array<{ lat: number; lng: number }>;
+    deadEnds: Array<{ lat: number; lng: number }>;
+    lights: Array<{ lat: number; lng: number }>;
+    places: Array<{ lat: number; lng: number }>;
+    crimes: Array<{ lat: number; lng: number; category?: string }>;
+  };
+}
+
+interface RawResponse {
+  status: string;
+  routes?: RawSafeRoute[];
+  meta?: SafeRoutesResponse['meta'];
+  error?: string;
+  message?: string;
+}
+
+// ── Cache ────────────────────────────────────────────────────────────────────
+
+interface CacheEntry {
+  data: SafeRoutesResponse;
+  timestamp: number;
+}
+const cache = new Map<string, CacheEntry>();
+const CACHE_TTL = 5 * 60 * 1000;
+
+function cacheKey(origin: LatLng, dest: LatLng): string {
+  return `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)}->${dest.latitude.toFixed(4)},${dest.longitude.toFixed(4)}`;
+}
+
+// ── Main function ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch 3–5 safety-ranked walking routes from the backend.
+ *
+ * @throws AppError with code 'DESTINATION_OUT_OF_RANGE' if > 20 km
+ * @throws AppError with code 'safe_routes_error' on other failures
+ */
+export async function fetchSafeRoutes(
+  origin: LatLng,
+  destination: LatLng,
+): Promise<SafeRoutesResponse> {
+  const key = cacheKey(origin, destination);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log('[safeRoutes] 📋 Cache hit');
+    return cached.data;
+  }
+
+  const url =
+    `${BACKEND_BASE}/api/safe-routes?` +
+    `origin_lat=${origin.latitude}&origin_lng=${origin.longitude}` +
+    `&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}`;
+
+  console.log(`[safeRoutes] 🔍 Fetching safe routes...`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout
+
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    const raw: RawResponse = await resp.json();
+
+    if (!resp.ok) {
+      if (raw.error === 'DESTINATION_OUT_OF_RANGE') {
+        throw new AppError(
+          'DESTINATION_OUT_OF_RANGE',
+          raw.message || 'Destination is too far away. Maximum distance is 20 km.',
