@@ -218,3 +218,163 @@ export const RouteMap = ({
   navigationLocation,
   navigationHeading,
   mapType = 'roadmap',
+  onSelectRoute,
+  onLongPress,
+  onMapPress,
+}: RouteMapProps) => {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const readyRef = useRef(false);
+  const [hasError, setHasError] = useState(false);
+  const prevGeoKeyRef = useRef('');
+  const prevPanKeyRef = useRef(-1);
+  const prevMapTypeRef = useRef(mapType);
+
+  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute });
+  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute };
+
+  // Listen for messages from the Leaflet iframe
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      try {
+        const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        const cbs = callbacksRef.current;
+        switch (msg.type) {
+          case 'ready':
+            readyRef.current = true;
+            pushUpdate();
+            break;
+          case 'press':
+            cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'longpress':
+            cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'selectRoute':
+            cbs.onSelectRoute?.(msg.id);
+            break;
+        }
+      } catch { /* ignore */ }
+    };
+
+    window.addEventListener('message', handler);
+    const custom = (e: Event) => handler({ data: (e as CustomEvent).detail } as MessageEvent);
+    window.addEventListener('leaflet-msg', custom);
+    return () => { window.removeEventListener('message', handler); window.removeEventListener('leaflet-msg', custom); };
+  }, []);
+
+  const pushUpdate = () => {
+    if (!readyRef.current || !iframeRef.current?.contentWindow) return;
+    const toLL = (c: { latitude: number; longitude: number }) => ({ lat: c.latitude, lng: c.longitude });
+
+    const mappedRoutes = routes.map((r) => ({
+      id: r.id,
+      selected: r.id === selectedRouteId,
+      path: r.path.map(toLL),
+    }));
+    const segments = routeSegments.map((seg) => ({ color: seg.color, path: seg.path.map(toLL) }));
+    const mkrs = safetyMarkers.map((m) => ({
+      kind: m.kind, label: m.label,
+      lat: m.coordinate.latitude, lng: m.coordinate.longitude,
+    }));
+    const labels = roadLabels.map((l) => ({
+      name: l.displayName, color: l.color,
+      lat: l.coordinate.latitude, lng: l.coordinate.longitude,
+    }));
+
+    const geoKey = [
+      origin ? `${origin.latitude},${origin.longitude}` : '',
+      destination ? `${destination.latitude},${destination.longitude}` : '',
+      routes.map((r) => r.id).join(','),
+      selectedRouteId ?? '',
+    ].join('|');
+    const fitBounds = geoKey !== prevGeoKeyRef.current;
+    if (fitBounds) prevGeoKeyRef.current = geoKey;
+
+    let panToData: { lat: number; lng: number } | null = null;
+    if (panTo && panTo.key !== prevPanKeyRef.current) {
+      prevPanKeyRef.current = panTo.key;
+      panToData = toLL(panTo.location);
+    }
+
+    const payload = {
+      origin: origin ? toLL(origin) : null,
+      destination: destination ? toLL(destination) : null,
+      routes: mappedRoutes,
+      segments,
+      safetyMarkers: mkrs,
+      roadLabels: labels,
+      fitBounds,
+      panTo: panToData,
+      navLocation: isNavigating && navigationLocation ? toLL(navigationLocation) : null,
+      navHeading: navigationHeading,
+    };
+
+    try {
+      const win = iframeRef.current.contentWindow as any;
+      if (win.updateMap) win.updateMap(payload);
+    } catch { /* cross-origin */ }
+  };
+
+  // Push when props change
+  useEffect(() => { pushUpdate(); }, [
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
+  ]);
+
+  // Switch tile layer on mapType change
+  useEffect(() => {
+    if (!readyRef.current || !iframeRef.current?.contentWindow) return;
+    if (mapType === prevMapTypeRef.current) return;
+    prevMapTypeRef.current = mapType;
+    try {
+      const win = iframeRef.current.contentWindow as any;
+      if (win.setTileUrl) win.setTileUrl(TILE_URLS[mapType], TILE_ATTR[mapType]);
+    } catch { /* ignore */ }
+  }, [mapType]);
+
+  // Blob URL for iframe src
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const blob = new Blob([buildLeafletHtml()], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      {blobUrl ? (
+        <iframe
+          ref={iframeRef as any}
+          src={blobUrl}
+          style={{ width: '100%', height: '100%', border: 'none', position: 'absolute', top: 0, left: 0 }}
+          title="Map"
+          onError={() => setHasError(true)}
+        />
+      ) : null}
+      {hasError ? (
+        <View style={styles.placeholder}>
+          <Text style={styles.placeholderText}>Map unavailable</Text>
+        </View>
+      ) : null}
+      <View style={styles.attribution}>
+        <Text style={styles.attributionText}>© OpenStreetMap contributors</Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f2f4f7' },
+  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  placeholderText: { color: '#667085', fontSize: 14 },
+  attribution: {
+    position: 'absolute', right: 8, bottom: 8,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.9)',
+  },
+  attributionText: { fontSize: 10, color: '#475467' },
+});
+
+export default RouteMap;
