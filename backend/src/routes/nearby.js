@@ -93,3 +93,48 @@ router.get('/', nearbyLimiter, async (req, res) => {
 
     const data = await response.json();
     overpassCalls++;
+    totalRequests++;
+    console.log(`[places/nearby] 🌐 Overpass call #${overpassCalls} for ${ck} | ${(data.elements || []).length} elements`);
+
+    const results = (data.elements || [])
+      .map((el) => {
+        const tags = el.tags || {};
+        const name = tags.name || tags['name:en'] || tags.brand || '';
+        if (!name) return null;
+
+        const lat = el.lat || el.center?.lat;
+        const lon = el.lon || el.center?.lon;
+        if (lat == null || lon == null) return null;
+
+        const types = [];
+        if (tags.amenity) types.push(tags.amenity);
+        if (tags.shop) types.push('shop', tags.shop);
+        if (tags.leisure) types.push(tags.leisure);
+
+        return {
+          place_id: `osm-${el.type}-${el.id}`,
+          name,
+          location: { lat, lng: lon },
+          types,
+          open_now: true,
+          business_status: 'OPERATIONAL',
+        };
+      })
+      .filter(Boolean);
+
+    const responsePayload = {
+      status: results.length > 0 ? 'OK' : 'ZERO_RESULTS',
+      results,
+      count: results.length,
+    };
+
+    nearbyCache.set(ck, { data: responsePayload, timestamp: Date.now() });
+    console.log(`[places/nearby] Cache MISS — stored ${ck} (${results.length} results)`);
+    res.json(responsePayload);
+  } catch (err) {
+    console.error('[places/nearby] Error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router;
