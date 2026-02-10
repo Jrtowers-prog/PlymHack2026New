@@ -50,3 +50,28 @@ export function CircleProgress({ size, strokeWidth, progress, color }: CirclePro
         </View>
       </View>
       {/* Left half (only when > 50%) */}
+      {isMoreThanHalf && (
+        <View style={{ position: 'absolute', width: size, height: size, overflow: 'hidden' }}>
+          <View style={{ position: 'absolute', width: size / 2, height: size, left: 0, overflow: 'hidden' }}>
+            <View
+              style={{
+                width: size,
+                height: size,
+                borderRadius: size / 2,
+                borderWidth: strokeWidth,
+                borderColor: color,
+                borderRightColor: 'transparent',
+                borderTopColor: 'transparent',
+                transform: [{ rotate: `${leftRotation}deg` }],
+                position: 'absolute',
+                left: 0,
+              }}
+            />
+          </View>
+        </View>
+      )}
+      {/* Center label */}
+      <Text style={{ fontSize: size * 0.26, fontWeight: '800', color }}>{clamped}</Text>
+    </View>
+  );
+}
