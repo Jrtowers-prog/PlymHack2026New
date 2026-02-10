@@ -298,3 +298,353 @@ export default function HomeScreen() {
       setShowOnboarding(true);
     }
   }, [onboardingStatus, hasAccepted]);
+
+  // Pan to user's location when it first becomes available
+  useEffect(() => {
+    if (location && isUsingCurrentLocation) {
+      setMapPanTo({ location, key: Date.now() });
+    }
+  }, [location !== null]);
+
+  // Auto-select safest route once scoring is done, otherwise pick first
+  useEffect(() => {
+    if (bestRouteId) {
+      setSelectedRouteId(bestRouteId);
+    } else if (routes.length > 0) {
+      setSelectedRouteId(routes[0].id);
+    }
+  }, [routes, bestRouteId]);
+
+  const selectedRoute = useMemo<DirectionsRoute | null>(() => {
+    return routes.find((route) => route.id === selectedRouteId) ?? null;
+  }, [routes, selectedRouteId]);
+
+  // Full SafeRoute for the selected route (with routeStats, routePOIs, enrichedSegments)
+  const selectedSafeRoute = useMemo<SafeRoute | null>(() => {
+    return (safeRoutes as SafeRoute[]).find((r) => r.id === selectedRouteId) ?? null;
+  }, [safeRoutes, selectedRouteId]);
+
+  // Generate map markers from route POIs
+  const poiMarkers = useMemo(() => {
+    const pois = selectedSafeRoute?.routePOIs;
+    if (!pois) return [];
+    const markers: Array<{ id: string; kind: string; coordinate: { latitude: number; longitude: number }; label: string }> = [];
+    pois.cctv?.forEach((c, i) => markers.push({
+      id: `poi-cctv-${i}`, kind: 'cctv',
+      coordinate: { latitude: c.lat, longitude: c.lng }, label: 'CCTV Camera',
+    }));
+    pois.transit?.forEach((t, i) => markers.push({
+      id: `poi-transit-${i}`, kind: 'bus_stop',
+      coordinate: { latitude: t.lat, longitude: t.lng }, label: 'Transit Stop',
+    }));
+    pois.deadEnds?.forEach((d, i) => markers.push({
+      id: `poi-deadend-${i}`, kind: 'dead_end',
+      coordinate: { latitude: d.lat, longitude: d.lng }, label: 'Dead End',
+    }));
+    pois.lights?.forEach((l, i) => markers.push({
+      id: `poi-light-${i}`, kind: 'light',
+      coordinate: { latitude: l.lat, longitude: l.lng }, label: 'Street Light',
+    }));
+    pois.places?.forEach((p, i) => markers.push({
+      id: `poi-place-${i}`, kind: 'shop',
+      coordinate: { latitude: p.lat, longitude: p.lng }, label: 'Open Place',
+    }));
+    pois.crimes?.forEach((cr, i) => markers.push({
+      id: `poi-crime-${i}`, kind: 'crime',
+      coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime',
+    }));
+    return markers;
+  }, [selectedSafeRoute]);
+
+  // ── Derive safety data INSTANTLY from the already-fetched SafeRoute ──
+  // No extra network calls — the backend already computed everything.
+  // All counts are PER-ROUTE (from enriched segments + routeStats), not area-wide.
+  const safetyResult = useMemo<SafetyMapResult | null>(() => {
+    if (!selectedSafeRoute) return null;
+    const s = selectedSafeRoute.safety;
+    const stats = selectedSafeRoute.routeStats;
+    const segs = selectedSafeRoute.enrichedSegments ?? [];
+
+    // Count lights along THIS route: segments with good lighting (> 0.5)
+    let litSegments = 0;
+    let unlitSegments = 0;
+    for (const seg of segs) {
+      if (seg.lightScore > 0.5) litSegments++;
+      else unlitSegments++;
+    }
+
+    // Count crime hotspots along THIS route
+    // crimeScore is inverted: 1.0 = safe, 0.0 = high crime
+    // Only count segments near actual crime hotspots (score < 0.4)
+    let crimeHotspots = 0;
+    for (const seg of segs) {
+      if (seg.crimeScore < 0.4) crimeHotspots++;
+    }
+
+    // Count open/active places along THIS route (placeScore > 0 means nearby activity)
+    let openPlaceCount = 0;
+    for (const seg of segs) {
+      if (seg.placeScore > 0.1) openPlaceCount++;
+    }
+
+    return {
+      markers: [],
+      roadOverlays: [],
+      roadLabels: [],
+      routeSegments: [],
+      crimeCount: crimeHotspots,
+      streetLights: litSegments,
+      litRoads: litSegments,
+      unlitRoads: unlitSegments,
+      openPlaces: openPlaceCount,
+      busStops: stats?.transitStopsNearby ?? 0,
+      safetyScore: s.score,
+      safetyLabel: s.label,
+      safetyColor: s.color,
+      mainRoadRatio: s.mainRoadRatio / 100,
+      pathfindingScore: s.score,
+      dataConfidence: 1,
+    };
+  }, [selectedSafeRoute]);
+
+  const safetyStatus: 'idle' | 'loading' | 'ready' | 'error' =
+    safeRoutesStatus === 'loading' ? 'loading'
+    : selectedSafeRoute ? 'ready'
+    : 'idle';
+  const safetyError = safeRoutesError;
+  const safetyProgressMessage = safeRoutesStatus === 'loading' ? 'Computing safest routes…' : '';
+  const safetyProgressPercent = safeRoutesStatus === 'loading' ? 50 : 0;
+
+  // safetyMarkers no longer needed — all POI markers come from routePOIs
+  const safetyMarkers: Array<{ id: string; kind: string; coordinate: { latitude: number; longitude: number }; label?: string }> = [];
+
+  // Build route segments for the coloured route overlay on the map
+  const routeSegments = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    return selectedSafeRoute.enrichedSegments.map((seg, i) => ({
+      id: `seg-${i}`,
+      path: [seg.startCoord, seg.endCoord],
+      color: seg.color,
+      score: seg.safetyScore,
+    }));
+  }, [selectedSafeRoute]);
+
+  // Build road labels from enriched segments (deduplicated by road name)
+  const roadLabels = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    const seen = new Set<string>();
+    const labels: Array<{ id: string; coordinate: { latitude: number; longitude: number }; roadType: string; displayName: string; color: string }> = [];
+    for (const seg of selectedSafeRoute.enrichedSegments) {
+      if (seg.roadName && !seen.has(seg.roadName)) {
+        seen.add(seg.roadName);
+        const typeColors: Record<string, string> = {
+          primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+          residential: '#64748b', footway: '#f59e0b', path: '#f59e0b',
+          pedestrian: '#34d399', service: '#94a3b8',
+        };
+        labels.push({
+          id: `rl-${labels.length}`,
+          coordinate: seg.midpointCoord,
+          roadType: seg.highway,
+          displayName: seg.roadName,
+          color: typeColors[seg.highway] || '#64748b',
+        });
+      }
+    }
+    return labels;
+  }, [selectedSafeRoute]);
+
+  // Merge POI markers with safety markers
+  const allMarkers = useMemo(() => {
+    return [...safetyMarkers, ...poiMarkers] as any[];
+  }, [safetyMarkers, poiMarkers]);
+
+  // ── Navigation ──
+  const nav = useNavigation(selectedRoute);
+  const isNavActive = nav.state === 'navigating' || nav.state === 'off-route';
+
+  // ── AI Explanation ──
+  const ai = useAIExplanation(
+    safetyResult,
+    routes,
+    routeScores,
+    bestRouteId,
+  );
+  const [showAIModal, setShowAIModal] = useState(false);
+
+  const resolvePin = async (coordinate: LatLng): Promise<PlaceDetails> => {
+    const fallback: PlaceDetails = {
+      placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
+      name: 'Dropped pin',
+      location: coordinate,
+    };
+    const resolved = await reverseGeocode(coordinate);
+    return resolved ?? fallback;
+  };
+
+  const handleMapPress = async (coordinate: LatLng) => {
+    // Dismiss keyboard and search dropdown when tapping the map
+    Keyboard.dismiss();
+    cancelBlurTimer();
+    setFocusedField(null);
+
+    // During navigation, don't process map taps for pin/destination setting
+    if (isNavActive) return;
+
+    if (pinMode === 'origin') {
+      setIsUsingCurrentLocation(false);
+      originSearch.clear();
+      const pin = await resolvePin(coordinate);
+      setManualOrigin(pin);
+      setPinMode(null);
+      setSelectedRouteId(null);
+    } else if (pinMode === 'destination') {
+      destSearch.clear();
+      const pin = await resolvePin(coordinate);
+      setManualDest(pin);
+      setPinMode(null);
+      setSelectedRouteId(null);
+    }
+    // If no pinMode active, tap does nothing special
+  };
+
+  const handleMapLongPress = async (coordinate: LatLng) => {
+    // Dismiss keyboard on map interaction
+    Keyboard.dismiss();
+    cancelBlurTimer();
+    setFocusedField(null);
+
+    // During navigation, don't process long-press for destination setting
+    if (isNavActive) return;
+
+    // Long-press always sets destination (legacy behaviour)
+    const pin = await resolvePin(coordinate);
+    setManualDest(pin);
+    destSearch.clear();
+    setSelectedRouteId(null);
+  };
+
+  const distanceLabel = selectedRoute ? `🚶 ${formatDistance(selectedRoute.distanceMeters)}` : '--';
+  const durationLabel = selectedRoute ? formatDuration(selectedRoute.durationSeconds) : '--';
+  const showSafety = Boolean(selectedRoute);
+  
+
+
+  return (
+    <View style={styles.container}>
+      {/* Map fills the screen as a flex child.
+          All subsequent absolutely-positioned siblings render on top —
+          this is the ONLY reliable z-ordering approach on Android
+          when a WebView (SurfaceView) is involved. */}
+      <RouteMap
+        origin={effectiveOrigin}
+        destination={effectiveDestination}
+        routes={routes}
+        selectedRouteId={selectedRouteId}
+        safetyMarkers={allMarkers}
+        routeSegments={routeSegments}
+        roadLabels={roadLabels}
+        panTo={mapPanTo}
+        isNavigating={isNavActive}
+        navigationLocation={nav.userLocation}
+        navigationHeading={nav.userHeading}
+        mapType={mapType}
+        onSelectRoute={setSelectedRouteId}
+        onLongPress={handleMapLongPress}
+        onMapPress={handleMapPress}
+      />
+
+      {/* Map Type Control */}
+      {!isNavActive && (
+        <MapTypeControl mapType={mapType} onMapTypeChange={setMapType} />
+      )}
+      
+      {/* Pin-mode banner — outside mapContainer so it renders above WebView on Android */}
+      {pinMode && (
+        <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+            <Ionicons name="location" size={18} color="#ffffff" />
+            <Text style={styles.pinBannerText}>
+              Tap anywhere on the map to set your {pinMode === 'origin' ? 'starting point' : 'destination'}
+            </Text>
+          </View>
+          <Pressable onPress={() => setPinMode(null)} style={styles.pinBannerCancel}>
+            <Text style={styles.pinBannerCancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
+      
+      {/* Top Search Bar — hidden during navigation */}
+      {!isNavActive && <ScrollView
+        style={[styles.topSearchContainer, { top: insets.top + 8 }]}
+        contentContainerStyle={styles.topSearchContent}
+        keyboardShouldPersistTaps="always"
+        scrollEnabled={false}
+        pointerEvents="box-none"
+      >
+        <View style={styles.searchCard}>
+          {/* Logo Header */}
+          <View style={styles.logoHeader}>
+            <Text style={styles.logoText}>SAFE NIGHT HOME</Text>
+          </View>
+
+          {/* Origin Input */}
+          <View style={styles.inputRow}>
+            <View style={styles.inputIconWrap}>
+              <View style={styles.iconDot} />
+              <View style={styles.iconConnector} />
+            </View>
+            <Pressable
+              style={[styles.inputFieldWrap, focusedField === 'origin' && styles.inputFieldWrapFocused]}
+              onPress={() => { if (!isUsingCurrentLocation) originInputRef.current?.focus(); }}
+            >
+              {isUsingCurrentLocation ? (
+                <Pressable
+                  style={[styles.inputField, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+                  onPress={() => setIsUsingCurrentLocation(false)}
+                  accessibilityRole="button"
+                >
+                  <Ionicons name={location ? 'navigate' : 'hourglass-outline'} size={16} color="#1570ef" />
+                  <Text style={styles.locationDisplayText}>
+                    {location ? 'Your location' : 'Getting location...'}
+                  </Text>
+                </Pressable>
+              ) : (
+                <TextInput
+                  ref={originInputRef}
+                  value={manualOrigin ? (manualOrigin.name ?? 'Dropped pin') : originSearch.query}
+                  onChangeText={(t: string) => {
+                    setManualOrigin(null);
+                    originSearch.setQuery(t);
+                    setSelectedRouteId(null);
+                  }}
+                  placeholder="Starting point"
+                  placeholderTextColor="#98a2b3"
+                  accessibilityLabel="Starting point"
+                  autoCorrect={false}
+                  style={styles.inputField}
+                  onFocus={() => { cancelBlurTimer(); setFocusedField('origin'); }}
+                  onBlur={handleBlur}
+                />
+              )}
+              <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
+                {originSearch.status === 'searching' && (
+                  <ActivityIndicator size="small" color="#1570ef" />
+                )}
+                {(originSearch.status === 'found' || manualOrigin) && (
+                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                )}
+                <Pressable
+                  style={styles.mapPinButton}
+                  onPress={() => {
+                    if (pinMode === 'origin') { setPinMode(null); }
+                    else { setPinMode('origin'); }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Pick on map"
+                >
+                  <Ionicons name="location-outline" size={20} color={pinMode === 'origin' ? '#1570ef' : '#667085'} />
+                </Pressable>
+                {!isUsingCurrentLocation && (
+                  <Pressable
+                    style={styles.mapPinButton}
