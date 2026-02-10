@@ -388,3 +388,43 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
       adjacency.get(nodeIds[i + 1]).push({ edgeIdx, neighborId: nodeIds[i] });
 
       // Track node degree for dead-end detection
+      nodeDegree.set(nodeIds[i], (nodeDegree.get(nodeIds[i]) || 0) + 1);
+      nodeDegree.set(nodeIds[i + 1], (nodeDegree.get(nodeIds[i + 1]) || 0) + 1);
+    }
+  }
+
+  // 7. Apply dead-end penalty — edges leading to degree-1 nodes are less safe
+  for (const edge of edges) {
+    const fromDeg = nodeDegree.get(edge.from) || 0;
+    const toDeg = nodeDegree.get(edge.to) || 0;
+    const isDeadEnd = fromDeg <= 1 || toDeg <= 1;
+    if (isDeadEnd) {
+      edge.safetyScore = Math.max(0.01, edge.safetyScore - 0.08);
+    }
+    edge.isDeadEnd = isDeadEnd;
+  }
+
+  return { osmNodes, edges, adjacency, nodeGrid, weights, cctvNodes, transitNodes, nodeDegree };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEAREST NODE (spatial grid — O(1) instead of O(n))
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function findNearestNode(nodeGrid, adjacency, lat, lng, maxDist = 500) {
+  const nearby = findNearby(nodeGrid, lat, lng, maxDist);
+  // Return the nearest node that is actually in the graph (has adjacency)
+  for (const item of nearby) {
+    if (adjacency.has(item.id)) return item.id;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A* PATHFINDING (replaces plain Dijkstra — 3-10× faster)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * A* search that minimises cost = distance / safetyMultiplier.
+ *
+ * Uses haversine-to-destination as admissible heuristic, which focuses
