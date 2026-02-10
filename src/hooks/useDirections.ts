@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { fetchDirections } from '@/src/services/googleMaps';
+import { fetchSmartDirections } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
 import type { DirectionsRoute, LatLng } from '@/src/types/google';
 
@@ -33,7 +33,9 @@ export const useDirections = (
     setError(null);
 
     try {
-      const data = await fetchDirections(origin, destination);
+      console.log(`[useDirections] 📍 Fetching directions from ${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)} to ${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`);
+      const data = await fetchSmartDirections(origin, destination);
+      console.log(`[useDirections] ✅ Got ${data.length} routes`);
       setRoutes(data);
       setStatus('ready');
     } catch (caught) {
