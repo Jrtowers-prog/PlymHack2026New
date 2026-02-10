@@ -1898,3 +1898,503 @@ const styles = StyleSheet.create({
   // Top Search Container
   topSearchContainer: {
     position: 'absolute',
+    top: 12,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    elevation: 10,
+  },
+  searchCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)' } : {}),
+    elevation: 8,
+    overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
+    width: '100%',
+    maxWidth: 600,
+  },
+  logoHeader: {
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'web' ? 14 : 10,
+    paddingBottom: Platform.OS === 'web' ? 8 : 4,
+    justifyContent: 'center',
+  },
+  logoText: {
+    fontSize: Platform.OS === 'web' ? 22 : 16,
+    fontWeight: '900',
+    letterSpacing: Platform.OS === 'web' ? 3 : 2,
+    color: '#000000',
+    textAlign: 'center',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Platform.OS === 'web' ? 14 : 10,
+    paddingVertical: Platform.OS === 'web' ? 6 : 4,
+  },
+  inputIconWrap: {
+    width: 24,
+    alignItems: 'center',
+  },
+  iconDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#1570ef',
+    borderWidth: 2,
+    borderColor: '#93c5fd',
+  },
+  iconConnector: {
+    width: 2,
+    height: 20,
+    backgroundColor: '#d0d5dd',
+    marginTop: 2,
+  },
+  iconPin: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: '#d92d20',
+    borderWidth: 2,
+    borderColor: '#fca5a5',
+  },
+  inputFieldWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 10,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: Platform.OS === 'web' ? 18 : 12,
+    paddingVertical: Platform.OS === 'web' ? 16 : 10,
+  },
+  inputFieldWrapFocused: {
+    borderColor: '#1570ef',
+    backgroundColor: '#ffffff',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 0 3px rgba(21, 112, 239, 0.2)' } : {}),
+  },
+  inputField: {
+    flex: 1,
+    height: '100%',
+    fontSize: Platform.OS === 'web' ? 16 : 14,
+    color: '#101828',
+    fontWeight: '400',
+    borderWidth: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  } as any,
+  locationDisplayText: {
+    fontSize: Platform.OS === 'web' ? 18 : 14,
+    color: '#1570ef',
+    fontWeight: '500',
+  },
+  inputActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 8,
+  },
+  mapPinButton: {
+    padding: 4,
+    borderRadius: 6,
+  },
+  inputDivider: {
+    height: 1,
+    backgroundColor: '#f2f4f7',
+    marginLeft: 48,
+    marginRight: 14,
+  },
+  topSearchContent: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  // Search predictions dropdown
+  predictionsDropdown: {
+    marginTop: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.14,
+          shadowRadius: 24,
+        }),
+    elevation: 12,
+    zIndex: 20,
+    overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
+    width: '100%',
+    maxWidth: 600,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  predictionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f2f4f7',
+  },
+  predictionItemFirst: {
+    // top result highlight
+  },
+  predictionItemLast: {
+    borderBottomWidth: 0,
+  },
+  predictionItemPressed: {
+    backgroundColor: '#f0f6ff',
+  },
+  predictionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: '#f2f4f7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  predictionText: {
+    flex: 1,
+  },
+  predictionPrimary: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#101828',
+  },
+  predictionSecondary: {
+    fontSize: 13,
+    color: '#667085',
+    marginTop: 2,
+  },
+  predictionBadge: {
+    backgroundColor: '#ecfdf3',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginLeft: 8,
+  },
+  predictionBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#027a48',
+  },
+  // Pin-mode banner
+  pinBanner: {
+    position: 'absolute',
+    bottom: 12,
+    left: 16,
+    right: 16,
+    backgroundColor: '#1570ef',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)' } : {}),
+    elevation: 10,
+    zIndex: 10,
+  },
+  pinBannerText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+  },
+  pinBannerCancel: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginLeft: 8,
+  },
+  pinBannerCancelText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  
+  // Bottom Sheet
+  bottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 900,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)', userSelect: 'none', cursor: 'default' }
+      : {}),
+    elevation: 12,
+    zIndex: 12,
+    overflow: 'hidden',
+  } as any,
+  sheetDragZone: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 4,
+    ...(Platform.OS === 'web' ? { cursor: 'grab' } : {}),
+  } as any,
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#d0d5dd',
+  },
+  sheetScroll: {
+    flex: 1,
+  },
+  sheetContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 80,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  sheetMeta: {
+    fontSize: 14,
+    color: '#667085',
+    fontWeight: '500',
+  },
+  
+  // Route Cards
+  routeCard: {
+    marginBottom: 12,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#eaecf0',
+    backgroundColor: '#ffffff',
+  },
+  routeCardSelected: {
+    borderColor: '#1570ef',
+    backgroundColor: '#f0f9ff',
+  },
+  routeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  routeLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#101828',
+  },
+  routeLabelSelected: {
+    color: '#1570ef',
+  },
+  selectedBadge: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#1570ef',
+  },
+  routeCardBest: {
+    borderColor: '#22c55e',
+    backgroundColor: '#f0fdf4',
+  },
+  routeLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  routeLabelBest: {
+    color: '#16a34a',
+  },
+  bestBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bestBadgeTick: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  scoreChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 5,
+  },
+  scoreChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  scoreChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  scoringBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 10,
+    backgroundColor: '#eff6ff',
+  },
+  scoringBannerText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#1570ef',
+  },
+  routeDetails: {
+    fontSize: 14,
+    color: '#667085',
+  },
+  routeDetailsSubtle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 2,
+  },
+  
+  // Safety Cards Row
+  safetyCardsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  safetyCard: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#eaecf0',
+    minHeight: 80,
+  },
+  safetyCardValue: {
+    fontSize: 22,
+    fontWeight: '800',
+
+  },
+
+  // ── Web side-by-side layout ──
+  routeAndSafetyContainer: {
+    // Mobile: stacked column (default)
+  },
+  routeAndSafetyContainerWeb: {
+    flexDirection: 'row',
+    gap: 16,
+    alignItems: 'flex-start',
+  } as any,
+  routesColumn: {
+    // Mobile: full width
+  },
+  routesColumnWeb: {
+    flex: 1,
+    maxWidth: '50%',
+  } as any,
+  safetyColumn: {
+    marginTop: 12,
+  },
+  safetyColumnWeb: {
+    flex: 1,
+    maxWidth: '50%',
+    marginTop: 0,
+    position: 'sticky' as any,
+    top: 0,
+  } as any,
+  safetyHeroCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#eaecf0',
+    marginBottom: 12,
+  },
+  safetyHeroLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  safetyGridWeb: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  safetyGridCard: {
+    width: '48%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#eaecf0',
+  } as any,
+  safetyGridIcon: {
+    fontSize: 20,
+  },
+  safetyGridValue: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  safetyGridLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#667085',
+  },
+  safetyCardLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#667085',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  // Loading & Errors
+  loadingContainer: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: '#667085',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 4,
+    backgroundColor: '#eaecf0',
+    borderRadius: 2,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#1570ef',
+    borderRadius: 2,
