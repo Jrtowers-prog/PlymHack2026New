@@ -33,3 +33,48 @@ function dataCacheKey(bbox) {
  */
 async function overpassQuery(query, timeout = 90) {
   const fullQuery = `[out:json][timeout:${timeout}];${query}`;
+  let lastError;
+
+  for (let attempt = 0; attempt < OVERPASS_SERVERS.length; attempt++) {
+    const server = OVERPASS_SERVERS[(serverIdx + attempt) % OVERPASS_SERVERS.length];
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), (timeout + 15) * 1000);
+
+      const resp = await fetch(server, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(fullQuery)}`,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.status === 429 || resp.status >= 500) {
+        lastError = new Error(`Overpass ${server} returned ${resp.status}`);
+        continue;
+      }
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Overpass error ${resp.status}: ${text.slice(0, 200)}`);
+      }
+
+      const data = await resp.json();
+      serverIdx = (serverIdx + attempt) % OVERPASS_SERVERS.length;
+      return data;
+    } catch (err) {
+      lastError = err;
+      if (err.name === 'AbortError') {
+        lastError = new Error(`Overpass ${server} timed out`);
+      }
+    }
+  }
+  throw lastError || new Error('All Overpass servers failed');
+}
+
+/**
+ * ── COMBINED QUERY ──────────────────────────────────────────────────────────
+ * Fetches ALL safety-relevant data in a SINGLE Overpass request:
+ *   • Walking road network (ways + nodes)
+ *   • Street lamps + lit ways
+ *   • CCTV / surveillance cameras (NEW accuracy signal)
+ *   • Amenities, shops, leisure, tourism (open places)
