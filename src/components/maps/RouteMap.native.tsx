@@ -298,3 +298,153 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
           html: '<div class="road-label" style="background:' + lbl.color + '">' + text + '</div>',
           iconSize: null,
         });
+        markers.push(L.marker([lbl.lat, lbl.lng], { icon: icon, interactive: false }).addTo(map));
+      });
+
+      // Fit bounds
+      if (data.fitBounds && hasBounds && !data.navLocation) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+      }
+
+      // Pan-to
+      if (data.panTo) {
+        map.panTo([data.panTo.lat, data.panTo.lng]);
+        if (map.getZoom() < 14) map.setZoom(14);
+      }
+
+      // Navigation marker + 3D nav view
+      if (navMarker) { map.removeLayer(navMarker); navMarker = null; }
+      if (data.navLocation) {
+        var heading = data.navHeading || 0;
+        lastNavLL = [data.navLocation.lat, data.navLocation.lng];
+        var arrowSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">' +
+          '<circle cx="22" cy="22" r="19" fill="#1570EF" stroke="white" stroke-width="3"/>' +
+          '<polygon points="22,7 29,27 22,22 15,27" fill="white" transform="rotate(' + heading + ', 22, 22)"/></svg>';
+        var navIcon = L.divIcon({
+          className: '',
+          html: '<img src="data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg) + '" width="44" height="44"/>',
+          iconSize: [44, 44],
+          iconAnchor: [22, 22],
+        });
+        navMarker = L.marker(lastNavLL, { icon: navIcon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+        if (!userInteracted) {
+          map.panTo(lastNavLL);
+          if (map.getZoom() < 17) map.setZoom(17);
+        }
+        setNavView(heading, true);
+      } else {
+        setNavView(0, false);
+      }
+    }
+
+    // ── Set tile layer dynamically ──
+    function setMapType(type) {
+      var urls = {
+        roadmap: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        hybrid: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        terrain: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      };
+      var attrs = {
+        roadmap: '&copy; OpenStreetMap',
+        satellite: '&copy; Esri',
+        hybrid: '&copy; Esri | &copy; OSM',
+        terrain: '&copy; OpenTopoMap',
+      };
+      if (tileLayer) map.removeLayer(tileLayer);
+      tileLayer = L.tileLayer(urls[type] || urls.roadmap, {
+        attribution: attrs[type] || attrs.roadmap,
+        maxZoom: 19,
+      }).addTo(map);
+    }
+  </script>
+</body>
+</html>
+`;
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export const RouteMap = ({
+  origin,
+  destination,
+  routes,
+  selectedRouteId,
+  safetyMarkers = [],
+  routeSegments = [],
+  roadLabels = [],
+  panTo,
+  isNavigating = false,
+  navigationLocation,
+  navigationHeading,
+  mapType = 'roadmap',
+  onSelectRoute,
+  onLongPress,
+  onMapPress,
+}: RouteMapProps) => {
+  const webViewRef = useRef<WebView>(null);
+  const readyRef = useRef(false);
+  const prevGeoKeyRef = useRef('');
+  const prevPanKeyRef = useRef(-1);
+
+  // Keep latest props in refs so pushUpdate always reads fresh values
+  // (fixes the stale-closure problem when called from the 'ready' handler)
+  const propsRef = useRef({
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
+  });
+  propsRef.current = {
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
+  };
+
+  const mapTypeRef = useRef(mapType);
+
+  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute });
+  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute };
+
+  // Serialize current props → a JS call the WebView can execute
+  const pushUpdate = useCallback(() => {
+    if (!readyRef.current || !webViewRef.current) return;
+
+    const p = propsRef.current;
+    const toLL = (c: { latitude: number; longitude: number }) => ({
+      lat: c.latitude,
+      lng: c.longitude,
+    });
+
+    const mappedRoutes = p.routes.map((r) => ({
+      id: r.id,
+      selected: r.id === p.selectedRouteId,
+      path: r.path.map(toLL),
+    }));
+
+    const segments = p.routeSegments.map((seg) => ({
+      color: seg.color,
+      path: seg.path.map(toLL),
+    }));
+
+    const mkrs = p.safetyMarkers.map((m) => ({
+      kind: m.kind,
+      label: m.label,
+      lat: m.coordinate.latitude,
+      lng: m.coordinate.longitude,
+    }));
+
+    const labels = p.roadLabels.map((l) => ({
+      name: l.displayName,
+      color: l.color,
+      lat: l.coordinate.latitude,
+      lng: l.coordinate.longitude,
+    }));
+
+    // Detect geography changes to decide whether to fitBounds
+    const geoKey = [
+      p.origin ? `${p.origin.latitude},${p.origin.longitude}` : '',
+      p.destination ? `${p.destination.latitude},${p.destination.longitude}` : '',
+      p.routes.map((r) => r.id).join(','),
+      p.selectedRouteId ?? '',
+    ].join('|');
