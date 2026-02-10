@@ -428,3 +428,113 @@ function findNearestNode(nodeGrid, adjacency, lat, lng, maxDist = 500) {
  * A* search that minimises cost = distance / safetyMultiplier.
  *
  * Uses haversine-to-destination as admissible heuristic, which focuses
+ * the search toward the goal instead of expanding in all directions.
+ * For safety routing, we divide the heuristic by max possible safety (1.0)
+ * to keep it admissible (never overestimates).
+ */
+function aStarSafety(osmNodes, edges, adjacency, startId, endId, maxDistM) {
+  if (!adjacency.has(startId) || !adjacency.has(endId)) {
+    console.log(`[A*] ❌ Start or end not in adjacency: start=${adjacency.has(startId)}, end=${adjacency.has(endId)}`);
+    return null;
+  }
+
+  const endNode = osmNodes.get(endId);
+  if (!endNode) {
+    console.log(`[A*] ❌ End node not in osmNodes`);
+    return null;
+  }
+
+  const sNode = osmNodes.get(startId);
+  if (!sNode) {
+    console.log(`[A*] ❌ Start node not in osmNodes`);
+    return null;
+  }
+
+  console.log(`[A*] Start neighbors: ${adjacency.get(startId)?.length}, End neighbors: ${adjacency.get(endId)?.length}, maxDist: ${maxDistM}m`);
+
+  const gScore = new Map();
+  const fScore = new Map();
+  const realDist = new Map();
+  const prev = new Map();
+  const closed = new Set();
+
+  gScore.set(startId, 0);
+  realDist.set(startId, 0);
+
+  const h0 = sNode ? fastDistance(sNode.lat, sNode.lng, endNode.lat, endNode.lng) : 0;
+  fScore.set(startId, h0);
+
+  const heap = new MinHeap();
+  heap.push(startId, h0);
+
+  while (heap.size > 0) {
+    const { id: current } = heap.pop();
+
+    if (closed.has(current)) continue;
+    closed.add(current);
+
+    if (current === endId) break;
+
+    const currentG = gScore.get(current) ?? Infinity;
+    const neighbors = adjacency.get(current);
+    if (!neighbors) continue;
+
+    for (const { edgeIdx, neighborId } of neighbors) {
+      if (closed.has(neighborId)) continue;
+
+      const edge = edges[edgeIdx];
+      const effectiveSafety = Math.max(0.05, edge.safetyScore - edge.penalty);
+      const edgeCost = edge.distance / effectiveSafety;
+      const tentativeG = currentG + edgeCost;
+      const newRealDist = (realDist.get(current) || 0) + edge.distance;
+
+      if (newRealDist > maxDistM * 1.5) continue;
+
+      if (tentativeG < (gScore.get(neighborId) ?? Infinity)) {
+        gScore.set(neighborId, tentativeG);
+        realDist.set(neighborId, newRealDist);
+        prev.set(neighborId, { prevNode: current, edgeIdx });
+
+        // Heuristic: remaining distance / max possible safety (1.0)
+        const nNode = osmNodes.get(neighborId);
+        const h = nNode ? fastDistance(nNode.lat, nNode.lng, endNode.lat, endNode.lng) : 0;
+        const f = tentativeG + h;
+        fScore.set(neighborId, f);
+        heap.push(neighborId, f);
+      }
+    }
+  }
+
+  if (!prev.has(endId) && startId !== endId) {
+    console.log(`[A*] ❌ No path found. Visited ${closed.size} nodes, heap size at end: ${heap.size}`);
+    return null;
+  }
+
+  // Reconstruct path
+  const path = [];
+  const usedEdges = [];
+  let node = endId;
+  while (node !== startId) {
+    path.push(node);
+    const p = prev.get(node);
+    if (!p) return null;
+    usedEdges.push(p.edgeIdx);
+    node = p.prevNode;
+  }
+  path.push(startId);
+  path.reverse();
+  usedEdges.reverse();
+
+  let totalDist = 0;
+  let totalWeightedSafety = 0;
+  for (const eIdx of usedEdges) {
+    const e = edges[eIdx];
+    totalDist += e.distance;
+    totalWeightedSafety += e.safetyScore * e.distance;
+  }
+
+  return {
+    path,
+    edges: usedEdges,
+    totalDist,
+    avgSafety: totalDist > 0 ? totalWeightedSafety / totalDist : 0,
