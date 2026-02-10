@@ -448,3 +448,37 @@ function collectRoutePOIs(routePath, osmNodes, cctvNodes, transitNodes, nodeDegr
 
   // Collect transit stops near route
   for (const ts of transitNodes) {
+    if (isNearRoute(ts.lat, ts.lng)) {
+      const key = `tr:${ts.lat.toFixed(5)},${ts.lng.toFixed(5)}`;
+      if (!seen.has(key)) { seen.add(key); pois.transit.push({ lat: ts.lat, lng: ts.lng }); }
+    }
+  }
+
+  // Collect street lights near route
+  for (const lamp of (lightNodes || [])) {
+    if (isNearRoute(lamp.lat, lamp.lng)) {
+      const key = `lt:${lamp.lat.toFixed(5)},${lamp.lng.toFixed(5)}`;
+      if (!seen.has(key)) { seen.add(key); pois.lights.push({ lat: lamp.lat, lng: lamp.lng }); }
+    }
+  }
+
+  // Collect open places near route
+  for (const pl of (placeNodes || [])) {
+    if (isNearRoute(pl.lat, pl.lng)) {
+      const key = `pl:${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}`;
+      if (!seen.has(key)) { seen.add(key); pois.places.push({ lat: pl.lat, lng: pl.lng }); }
+    }
+  }
+
+  // Collect crimes near route
+  for (const cr of (crimeNodes || [])) {
+    if (isNearRoute(cr.lat, cr.lng)) {
+      const key = `cr:${cr.lat.toFixed(5)},${cr.lng.toFixed(5)}`;
+      if (!seen.has(key)) { seen.add(key); pois.crimes.push({ lat: cr.lat, lng: cr.lng, category: cr.category }); }
+    }
+  }
+
+  return pois;
+}
+
+module.exports = router;
