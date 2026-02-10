@@ -798,3 +798,236 @@ const generateRouteSegments = (
 
     const local = Math.min(1, crimeFactor * 0.35 + lightFactor * 0.25 + roadFactor * 0.18 + busFactor * 0.12 + litBonus + 0.10);
 
+    // Map local score to colour: 0 → red, 0.5 → amber, 1 → green
+    const color = localScoreToColor(local);
+
+    segments.push({ id: `seg-${ci}`, path: segPath, color, score: local });
+  }
+
+  return segments;
+};
+
+/** Map a 0-1 safety value to a smooth green→amber→red gradient. */
+const localScoreToColor = (t: number): string => {
+  // t = 0 → red, t = 0.5 → amber/yellow, t = 1 → green
+  const clamped = Math.max(0, Math.min(1, t));
+  let r: number, g: number, b: number;
+  if (clamped < 0.5) {
+    // red → amber
+    const p = clamped / 0.5;
+    r = 239;
+    g = Math.round(68 + p * (158 - 68)); // 68 → 158
+    b = Math.round(68 - p * 57);          // 68 → 11
+  } else {
+    // amber → green
+    const p = (clamped - 0.5) / 0.5;
+    r = Math.round(245 - p * 211);        // 245 → 34
+    g = Math.round(158 + p * (197 - 158)); // 158 → 197
+    b = Math.round(11 + p * (83 - 11));    // 11 → 94
+  }
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+};
+
+// ---------------------------------------------------------------------------
+// Generate road-type labels at transition points ALONG THE ROUTE ONLY
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk along the user's route path step-by-step and determine which road
+ * overlay the path is actually *on* at each sample point.  Emit a label
+ * every time the road type (or street name) changes – i.e. when the user
+ * would turn onto a different kind of road.
+ *
+ * Side roads that happen to be nearby but are NOT part of the route are
+ * ignored entirely.
+ */
+const generateRoadLabels = (overlays: RoadOverlay[], path: LatLng[]): RoadLabel[] => {
+  if (overlays.length === 0 || path.length < 2) return [];
+
+  // Pre-compute the midpoint of every overlay for fast lookup
+  const overlayMids = overlays.map((o) => ({
+    overlay: o,
+    mid: o.coordinates[Math.floor(o.coordinates.length / 2)],
+  }));
+
+  /**
+   * For a given point on the route, find the overlay whose geometry is
+   * closest.  We check every coordinate of every overlay – but we bail
+   * early once we find something within 15 m (definitely on the road).
+   * If nothing is within 30 m the point is "unmatched" (e.g. crossing a
+   * car park).
+   */
+  const matchOverlay = (pt: LatLng): RoadOverlay | null => {
+    let best: RoadOverlay | null = null;
+    let bestDist = 30; // max snap distance in metres
+    for (const { overlay } of overlayMids) {
+      for (const c of overlay.coordinates) {
+        const d = haversine(pt, c);
+        if (d < bestDist) {
+          bestDist = d;
+          best = overlay;
+          if (d < 15) return best; // close enough, skip the rest
+        }
+      }
+    }
+    return best;
+  };
+
+  // Sample the route at roughly every 80 m — enough to catch turns
+  const samplePoints: LatLng[] = [];
+  let accumulated = 0;
+  samplePoints.push(path[0]);
+  for (let i = 1; i < path.length; i++) {
+    accumulated += haversine(path[i - 1], path[i]);
+    if (accumulated >= 80) {
+      samplePoints.push(path[i]);
+      accumulated = 0;
+    }
+  }
+  if (samplePoints[samplePoints.length - 1] !== path[path.length - 1]) {
+    samplePoints.push(path[path.length - 1]);
+  }
+
+  const labels: RoadLabel[] = [];
+  let lastType = ''; // only track road TYPE, not name
+  let lastCoord: LatLng | null = null;
+
+  for (const pt of samplePoints) {
+    const matched = matchOverlay(pt);
+    if (!matched) continue;
+
+    // Only emit a label when the road TYPE changes (e.g. residential → footway)
+    if (matched.roadType === lastType) continue;
+
+    // Ensure minimum 150 m spacing between labels so they don't pile up
+    if (lastCoord && haversine(pt, lastCoord) < 150) continue;
+
+    const displayName = ROAD_TYPE_NAMES[matched.roadType] ?? matched.roadType;
+    labels.push({
+      id: `rlabel-${labels.length}`,
+      coordinate: pt,
+      roadType: matched.roadType,
+      displayName,
+      color: matched.color,
+    });
+    lastType = matched.roadType;
+    lastCoord = pt;
+  }
+
+  return labels;
+};
+
+export type SafetyProgressCb = (msg: string, pct: number) => void;
+
+/** Cache keyed by path fingerprint so repeated calls return identical data */
+const resultCache = new Map<string, SafetyMapResult>();
+
+const pathFingerprint = (path: LatLng[], dist?: number): string => {
+  const first = path[0];
+  const last = path[path.length - 1];
+  return `${first.latitude.toFixed(5)},${first.longitude.toFixed(5)}|${last.latitude.toFixed(5)},${last.longitude.toFixed(5)}|${dist ?? 0}`;
+};
+
+export const fetchSafetyMapData = async (
+  path: LatLng[],
+  onProgress?: SafetyProgressCb,
+  routeDistanceMeters?: number,
+): Promise<SafetyMapResult> => {
+  if (path.length < 2) {
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, busStops: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
+  }
+
+  // Return cached result if we already analysed this exact route
+  const fp = pathFingerprint(path, routeDistanceMeters);
+  const cached = resultCache.get(fp);
+  if (cached) {
+    onProgress?.('✅ Done!', 100);
+    return cached;
+  }
+
+  onProgress?.('🔍 Fetching safety data…', 10);
+
+  const [crimes, roadsData, shops] = await Promise.all([
+    fetchCrimeMarkers(path),
+    fetchRoadsAndLights(path),
+    fetchOpenPlaceMarkers(path),
+  ]);
+
+  onProgress?.('✅ Done!', 100);
+
+  const markers = [...crimes, ...roadsData.lights, ...roadsData.busStops, ...shops];
+
+  // --- Generate safety-coloured route segments ---
+  const routeSegments = generateRouteSegments(path, crimes, roadsData.lights, roadsData.overlays, roadsData.busStops);
+
+  // --- Generate road-type labels where the street type changes ---
+  const roadLabels = generateRoadLabels(roadsData.overlays, path);
+
+  // Compute main-road ratio by WALKING THE ACTUAL ROUTE and checking
+  // what road type each sample point is on. This ensures a route on
+  // main roads gets a high ratio even when the bbox contains footpaths nearby.
+  let mainSamples = 0;
+  let pathSamples = 0;
+  let totalSamples = 0;
+  {
+    const SAMPLE_M = 50;
+    let acc = 0;
+    const samplePts: LatLng[] = [path[0]];
+    for (let i = 1; i < path.length; i++) {
+      acc += haversine(path[i - 1], path[i]);
+      if (acc >= SAMPLE_M) { samplePts.push(path[i]); acc = 0; }
+    }
+    for (const pt of samplePts) {
+      let bestOverlay: RoadOverlay | null = null;
+      let bestDist = 30;
+      for (const o of roadsData.overlays) {
+        for (const c of o.coordinates) {
+          const d = haversine(pt, c);
+          if (d < bestDist) { bestDist = d; bestOverlay = o; if (d < 10) break; }
+        }
+        if (bestDist < 10) break;
+      }
+      if (!bestOverlay) continue;
+      totalSamples++;
+      if (MAIN_ROAD_TYPES.has(bestOverlay.roadType)) mainSamples++;
+      else if (PATH_ROAD_TYPES.has(bestOverlay.roadType)) pathSamples++;
+    }
+  }
+  const mainRoadRatio = totalSamples > 0 ? mainSamples / totalSamples : 0.5;
+
+  const distKm = (routeDistanceMeters ?? 1000) / 1000;
+  const { score, label, color, pathfindingScore, dataConfidence } = computeSafetyScore(
+    crimes.length,
+    roadsData.lights.length,
+    roadsData.litCount,
+    roadsData.unlitCount,
+    shops.length,
+    roadsData.busStops.length,
+    distKm,
+    mainRoadRatio,
+  );
+
+  const result: SafetyMapResult = {
+    markers,
+    roadOverlays: roadsData.overlays,
+    roadLabels,
+    routeSegments,
+    crimeCount: crimes.length,
+    streetLights: roadsData.lights.length,
+    litRoads: roadsData.litCount,
+    unlitRoads: roadsData.unlitCount,
+    openPlaces: shops.length,
+    busStops: roadsData.busStops.length,
+    safetyScore: score,
+    safetyLabel: label,
+    safetyColor: color,
+    mainRoadRatio,
+    pathfindingScore,
+    dataConfidence,
+  };
+
+  // Persist so future calls for the same route are instant & identical
+  resultCache.set(fp, result);
+
+  return result;
+};
