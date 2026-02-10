@@ -67,6 +67,7 @@ RECOMMENDED ROUTE DETAILED DATA:
 - Street lights: ${safetyResult.streetLights}
 - Lit roads: ${safetyResult.litRoads}, Unlit roads: ${safetyResult.unlitRoads}
 - Open places (shops/cafés): ${safetyResult.openPlaces}
+- Bus stops nearby: ${safetyResult.busStops}
 - Main-road ratio: ${(safetyResult.mainRoadRatio * 100).toFixed(0)}%
 
 ALL ${routes.length} ROUTES:
@@ -74,6 +75,7 @@ ${routeBlocks}
 
 Respond with 1–2 paragraphs, max 150 words. Explain why the recommended route is safer.`;
 
+  console.log(`[OpenAI] 🌐 API call → gpt-4o-mini (max_tokens=200)`);
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -90,11 +92,13 @@ Respond with 1–2 paragraphs, max 150 words. Explain why the recommended route 
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    console.error(`[OpenAI] ❌ API error ${response.status}`);
     throw new Error(`OpenAI API error ${response.status}: ${body}`);
   }
 
   const data = await response.json();
   const text: string | undefined = data?.choices?.[0]?.message?.content;
+  console.log(`[OpenAI] 📦 Response: ${text ? text.length + ' chars' : 'empty'}, tokens=${data?.usage?.total_tokens ?? '?'}`);
 
   if (!text) {
     throw new Error('No response from OpenAI');
