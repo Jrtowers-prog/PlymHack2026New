@@ -103,3 +103,58 @@ function buildLightingCoverage(lightNodes, litWayNodePositions, bbox) {
   const LAMP_RADIUS = 60; // metres — effective illumination range
   const LAMP_RADIUS_DEG = LAMP_RADIUS / 111320;
 
+  // Stamp each lamp's influence into the grid
+  for (const lamp of lightNodes) {
+    const rMin = Math.max(0, Math.floor((lamp.lat - LAMP_RADIUS_DEG - bbox.south) / COVERAGE_CELL_DEG));
+    const rMax = Math.min(rows - 1, Math.ceil((lamp.lat + LAMP_RADIUS_DEG - bbox.south) / COVERAGE_CELL_DEG));
+    const cMin = Math.max(0, Math.floor((lamp.lng - LAMP_RADIUS_DEG - bbox.west) / COVERAGE_CELL_DEG));
+    const cMax = Math.min(cols - 1, Math.ceil((lamp.lng + LAMP_RADIUS_DEG - bbox.west) / COVERAGE_CELL_DEG));
+
+    for (let r = rMin; r <= rMax; r++) {
+      for (let c = cMin; c <= cMax; c++) {
+        const cellLat = bbox.south + (r + 0.5) * COVERAGE_CELL_DEG;
+        const cellLng = bbox.west + (c + 0.5) * COVERAGE_CELL_DEG;
+        const d = fastDistance(lamp.lat, lamp.lng, cellLat, cellLng);
+        if (d < LAMP_RADIUS) {
+          // Inverse-distance-squared falloff: light at 5m >> light at 50m
+          const intensity = Math.min(1.0, 1.0 / (1 + (d / 12) ** 2));
+          const idx = r * cols + c;
+          grid[idx] = Math.min(1.0, grid[idx] + intensity);
+        }
+      }
+    }
+  }
+
+  // Mark lit-way positions
+  for (const pos of litWayNodePositions) {
+    const r = Math.floor((pos.lat - bbox.south) / COVERAGE_CELL_DEG);
+    const c = Math.floor((pos.lng - bbox.west) / COVERAGE_CELL_DEG);
+    if (r >= 0 && r < rows && c >= 0 && c < cols) {
+      grid[r * cols + c] = Math.min(1.0, grid[r * cols + c] + 0.7);
+    }
+  }
+
+  return { grid, rows, cols, bbox };
+}
+
+/**
+ * Build a crime severity density map.
+ * Each cell accumulates severity-weighted crime density.
+ */
+function buildCrimeCoverage(crimes, bbox) {
+  const rows = Math.ceil((bbox.north - bbox.south) / COVERAGE_CELL_DEG);
+  const cols = Math.ceil((bbox.east - bbox.west) / COVERAGE_CELL_DEG);
+  const grid = new Float32Array(rows * cols);
+
+  const CRIME_RADIUS = 120; // metres — crime influence radius
+  const CRIME_RADIUS_DEG = CRIME_RADIUS / 111320;
+
+  for (const crime of crimes) {
+    const rMin = Math.max(0, Math.floor((crime.lat - CRIME_RADIUS_DEG - bbox.south) / COVERAGE_CELL_DEG));
+    const rMax = Math.min(rows - 1, Math.ceil((crime.lat + CRIME_RADIUS_DEG - bbox.south) / COVERAGE_CELL_DEG));
+    const cMin = Math.max(0, Math.floor((crime.lng - CRIME_RADIUS_DEG - bbox.west) / COVERAGE_CELL_DEG));
+    const cMax = Math.min(cols - 1, Math.ceil((crime.lng + CRIME_RADIUS_DEG - bbox.west) / COVERAGE_CELL_DEG));
+
+    const severity = crime.severity || 0.4;
+
+    for (let r = rMin; r <= rMax; r++) {
