@@ -38,3 +38,38 @@ const CRIME_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 function crimeCacheKey(bbox) {
   const r = (v) => Math.round(v * 200) / 200; // ~550m grid
   return `crime:${r(bbox.south)},${r(bbox.west)},${r(bbox.north)},${r(bbox.east)}`;
+}
+
+/**
+ * Fetch street-level crimes within a bounding box.
+ * Returns array of { lat, lng, category, severity, month }.
+ */
+async function fetchCrimesInBbox(bbox) {
+  const key = crimeCacheKey(bbox);
+  const cached = crimeCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CRIME_CACHE_TTL) {
+    console.log(`[crimeClient] 📋 Cache hit (${cached.data.length} crimes)`);
+    return cached.data;
+  }
+
+  const { south, west, north, east } = bbox;
+  const poly = [
+    `${south},${west}`,
+    `${south},${east}`,
+    `${north},${east}`,
+    `${north},${west}`,
+  ].join(':');
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+
+    const resp = await fetch(
+      `${POLICE_API_BASE}/crimes-street/all-crime?poly=${poly}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timer);
+
+    if (resp.status === 503) {
+      console.warn('[crimeClient] Police API returned 503 — skipping');
+      return [];
