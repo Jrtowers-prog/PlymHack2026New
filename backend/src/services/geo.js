@@ -35,3 +35,33 @@ function fastDistance(lat1, lng1, lat2, lng2) {
 
 /**
  * Bounding box from a list of {lat, lng} points, expanded by `bufferMetres`.
+ */
+function bboxFromPoints(points, bufferMetres = 500) {
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lng < minLng) minLng = p.lng;
+    if (p.lng > maxLng) maxLng = p.lng;
+  }
+  const latDeg = bufferMetres / 111_320;
+  const lngDeg = bufferMetres / (111_320 * Math.cos(((minLat + maxLat) / 2) * DEG_TO_RAD));
+  return {
+    south: minLat - latDeg,
+    north: maxLat + latDeg,
+    west: minLng - lngDeg,
+    east: maxLng + lngDeg,
+  };
+}
+
+/**
+ * Decode a Google-style encoded polyline into [{lat, lng}, ...].
+ */
+function decodePolyline(encoded) {
+  const points = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
