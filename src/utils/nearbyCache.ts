@@ -118,3 +118,54 @@ export const fetchNearbyPlacesCached = async (
   }
 
   // 2. De-duplicate in-flight requests
+  const existing = inflight.get(key);
+  if (existing) {
+    inflightHits++;
+    console.log(`[nearbyCache] 🔄 IN-FLIGHT DEDUP for ${key} | calls: ${totalApiCalls}, cache: ${cacheHits}, dedup: ${inflightHits}`);
+    return existing;
+  }
+
+  // 3. Make the Overpass request (no rate limiter needed — Overpass is free)
+  totalApiCalls++;
+  console.log(`[nearbyCache] 🌐 OVERPASS CALL #${totalApiCalls} → ${key} | Total: ${totalApiCalls} calls, ${cacheHits} cache hits, ${inflightHits} dedup hits`);
+
+  const promise = (async (): Promise<NearbyPlace[]> => {
+    try {
+      const query = buildOverpassQuery(lat, lng, radius);
+      const data = await queueOverpassQuery(query, 8_000, `nearby ${key}`);
+
+      if (!data?.elements) return [];
+
+      const places: NearbyPlace[] = [];
+      const seenIds = new Set<string>();
+
+      for (const element of data.elements) {
+        const place = toNearbyPlace(element);
+        if (!place || seenIds.has(place.place_id)) continue;
+        seenIds.add(place.place_id);
+        places.push(place);
+      }
+
+      return places;
+    } catch (err) {
+      console.warn('[nearbyCache] Overpass fetch failed:', err);
+      return [];
+    }
+  })();
+
+  inflight.set(key, promise);
+
+  try {
+    const results = await promise;
+    cache.set(key, { results, timestamp: Date.now() });
+    console.log(`[nearbyCache] 📦 OVERPASS #${totalApiCalls} returned ${results.length} places for ${key}`);
+    return results;
+  } finally {
+    inflight.delete(key);
+  }
+};
+
+/** Clear the cache (useful for testing) */
+export const clearNearbyCache = (): void => {
+  cache.clear();
+};
