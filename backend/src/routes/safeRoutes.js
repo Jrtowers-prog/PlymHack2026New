@@ -63,3 +63,78 @@ function safetyLabel(score) {
 function segmentColor(safetyScore) {
   if (safetyScore >= 0.7) return '#4CAF50';
   if (safetyScore >= 0.5) return '#8BC34A';
+  if (safetyScore >= 0.35) return '#FFC107';
+  if (safetyScore >= 0.2) return '#FF9800';
+  return '#F44336';
+}
+
+// ── GET /api/safe-routes ────────────────────────────────────────────────────
+router.get('/', async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    // ── 1. Validate inputs ──────────────────────────────────────────────
+    const oLat = validateLatitude(req.query.origin_lat);
+    const oLng = validateLongitude(req.query.origin_lng);
+    if (!oLat.valid) return res.status(400).json({ error: oLat.error });
+    if (!oLng.valid) return res.status(400).json({ error: oLng.error });
+
+    const dLat = validateLatitude(req.query.dest_lat);
+    const dLng = validateLongitude(req.query.dest_lng);
+    if (!dLat.valid) return res.status(400).json({ error: dLat.error });
+    if (!dLng.valid) return res.status(400).json({ error: dLng.error });
+
+    // ── 2. Distance limit ───────────────────────────────────────────────
+    const straightLineDist = haversine(oLat.value, oLng.value, dLat.value, dLng.value);
+    const straightLineKm = straightLineDist / 1000;
+
+    if (straightLineKm > MAX_DISTANCE_KM) {
+      return res.status(400).json({
+        error: 'DESTINATION_OUT_OF_RANGE',
+        message: `Sorry, the destination is out of range. Maximum distance is ${MAX_DISTANCE_KM} km (straight line), but the destination is ${straightLineKm.toFixed(1)} km away.`,
+        maxDistanceKm: MAX_DISTANCE_KM,
+        actualDistanceKm: Math.round(straightLineKm * 10) / 10,
+      });
+    }
+
+    // ── 3. Check route cache ────────────────────────────────────────────
+    const cacheKey = getCacheKey(oLat.value, oLng.value, dLat.value, dLng.value);
+    const cached = routeCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      console.log(`[safe-routes] 📋 Route cache hit for ${cacheKey}`);
+      return res.json(cached.data);
+    }
+
+    // ── 4. Request coalescing ───────────────────────────────────────────
+    if (inflight.has(cacheKey)) {
+      console.log(`[safe-routes] ⏳ Coalescing with in-flight request for ${cacheKey}`);
+      try {
+        const result = await inflight.get(cacheKey);
+        return res.json(result);
+      } catch (err) {
+        return res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Computation failed.' });
+      }
+    }
+
+    // Create a shared promise for concurrent requests
+    let resolveInflight, rejectInflight;
+    const inflightPromise = new Promise((resolve, reject) => {
+      resolveInflight = resolve;
+      rejectInflight = reject;
+    });
+    inflight.set(cacheKey, inflightPromise);
+
+    try {
+      const result = await computeSafeRoutes(
+        oLat.value, oLng.value, dLat.value, dLng.value,
+        straightLineDist, straightLineKm, startTime,
+      );
+
+      // Cache the result
+      routeCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      resolveInflight(result);
+      res.json(result);
+    } catch (err) {
+      rejectInflight(err);
+      if (err.statusCode && err.code) {
+        return res.status(err.statusCode).json({
