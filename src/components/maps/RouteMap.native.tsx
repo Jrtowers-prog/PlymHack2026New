@@ -148,3 +148,153 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
     // Recenter on user location
     function recenterMap() {
       userInteracted = false;
+      if (lastNavLL) {
+        map.panTo(lastNavLL);
+        if (map.getZoom() < 17) map.setZoom(17);
+      }
+    }
+
+    // Navigation view — 3D perspective tilt + heading rotation
+    function setNavView(heading, entering) {
+      var mapEl = document.getElementById('map');
+      var btn = document.getElementById('recenterBtn');
+      if (!entering) {
+        isNavMode = false;
+        currentRotation = 0;
+        userInteracted = false;
+        mapEl.style.transform = 'none';
+        if (btn) btn.style.display = 'none';
+        return;
+      }
+      isNavMode = true;
+      if (btn) btn.style.display = 'flex';
+      // Shortest-path rotation to avoid spinning the long way around
+      var target = -(heading || 0);
+      var diff = target - currentRotation;
+      while (diff > 180) diff -= 360;
+      while (diff < -180) diff += 360;
+      currentRotation += diff;
+      mapEl.style.transform = 'perspective(800px) rotateX(40deg) rotate(' + currentRotation + 'deg) scale(1.5)';
+    }
+
+    // ── Update handler (called from RN via injectJavaScript) ──
+    function updateMap(data) {
+      clearArray(markers);
+      clearArray(polylines);
+
+      var bounds = L.latLngBounds([]);
+      var hasBounds = false;
+
+      // Origin – blue dot (hidden during navigation)
+      if (data.origin && !data.navLocation) {
+        var pos = L.latLng(data.origin.lat, data.origin.lng);
+        markers.push(L.circleMarker(pos, {
+          radius: 8, fillColor: '#4285F4', fillOpacity: 1,
+          color: '#fff', weight: 3,
+        }).bindTooltip('Your location').addTo(map));
+        markers.push(L.circleMarker(pos, {
+          radius: 3.5, fillColor: '#fff', fillOpacity: 1,
+          color: '#fff', weight: 0,
+        }).addTo(map));
+        bounds.extend(pos);
+        hasBounds = true;
+      }
+
+      // Destination marker
+      if (data.destination) {
+        var dPos = L.latLng(data.destination.lat, data.destination.lng);
+        markers.push(L.marker(dPos).bindTooltip('Destination').addTo(map));
+        bounds.extend(dPos);
+        hasBounds = true;
+      }
+
+      // Unselected routes – grey
+      (data.routes || []).forEach(function(r) {
+        if (r.selected) return;
+        var path = r.path.map(function(p) { return [p.lat, p.lng]; });
+        var pl = L.polyline(path, { color: '#98a2b3', opacity: 0.5, weight: 5 }).addTo(map);
+        pl.on('click', function() { sendMsg('selectRoute', { id: r.id }); });
+        polylines.push(pl);
+        bounds.extend(pl.getBounds());
+        hasBounds = true;
+      });
+
+      function nearestIdx(path, pt) {
+        var best = 0, bestD = 1e18;
+        for (var i = 0; i < path.length; i++) {
+          var dlat = path[i].lat - pt.lat, dlng = path[i].lng - pt.lng;
+          var d = dlat*dlat + dlng*dlng;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+      }
+
+      // Selected route
+      var sel = (data.routes || []).find(function(r) { return r.selected; });
+      if (sel) {
+        if (data.navLocation && sel.path.length > 1) {
+          var navPt = { lat: data.navLocation.lat, lng: data.navLocation.lng };
+          var splitIdx = nearestIdx(sel.path, navPt);
+
+          if (splitIdx > 0) {
+            var tp = [];
+            for (var ti = 0; ti <= splitIdx; ti++) tp.push([sel.path[ti].lat, sel.path[ti].lng]);
+            tp.push([navPt.lat, navPt.lng]);
+            polylines.push(L.polyline(tp, { color: '#1D2939', opacity: 0.7, weight: 7 }).addTo(map));
+          }
+
+          if (data.segments && data.segments.length > 0) {
+            data.segments.forEach(function(seg) {
+              var fp = []; var started = false;
+              for (var si = 0; si < seg.path.length; si++) {
+                var sp = seg.path[si];
+                if (!started) {
+                  var spIdx = nearestIdx(sel.path, sp);
+                  if (spIdx >= splitIdx) started = true;
+                }
+                if (started) fp.push([sp.lat, sp.lng]);
+              }
+              if (fp.length >= 2) {
+                polylines.push(L.polyline(fp, { color: seg.color, opacity: 0.9, weight: 7 }).addTo(map));
+              }
+            });
+          } else {
+            var remPath = [[navPt.lat, navPt.lng]];
+            for (var ri = splitIdx; ri < sel.path.length; ri++) {
+              remPath.push([sel.path[ri].lat, sel.path[ri].lng]);
+            }
+            polylines.push(L.polyline(remPath, { color: '#4285F4', opacity: 0.85, weight: 6 }).addTo(map));
+          }
+        } else {
+          if (data.segments && data.segments.length > 0) {
+            data.segments.forEach(function(seg) {
+              var segPath = seg.path.map(function(p) { return [p.lat, p.lng]; });
+              polylines.push(L.polyline(segPath, { color: seg.color, opacity: 0.9, weight: 7 }).addTo(map));
+            });
+          } else {
+            var selPath = sel.path.map(function(p) { return [p.lat, p.lng]; });
+            polylines.push(L.polyline(selPath, { color: '#4285F4', opacity: 0.85, weight: 6 }).addTo(map));
+          }
+        }
+        sel.path.forEach(function(p) { bounds.extend(L.latLng(p.lat, p.lng)); });
+        hasBounds = true;
+      }
+
+      // Safety markers
+      var markerColors = { crime: '#ef4444', shop: '#22c55e', light: '#facc15', bus_stop: '#3b82f6' };
+      (data.safetyMarkers || []).forEach(function(m) {
+        markers.push(L.circleMarker([m.lat, m.lng], {
+          radius: 4,
+          fillColor: markerColors[m.kind] || '#94a3b8',
+          fillOpacity: 0.9, color: '#fff', weight: 1,
+        }).bindTooltip(m.label || m.kind).addTo(map));
+      });
+
+      // Road labels
+      (data.roadLabels || []).forEach(function(lbl) {
+        var text = lbl.name.slice(0, 12);
+        var icon = L.divIcon({
+          className: '',
+          html: '<div class="road-label" style="background:' + lbl.color + '">' + text + '</div>',
+          iconSize: null,
+        });
