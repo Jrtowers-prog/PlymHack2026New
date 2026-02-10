@@ -11,6 +11,14 @@ export interface LightingData {
   confidence: number; // 0-1: how confident we are in the data (1 = explicit OSM tag, 0.5 = inferred)
   roadType: string;
   source: 'osm_explicit' | 'osm_inferred' | 'road_type_heuristic' | 'unknown';
+  /** OSM lamp_type tag: e.g. 'electric', 'gas', 'solar' */
+  lampType?: string;
+  /** OSM light:method tag: e.g. 'LED', 'sodium', 'metal_halide', 'fluorescent' */
+  lightMethod?: string;
+  /** OSM light:count — number of lamps on the fixture */
+  lightCount?: number;
+  /** OSM light:direction — 'both', 'forward', 'backward' */
+  lightDirection?: string;
 }
 
 export interface SegmentLightingScore {
@@ -72,147 +80,56 @@ export const roadTypeToLightingLikelihood = (roadType: string): number => {
 };
 
 /**
+ * Score lamp quality from OSM tags (light:method / lamp_type).
+ * Returns a multiplier 0.5 – 1.5:
+ *   LED/metal_halide = 1.4 (bright, even coverage)
+ *   Fluorescent      = 1.2
+ *   Sodium           = 1.0 (reference baseline)
+ *   Mercury / gas    = 0.7 (dim / unreliable)
+ *   Solar            = 0.8 (variable output)
+ *   Unknown          = 1.0
+ */
+export const lampQualityMultiplier = (data: LightingData): number => {
+  const method = (data.lightMethod ?? '').toLowerCase();
+  const lamp = (data.lampType ?? '').toLowerCase();
+
+  // Best: modern white-light sources
+  if (method.includes('led') || method.includes('metal_halide')) return 1.4;
+  if (method.includes('fluorescent')) return 1.2;
+  if (lamp.includes('led')) return 1.4;
+
+  // Reference: common sodium lamps
+  if (method.includes('sodium') || method.includes('hps')) return 1.0;
+  if (lamp.includes('electric')) return 1.0;
+
+  // Weaker / less reliable
+  if (lamp.includes('solar')) return 0.8;
+  if (method.includes('mercury') || method.includes('gas') || lamp.includes('gas')) return 0.7;
+
+  return 1.0; // unknown / no tag
+};
+
+/**
+ * Factor in the number of lamps on a fixture and their direction.
+ * Returns a multiplier ≥ 1.0.
+ */
+export const lampCountMultiplier = (data: LightingData): number => {
+  let m = 1.0;
+
+  // Multiple lamps per fixture = better coverage
+  if (data.lightCount && data.lightCount > 1) {
+    m *= Math.min(1.5, 1 + (data.lightCount - 1) * 0.15);
+  }
+
+  // Bidirectional lighting covers both sides of the road
+  if (data.lightDirection === 'both') {
+    m *= 1.1;
+  }
+
+  return m;
+};
+
+/**
  * Calculate lighting score for a segment
  * Combines OSM explicit tags with road type heuristics
- */
-export const calculateLightingScore = (
-  lightingDataArray: LightingData[],
-  currentTime: Date = new Date(),
-): SegmentLightingScore => {
-  const isNight = isNighttime(currentTime);
-
-  if (lightingDataArray.length === 0) {
-    // No data - use conservative estimate
-    return {
-      score: isNight ? 0.3 : 0.7, // During night, be pessimistic
-      dayScore: 0.7,
-      nightScore: 0.3,
-      hasLighting: false,
-      confidence: 0.2,
-      lightingData: [],
-    };
-  }
-
-  // Weight explicit OSM tags more heavily than heuristics
-  let explicitScore = 0;
-  let heuristicScore = 0;
-  let explicitCount = 0;
-  let heuristicCount = 0;
-
-  lightingDataArray.forEach((data) => {
-    const litScore = data.isLit ? 1 : 0;
-
-    if (data.source === 'osm_explicit') {
-      explicitScore += litScore;
-      explicitCount += 1;
-    } else {
-      heuristicScore += litScore;
-      heuristicCount += 1;
-    }
-  });
-
-  // Calculate weighted average
-  let finalScore = 0;
-  if (explicitCount > 0 && heuristicCount > 0) {
-    finalScore = (explicitScore / explicitCount) * 0.8 + (heuristicScore / heuristicCount) * 0.2;
-  } else if (explicitCount > 0) {
-    finalScore = explicitScore / explicitCount;
-  } else {
-    finalScore = heuristicScore / heuristicCount;
-  }
-
-  // Calculate average confidence
-  const avgConfidence =
-    lightingDataArray.reduce((sum, d) => sum + d.confidence, 0) / lightingDataArray.length;
-
-  // During daytime, lighting is less critical
-  const dayScore = 0.7 + finalScore * 0.3; // Minimum 0.7 even if unlit
-  // During nighttime, lighting is critical
-  const nightScore = finalScore;
-
-  return {
-    score: isNight ? nightScore : dayScore,
-    dayScore,
-    nightScore,
-    hasLighting: finalScore >= 0.6,
-    confidence: avgConfidence,
-    lightingData: lightingDataArray,
-  };
-};
-
-/**
- * Find nearby lighting data for a segment
- * This would be called with data fetched from OSM
- */
-export const getLightingDataForSegment = (
-  segmentMidpoint: LatLng,
-  nearbyWays: Array<{
-    id: number;
-    highway: string;
-    lit: 'yes' | 'no' | 'unknown';
-    nodes: LatLng[];
-  }>,
-  radiusMeters: number = 30,
-): LightingData[] => {
-  const lightingDataArray: LightingData[] = [];
-
-  nearbyWays.forEach((way) => {
-    // Check if this way is close to the segment
-    let isClose = false;
-
-    for (const node of way.nodes) {
-      const distance = calculateDistance(segmentMidpoint, node);
-      if (distance <= radiusMeters) {
-        isClose = true;
-        break;
-      }
-    }
-
-    if (!isClose) return;
-
-    // Determine if it's lit
-    let isLit = false;
-    let confidence = 0.5;
-    let source: LightingData['source'] = 'osm_inferred';
-
-    if (way.lit === 'yes') {
-      isLit = true;
-      confidence = 1.0;
-      source = 'osm_explicit';
-    } else if (way.lit === 'no') {
-      isLit = false;
-      confidence = 1.0;
-      source = 'osm_explicit';
-    } else {
-      // Use road type heuristic
-      isLit = roadTypeToLightingLikelihood(way.highway) >= 0.5;
-      confidence = roadTypeToLightingLikelihood(way.highway) / 1.5;
-      source = 'road_type_heuristic';
-    }
-
-    lightingDataArray.push({
-      isLit,
-      confidence,
-      roadType: way.highway,
-      source,
-    });
-  });
-
-  return lightingDataArray;
-};
-
-/**
- * Example: How to use this in the app
- * 
- * const lightingData = getLightingDataForSegment(
- *   segment.midpointCoord,
- *   osmWaysData,
- *   30
- * );
- * 
- * const lightingScore = calculateLightingScore(lightingData);
- * // At night: score = 0.8 (well lit)
- * // During day: score = 0.95 (lighting less critical)
- * 
- * const { color, riskLevel } = scoreToColor(lightingScore.score);
  */
