@@ -208,3 +208,32 @@ function splitElements(elements) {
     transit: { elements: transitElements },
   };
 }
+
+const WALKABLE_HIGHWAYS = new Set([
+  'trunk', 'primary', 'secondary', 'tertiary', 'unclassified',
+  'residential', 'living_street', 'pedestrian', 'footway', 'cycleway',
+  'path', 'steps', 'service', 'track',
+]);
+
+// Legacy individual fetchers (kept for backwards compat)
+async function fetchRoadNetwork(bbox) {
+  return (await fetchAllSafetyData(bbox)).roads;
+}
+async function fetchLighting(bbox) {
+  return (await fetchAllSafetyData(bbox)).lights;
+}
+async function fetchOpenPlaces(bbox) {
+  return (await fetchAllSafetyData(bbox)).places;
+}
+async function fetchTransitStops(bbox) {
+  return (await fetchAllSafetyData(bbox)).transit;
+}
+
+module.exports = {
+  overpassQuery,
+  fetchAllSafetyData,
+  fetchRoadNetwork,
+  fetchLighting,
+  fetchOpenPlaces,
+  fetchTransitStops,
+};
