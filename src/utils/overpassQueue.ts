@@ -48,3 +48,63 @@ const fetchWithFallback = async (
   for (const server of OVERPASS_SERVERS) {
     try {
       const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const response = await fetch(server, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      if (response.status === 429) {
+        console.warn(`[OverpassQ] ${server} → 429 rate-limited, trying next…`);
+        lastError = new Error(`HTTP 429 from ${server}`);
+        continue;
+      }
+      if (response.status >= 500) {
+        console.warn(`[OverpassQ] ${server} → ${response.status}, trying next…`);
+        lastError = new Error(`HTTP ${response.status} from ${server}`);
+        continue;
+      }
+      if (!response.ok) {
+        console.warn(`[OverpassQ] ${server} → ${response.status}`);
+        lastError = new Error(`HTTP ${response.status} from ${server}`);
+        continue;
+      }
+
+      return await response.json();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AbortError') || msg.includes('aborted')) {
+        console.warn(`[OverpassQ] ${server} → timeout (${timeoutMs}ms), trying next…`);
+      } else {
+        console.warn(`[OverpassQ] ${server} → ${msg}, trying next…`);
+      }
+      lastError = err instanceof Error ? err : new Error(msg);
+      continue;
+    }
+  }
+
+  // All servers failed
+  console.error('[OverpassQ] All Overpass servers failed');
+  throw lastError ?? new Error('All Overpass servers failed');
+};
+
+/**
+ * Queue an Overpass request. Requests run one-at-a-time with a cooldown
+ * between them so we never spam the server.
+ *
+ * @param body   - URL-encoded POST body (e.g. "data=<Overpass QL>")
+ * @param timeoutMs - per-request timeout (default 15s)
+ * @param label  - optional label for debug logging
+ * @returns Parsed JSON response
+ *
+ * Throws if ALL three servers fail for this request.
+ */
+export const queueOverpassRequest = async <T = any>(
+  body: string,
+  timeoutMs = 15_000,
+  label = '',
