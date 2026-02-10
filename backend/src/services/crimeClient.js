@@ -73,3 +73,49 @@ async function fetchCrimesInBbox(bbox) {
     if (resp.status === 503) {
       console.warn('[crimeClient] Police API returned 503 — skipping');
       return [];
+    }
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.warn(`[crimeClient] Police API ${resp.status}: ${text.slice(0, 200)}`);
+      return [];
+    }
+
+    const crimes = await resp.json();
+    if (!Array.isArray(crimes)) return [];
+
+    const result = crimes
+      .filter((c) => c.location?.latitude && c.location?.longitude)
+      .map((c) => {
+        const category = c.category || 'unknown';
+        return {
+          lat: parseFloat(c.location.latitude),
+          lng: parseFloat(c.location.longitude),
+          category,
+          severity: CRIME_SEVERITY[category] || 0.4,
+          month: c.month || '',
+        };
+      });
+
+    // Cache result
+    crimeCache.set(key, { data: result, timestamp: Date.now() });
+
+    // Evict stale entries
+    if (crimeCache.size > 30) {
+      const now = Date.now();
+      for (const [k, v] of crimeCache) {
+        if (now - v.timestamp > CRIME_CACHE_TTL) crimeCache.delete(k);
+      }
+    }
+
+    return result;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      console.warn('[crimeClient] Police API timed out');
+    } else {
+      console.warn('[crimeClient] Police API error:', err.message);
+    }
+    return [];
+  }
+}
+
+module.exports = { fetchCrimesInBbox, CRIME_SEVERITY };
