@@ -208,3 +208,73 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
 
   // 2. Build coverage maps (batch pre-computation)
   const lightNodes = [];
+  const litWayNodePositions = [];
+  const litWayNodeIds = new Set();
+  if (lightData) {
+    for (const el of lightData.elements) {
+      if (el.type === 'node' && el.tags?.highway === 'street_lamp') {
+        lightNodes.push({ lat: el.lat, lng: el.lon });
+      }
+      if (el.type === 'way' && el.tags?.lit === 'yes' && el.nodes) {
+        for (const nid of el.nodes) {
+          litWayNodeIds.add(nid);
+          const n = osmNodes.get(nid);
+          if (n) litWayNodePositions.push({ lat: n.lat, lng: n.lng });
+        }
+      }
+    }
+  }
+
+  console.log(`[graph] Building lighting coverage map (${lightNodes.length} lamps)...`);
+  const lightCoverage = buildLightingCoverage(lightNodes, litWayNodePositions, bbox);
+
+  console.log(`[graph] Building crime coverage map (${crimes.length} crimes)...`);
+  const crimeCoverage = buildCrimeCoverage(crimes, bbox);
+
+  // 3. Build spatial grids for CCTV, places, transit (still need proximity)
+  const cctvNodes = [];
+  if (cctvData) {
+    for (const el of cctvData.elements) {
+      if (el.type === 'node' && el.lat && el.lon) {
+        cctvNodes.push({ lat: el.lat, lng: el.lon });
+      }
+    }
+  }
+  const cctvGrid = buildSpatialGrid(cctvNodes);
+
+  const placeNodes = [];
+  if (placeData) {
+    for (const el of placeData.elements) {
+      const lat = el.lat || el.center?.lat;
+      const lng = el.lon || el.center?.lon;
+      if (lat && lng) {
+        placeNodes.push({
+          lat, lng,
+          amenity: el.tags?.amenity,
+          opening_hours: el.tags?.opening_hours,
+        });
+      }
+    }
+  }
+  const placeGrid = buildSpatialGrid(placeNodes);
+
+  const transitNodes = [];
+  if (transitData) {
+    for (const el of transitData.elements) {
+      if (el.type === 'node' && el.lat && el.lon) {
+        transitNodes.push({ lat: el.lat, lng: el.lon });
+      }
+    }
+  }
+  const transitGrid = buildSpatialGrid(transitNodes);
+
+  // 4. Build node spatial grid for O(1) nearest-node lookup
+  const nodeArray = [];
+  for (const [id, node] of osmNodes) {
+    nodeArray.push({ lat: node.lat, lng: node.lng, id });
+  }
+  const nodeGrid = buildSpatialGrid(nodeArray, 'lat', 'lng', 0.001); // ~110m cells
+
+  // 5. Detect dead-end nodes (degree = 1)
+  const nodeDegree = new Map();
+
