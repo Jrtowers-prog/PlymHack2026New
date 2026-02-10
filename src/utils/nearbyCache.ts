@@ -53,3 +53,68 @@ const cacheKey = (lat: number, lng: number, radius: number): string =>
  *   • shop: any shop (supermarket, convenience, etc.)
  *   • leisure: fitness_centre, sports_centre, swimming_pool
  */
+const buildOverpassQuery = (lat: number, lng: number, radius: number): string => {
+  const around = `(around:${radius},${lat},${lng})`;
+  return `[out:json][timeout:10];(node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre|food_court|ice_cream|biergarten"]${around};node["shop"]${around};node["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre|food_court|ice_cream|biergarten"]${around};way["shop"]${around};way["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};);out center tags qt 50;`;
+};
+
+// ─── Overpass element → NearbyPlace ─────────────────────────────────────────
+
+const toNearbyPlace = (element: any): NearbyPlace | null => {
+  const tags = element.tags ?? {};
+  const name = tags.name ?? tags['name:en'] ?? tags.brand ?? '';
+
+  // Skip unnamed features — they're not useful as safety markers
+  if (!name) return null;
+
+  // Nodes have lat/lon directly; ways use center
+  const lat = element.lat ?? element.center?.lat;
+  const lon = element.lon ?? element.center?.lon;
+  if (lat == null || lon == null) return null;
+
+  const types: string[] = [];
+  if (tags.amenity) types.push(tags.amenity);
+  if (tags.shop) types.push('shop', tags.shop);
+  if (tags.leisure) types.push(tags.leisure);
+  if (tags.cuisine) types.push(tags.cuisine);
+
+  return {
+    place_id: `osm-${element.type}-${element.id}`,
+    name,
+    location: { lat, lng: lon },
+    types,
+    // Overpass doesn't know real-time opening status.
+    // We assume amenities exist = human activity nearby — that's
+    // the safety signal we care about.
+    open_now: true,
+    business_status: 'OPERATIONAL',
+  };
+};
+
+
+
+// ─── Main exported function ──────────────────────────────────────────────────
+
+/**
+ * Fetch nearby open places for a single point using Overpass (OSM).
+ * Results are cached and de-duplicated — concurrent calls for the
+ * same rounded location will share a single API request.
+ *
+ * 🆓 Completely FREE — no Google API calls, no API key needed.
+ */
+export const fetchNearbyPlacesCached = async (
+  lat: number,
+  lng: number,
+  radius = 300,
+): Promise<NearbyPlace[]> => {
+  const key = cacheKey(lat, lng, radius);
+
+  // 1. Check memory cache
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    cacheHits++;
+    console.log(`[nearbyCache] ✅ CACHE HIT for ${key} (${cached.results.length} results) | calls: ${totalApiCalls}, cache: ${cacheHits}, dedup: ${inflightHits}`);
+    return cached.results;
+  }
+
+  // 2. De-duplicate in-flight requests
