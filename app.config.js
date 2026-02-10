@@ -1,14 +1,8 @@
 module.exports = ({ config }) => {
-  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
-
   return {
     ...config,
     ios: {
       ...config.ios,
-      config: {
-        ...config.ios?.config,
-        googleMapsApiKey,
-      },
       infoPlist: {
         ...config.ios?.infoPlist,
         NSLocationWhenInUseUsageDescription:
@@ -17,13 +11,6 @@ module.exports = ({ config }) => {
     },
     android: {
       ...config.android,
-      config: {
-        ...config.android?.config,
-        googleMaps: {
-          ...config.android?.config?.googleMaps,
-          apiKey: googleMapsApiKey,
-        },
-      },
       permissions: Array.from(
         new Set([
           ...(config.android?.permissions ?? []),
