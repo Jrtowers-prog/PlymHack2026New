@@ -113,3 +113,128 @@ export function useHomeScreen() {
     }
   }, [routes.length]);
 
+  // Clear manual dest when user starts typing
+  useEffect(() => {
+    if (destSearch.query.length > 0) setManualDest(null);
+  }, [destSearch.query]);
+
+  // Pan to location on first fix
+  useEffect(() => {
+    if (location && isUsingCurrentLocation) {
+      setMapPanTo({ location, key: Date.now() });
+    }
+  }, [location !== null]);
+
+  // Auto-select safest route
+  useEffect(() => {
+    if (bestRouteId) setSelectedRouteId(bestRouteId);
+    else if (routes.length > 0) setSelectedRouteId(routes[0].id);
+  }, [routes, bestRouteId]);
+
+  // ── Selected route derivations ──
+  const selectedRoute = useMemo<DirectionsRoute | null>(
+    () => routes.find((r) => r.id === selectedRouteId) ?? null,
+    [routes, selectedRouteId],
+  );
+
+  const selectedSafeRoute = useMemo<SafeRoute | null>(
+    () => (safeRoutes as SafeRoute[]).find((r) => r.id === selectedRouteId) ?? null,
+    [safeRoutes, selectedRouteId],
+  );
+
+  // ── POI markers ──
+  const poiMarkers = useMemo(() => {
+    const pois = selectedSafeRoute?.routePOIs;
+    if (!pois) return [];
+    const markers: Array<{ id: string; kind: string; coordinate: { latitude: number; longitude: number }; label: string }> = [];
+    pois.cctv?.forEach((c, i) => markers.push({ id: `poi-cctv-${i}`, kind: 'cctv', coordinate: { latitude: c.lat, longitude: c.lng }, label: 'CCTV Camera' }));
+    pois.transit?.forEach((t, i) => markers.push({ id: `poi-transit-${i}`, kind: 'bus_stop', coordinate: { latitude: t.lat, longitude: t.lng }, label: 'Transit Stop' }));
+    pois.deadEnds?.forEach((d, i) => markers.push({ id: `poi-deadend-${i}`, kind: 'dead_end', coordinate: { latitude: d.lat, longitude: d.lng }, label: 'Dead End' }));
+    pois.lights?.forEach((l, i) => markers.push({ id: `poi-light-${i}`, kind: 'light', coordinate: { latitude: l.lat, longitude: l.lng }, label: 'Street Light' }));
+    pois.places?.forEach((p, i) => markers.push({ id: `poi-place-${i}`, kind: 'shop', coordinate: { latitude: p.lat, longitude: p.lng }, label: 'Open Place' }));
+    pois.crimes?.forEach((cr, i) => markers.push({ id: `poi-crime-${i}`, kind: 'crime', coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime' }));
+    return markers;
+  }, [selectedSafeRoute]);
+
+  // ── Safety result derived from SafeRoute ──
+  const safetyResult = useMemo<SafetyMapResult | null>(() => {
+    if (!selectedSafeRoute) return null;
+    const s = selectedSafeRoute.safety;
+    const stats = selectedSafeRoute.routeStats;
+    const segs = selectedSafeRoute.enrichedSegments ?? [];
+
+    let litSegments = 0;
+    let unlitSegments = 0;
+    for (const seg of segs) {
+      if (seg.lightScore > 0.5) litSegments++;
+      else unlitSegments++;
+    }
+    let crimeHotspots = 0;
+    for (const seg of segs) {
+      if (seg.crimeScore < 0.4) crimeHotspots++;
+    }
+    let openPlaceCount = 0;
+    for (const seg of segs) {
+      if (seg.placeScore > 0.1) openPlaceCount++;
+    }
+
+    return {
+      markers: [],
+      roadOverlays: [],
+      roadLabels: [],
+      routeSegments: [],
+      crimeCount: crimeHotspots,
+      streetLights: litSegments,
+      litRoads: litSegments,
+      unlitRoads: unlitSegments,
+      openPlaces: openPlaceCount,
+      busStops: stats?.transitStopsNearby ?? 0,
+      safetyScore: s.score,
+      safetyLabel: s.label,
+      safetyColor: s.color,
+      mainRoadRatio: s.mainRoadRatio / 100,
+      pathfindingScore: s.score,
+      dataConfidence: 1,
+    };
+  }, [selectedSafeRoute]);
+
+  // ── Route segments for coloured overlay ──
+  const routeSegments = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    return selectedSafeRoute.enrichedSegments.map((seg, i) => ({
+      id: `seg-${i}`,
+      path: [seg.startCoord, seg.endCoord],
+      color: seg.color,
+      score: seg.safetyScore,
+    }));
+  }, [selectedSafeRoute]);
+
+  // ── Road labels ──
+  const roadLabels = useMemo(() => {
+    if (!selectedSafeRoute?.enrichedSegments) return [];
+    const seen = new Set<string>();
+    const labels: Array<{ id: string; coordinate: { latitude: number; longitude: number }; roadType: string; displayName: string; color: string }> = [];
+    const typeColors: Record<string, string> = {
+      primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+      residential: '#64748b', footway: '#f59e0b', path: '#f59e0b',
+      pedestrian: '#34d399', service: '#94a3b8',
+    };
+    for (const seg of selectedSafeRoute.enrichedSegments) {
+      if (seg.roadName && !seen.has(seg.roadName)) {
+        seen.add(seg.roadName);
+        labels.push({
+          id: `rl-${labels.length}`,
+          coordinate: seg.midpointCoord,
+          roadType: seg.highway,
+          displayName: seg.roadName,
+          color: typeColors[seg.highway] || '#64748b',
+        });
+      }
+    }
+    return labels;
+  }, [selectedSafeRoute]);
+
+  // ── Navigation ──
+  const nav = useNavigation(selectedRoute);
+  const isNavActive = nav.state === 'navigating' || nav.state === 'off-route';
+
