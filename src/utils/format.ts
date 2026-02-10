@@ -24,7 +24,7 @@ export const formatDuration = (seconds: number): string => {
 export const stripHtml = (html: string): string =>
   html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
 
-
+/** Map Google maneuver strings to Ionicons names. */
 export const maneuverIcon = (maneuver?: string): string => {
   switch (maneuver) {
     case 'turn-left':
@@ -50,3 +50,17 @@ export const maneuverIcon = (maneuver?: string): string => {
   }
 };
 
+/** Interpolate between two hex-packed colours (0xRRGGBB). Returns CSS hex. */
+export const lerpColor = (a: number, b: number, t: number): string => {
+  const clamp = Math.max(0, Math.min(1, t));
+  const rA = (a >> 16) & 0xff,
+    gA = (a >> 8) & 0xff,
+    bA = a & 0xff;
+  const rB = (b >> 16) & 0xff,
+    gB = (b >> 8) & 0xff,
+    bB = b & 0xff;
+  const r = Math.round(rA + (rB - rA) * clamp);
+  const g = Math.round(gA + (gB - gA) * clamp);
+  const bl = Math.round(bA + (bB - bA) * clamp);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`;
+};
