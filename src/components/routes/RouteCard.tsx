@@ -64,3 +64,82 @@ export function RouteCard({ route, index, isSelected, onSelect }: RouteCardProps
 }
 
 const styles = StyleSheet.create({
+  card: {
+    marginBottom: 12,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#eaecf0',
+    backgroundColor: '#ffffff',
+  },
+  cardSelected: {
+    borderColor: '#1570ef',
+    backgroundColor: '#f0f9ff',
+  },
+  cardBest: {
+    borderColor: '#22c55e',
+    backgroundColor: '#f0fdf4',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#101828',
+  },
+  labelSelected: {
+    color: '#1570ef',
+  },
+  labelBest: {
+    color: '#16a34a',
+  },
+  bestBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bestBadgeTick: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  scoreChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 5,
+  },
+  scoreChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  scoreChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  details: {
+    fontSize: 14,
+    color: '#667085',
+  },
+  detailsSubtle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 2,
+  },
+});
