@@ -33,3 +33,38 @@ app.use(helmet());
 // ─── 2. CORS — restrict to allowed origins ──────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, server-to-server)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`));
+      }
+    },
+    methods: ['GET'],
+    optionsSuccessStatus: 200,
+  })
+);
+
+// ─── 3. Rate limiting — 100 requests per 15 minutes per IP ─────────────────
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — please try again later.' },
+});
+app.use('/api/', limiter);
+
+// ─── 4. Body parser (not strictly needed for GET-only, but good practice) ───
+app.use(express.json({ limit: '10kb' }));
+
+// ─── 5. Routes ──────────────────────────────────────────────────────────────
+app.use('/api/places', placesRouter);
+app.use('/api/directions', directionsRouter);
+app.use('/api/staticmap', staticmapRouter);
