@@ -228,3 +228,102 @@ export async function fetchSafeRoutes(
         throw new AppError(
           'DESTINATION_OUT_OF_RANGE',
           raw.message || 'Destination is too far away. Maximum distance is 20 km.',
+        );
+      }
+      throw new AppError(
+        'safe_routes_error',
+        raw.message || raw.error || `Server returned ${resp.status}`,
+      );
+    }
+
+    if (raw.status !== 'OK' || !raw.routes || raw.routes.length === 0) {
+      throw new AppError(
+        'safe_routes_no_results',
+        raw.message || 'No safe routes found between these points.',
+      );
+    }
+
+    // Map raw response into our typed SafeRoute objects
+    const routes: SafeRoute[] = raw.routes.map((r, idx) => {
+      const encoded = r.overview_polyline?.points ?? '';
+      const path = decodePolyline(encoded);
+      const leg = r.legs?.[0];
+
+      // Map raw segments to RouteSegment type
+      const safetySegments: RouteSegment[] = (r.segments || []).map((seg) => ({
+        startCoord: { latitude: seg.start.lat, longitude: seg.start.lng },
+        endCoord: { latitude: seg.end.lat, longitude: seg.end.lng },
+        midpointCoord: {
+          latitude: (seg.start.lat + seg.end.lat) / 2,
+          longitude: (seg.start.lng + seg.end.lng) / 2,
+        },
+        distanceMeters: seg.distance ?? 0,
+        lightingScore: (seg.lightScore ?? (r.safety?.breakdown?.lighting ?? 0) / 100),
+        crimeScore: (seg.crimeScore ?? (r.safety?.breakdown?.crime ?? 0) / 100),
+        activityScore: (r.safety?.breakdown?.openPlaces ?? 0) / 100,
+        combinedScore: seg.safetyScore,
+        color: seg.color,
+      }));
+
+      // Map enriched segments for the chart
+      const enrichedSegments: EnrichedSegment[] = (r.segments || []).map((seg) => ({
+        startCoord: { latitude: seg.start.lat, longitude: seg.start.lng },
+        endCoord: { latitude: seg.end.lat, longitude: seg.end.lng },
+        midpointCoord: {
+          latitude: (seg.start.lat + seg.end.lat) / 2,
+          longitude: (seg.start.lng + seg.end.lng) / 2,
+        },
+        safetyScore: seg.safetyScore,
+        color: seg.color,
+        highway: seg.highway,
+        roadName: seg.roadName ?? '',
+        isDeadEnd: seg.isDeadEnd ?? false,
+        hasSidewalk: seg.hasSidewalk ?? false,
+        surfaceType: seg.surfaceType ?? 'paved',
+        lightScore: seg.lightScore ?? 0,
+        crimeScore: seg.crimeScore ?? 0,
+        cctvScore: seg.cctvScore ?? 0,
+        placeScore: seg.placeScore ?? 0,
+        trafficScore: seg.trafficScore ?? 0,
+        distance: seg.distance ?? 0,
+      }));
+
+      return {
+        id: `safe-route-${idx}`,
+        routeIndex: r.routeIndex,
+        isSafest: r.isSafest,
+        distanceMeters: leg?.distance?.value ?? 0,
+        durationSeconds: leg?.duration?.value ?? 0,
+        encodedPolyline: encoded,
+        path,
+        summary: r.summary,
+        steps: [],
+        segments: safetySegments,
+        safetySegments,
+        enrichedSegments,
+        safety: r.safety,
+        routeStats: r.routeStats,
+        routePOIs: r.routePOIs,
+      };
+    });
+
+    const result: SafeRoutesResponse = {
+      status: 'OK',
+      routes,
+      meta: raw.meta!,
+    };
+
+    cache.set(key, { data: result, timestamp: Date.now() });
+    console.log(
+      `[safeRoutes] ✅ ${routes.length} routes, safest: ${routes[0]?.safety?.score}/100 "${routes[0]?.safety?.label}"`,
+    );
+    return result;
+  } catch (err) {
+    clearTimeout(timer);
+    if (err instanceof AppError) throw err;
+    if ((err as Error).name === 'AbortError') {
+      throw new AppError('safe_routes_timeout', 'Safe routes request timed out. Please try again.');
+    }
+    throw new AppError('safe_routes_error', 'Failed to fetch safe routes', err);
+  }
+}
