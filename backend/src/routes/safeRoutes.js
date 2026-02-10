@@ -308,3 +308,93 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       });
     }
 
+    // Collect nearby POIs along the route for map markers
+    const routePOIs = collectRoutePOIs(route.path, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimes);
+
+    // Compute route stats
+    const routeStats = {
+      deadEnds: deadEndCount,
+      sidewalkPct: route.totalDist > 0 ? Math.round((sidewalkDist / route.totalDist) * 100) : 0,
+      unpavedPct: route.totalDist > 0 ? Math.round((unpavedDist / route.totalDist) * 100) : 0,
+      transitStopsNearby: Math.min(transitStopCount, 50),
+      cctvCamerasNearby: Math.min(cctvNearCount, 50),
+      roadNameChanges,
+    };
+
+    return {
+      routeIndex: idx,
+      isSafest: idx === 0,
+      overview_polyline: { points: encodePolyline(polyline) },
+      legs: [{
+        distance: {
+          text: route.totalDist >= 1000
+            ? `${(route.totalDist / 1000).toFixed(1)} km`
+            : `${Math.round(route.totalDist)} m`,
+          value: Math.round(route.totalDist),
+        },
+        duration: {
+          text: durationSec >= 3600
+            ? `${Math.floor(durationSec / 3600)} hr ${Math.round((durationSec % 3600) / 60)} mins`
+            : `${Math.round(durationSec / 60)} mins`,
+          value: durationSec,
+        },
+        start_location: { lat: oLatV, lng: oLngV },
+        end_location: { lat: dLatV, lng: dLngV },
+        steps: [],
+      }],
+      summary: idx === 0 ? 'Safest Route' : `Route ${idx + 1}`,
+      safety: {
+        score: score100,
+        label,
+        color,
+        breakdown: {
+          roadType: Math.round(breakdown.roadType * 100),
+          lighting: Math.round(breakdown.lighting * 100),
+          crime: Math.round(breakdown.crime * 100),
+          cctv: Math.round(breakdown.cctv * 100),
+          openPlaces: Math.round(breakdown.openPlaces * 100),
+          traffic: Math.round(breakdown.traffic * 100),
+        },
+        roadTypes: breakdown.roadTypes,
+        mainRoadRatio: Math.round(breakdown.mainRoadRatio * 100),
+      },
+      segments,
+      routeStats,
+      routePOIs,
+    };
+  });
+
+  const minRoutes = Math.min(3, rawRoutes.length);
+  const responseRoutes = routes.slice(0, Math.max(minRoutes, routes.length));
+
+  const elapsed = Date.now() - startTime;
+  console.log(`[safe-routes] 🏁 Done in ${elapsed}ms (data:${dataTime}ms, graph:${graphTime}ms, A*:${pathfindTime}ms) — ${responseRoutes.length} routes, safest: ${responseRoutes[0]?.safety?.score}`);
+
+  return {
+    status: 'OK',
+    routes: responseRoutes,
+    meta: {
+      straightLineDistanceKm: Math.round(straightLineKm * 10) / 10,
+      maxDistanceKm: MAX_DISTANCE_KM,
+      routeCount: responseRoutes.length,
+      dataQuality: {
+        roads: roadCount,
+        crimes: crimes.length,
+        lightElements: allData.lights.elements.length,
+        cctvCameras: allData.cctv.elements.length,
+        places: allData.places.elements.length,
+        transitStops: allData.transit.elements.length,
+      },
+      timing: {
+        totalMs: elapsed,
+        dataFetchMs: dataTime,
+        graphBuildMs: graphTime,
+        pathfindMs: pathfindTime,
+      },
+      computeTimeMs: elapsed,
+    },
+  };
+}
+
+/**
+ * Collect POI positions along a route for map display.
