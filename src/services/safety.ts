@@ -498,3 +498,507 @@ export const fetchHighwaysForRoute = async (
         (
           way["highway"~"^(residential|primary|secondary)$"](${bbox.minLat},${bbox.minLng},${bbox.maxLat},${bbox.maxLng});
         );
+        out tags center qt;
+      `;
+      const fallbackParams = new URLSearchParams({ data: fallbackQuery });
+      response = await queueOverpassRequest<any>(fallbackParams.toString(), 8000, 'highways-fallback');
+    }
+
+    const stats: OverpassHighwayStats = {
+      totalHighways: 0,
+      unlitCount: 0,
+      wellLitCount: 0,
+      unknownLitCount: 0,
+      byHighway: {},
+      roadSegments: [],
+    };
+
+    const ways: RoadWayData[] = [];
+
+    for (const element of (response.elements ?? [])) {
+      if (element.type !== 'way' || !element.tags) continue;
+
+      const highway = element.tags.highway ?? 'unknown';
+      const litValue = element.tags.lit;
+      let lit: 'yes' | 'no' | 'unknown' = 'unknown';
+      let isWellLit = false;
+
+      if (litValue === 'yes' || litValue === 'night') {
+        lit = 'yes';
+        isWellLit = true;
+        stats.wellLitCount += 1;
+      } else if (litValue === 'no' || litValue === 'disused') {
+        lit = 'no';
+        stats.unlitCount += 1;
+      } else {
+        stats.unknownLitCount += 1;
+      }
+
+      stats.totalHighways += 1;
+      stats.byHighway[highway] = (stats.byHighway[highway] ?? 0) + 1;
+
+      const wayData: RoadWayData = {
+        id: element.id ?? 0,
+        highway,
+        lit,
+        isWellLit,
+        name: element.tags.name,
+      };
+
+      if (element.center) {
+        wayData.center = {
+          latitude: element.center.lat,
+          longitude: element.center.lon,
+        };
+      }
+
+      ways.push(wayData);
+
+      stats.roadSegments.push({
+        id: element.id ?? 0,
+        roadType: highway,
+        lit,
+        isWellLit,
+        name: element.tags.name,
+      });
+    }
+
+    const result = { stats, ways };
+    setCache(cacheKey, result);
+    return result;
+  } catch (error) {
+    console.error('[Safety] fetchHighwaysForRoute: Error:', error);
+    return emptyResult;
+  }
+};
+
+export const fetchHighwaysForSegment = async (
+  segment: RouteSegment,
+  bufferMeters = 15
+): Promise<OverpassHighwayStats> => {
+  const emptyStats: OverpassHighwayStats = {
+    totalHighways: 0,
+    unlitCount: 0,
+    wellLitCount: 0,
+    unknownLitCount: 0,
+    byHighway: {},
+    roadSegments: [],
+  };
+
+  try {
+    const bbox = computeBoundingBox([segment.start, segment.end], bufferMeters);
+    if (!bbox) return emptyStats;
+
+    const query = `
+      [out:json][timeout:15];
+      (
+        way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary)$"](${bbox.minLat},${bbox.minLng},${bbox.maxLat},${bbox.maxLng});
+      );
+      out tags;
+    `;
+
+    const params = new URLSearchParams({ data: query });
+    const response = await queueOverpassRequest<OverpassApiResponse>(params.toString(), 10000, 'segment-highways');
+
+    const stats: OverpassHighwayStats = {
+      totalHighways: 0,
+      unlitCount: 0,
+      wellLitCount: 0,
+      unknownLitCount: 0,
+      byHighway: {},
+      roadSegments: [],
+    };
+
+    for (const element of (response.elements ?? [])) {
+      if ((element as any).type !== 'way' || !element.tags) continue;
+
+      const highway = element.tags.highway ?? 'unknown';
+      const litValue = element.tags.lit;
+      let lit: 'yes' | 'no' | 'unknown' = 'unknown';
+      let isWellLit = false;
+
+      if (litValue === 'yes' || litValue === 'night') {
+        lit = 'yes';
+        isWellLit = true;
+        stats.wellLitCount += 1;
+      } else if (litValue === 'no' || litValue === 'disused') {
+        lit = 'no';
+        stats.unlitCount += 1;
+      } else {
+        stats.unknownLitCount += 1;
+      }
+
+      stats.totalHighways += 1;
+      stats.byHighway[highway] = (stats.byHighway[highway] ?? 0) + 1;
+
+      stats.roadSegments.push({
+        id: element.id ?? 0,
+        roadType: highway,
+        lit,
+        isWellLit,
+        name: element.tags.name,
+      });
+    }
+
+    return stats;
+  } catch (error) {
+    console.error('[Safety] fetchHighwaysForSegment: Error for segment', segment.id, ':', error);
+    return emptyStats;
+  }
+};
+
+/**
+ * Count places with human activity along a route using Overpass (OSM).
+ * Completely FREE — no Google API calls needed.
+ *
+ * Uses the shared nearbyCache module so results are de-duplicated across
+ * safetyMapData.ts and safety.ts — no double API calls for the same area.
+ */
+export const fetchOpenPlacesForRoute = async (path: LatLng[]): Promise<number> => {
+  try {
+    if (path.length === 0) return 0;
+
+    const cacheKey = `openplaces:${hashPath(path)}`;
+    const cached = getCached<number>(cacheKey);
+    if (cached !== null) return cached;
+
+    // Sample up to 3 points along the route (start + 1/3 + 2/3)
+    // and fetch ALL in parallel for speed
+    const samplePoints: LatLng[] = [path[0]];
+    if (path.length > 4) {
+      samplePoints.push(path[Math.floor(path.length / 3)]);
+      samplePoints.push(path[Math.floor((path.length * 2) / 3)]);
+    }
+
+    const seenIds = new Set<string>();
+
+    // Parallel fetch for all sample points
+    const results = await Promise.all(
+      samplePoints.map((center) =>
+        fetchNearbyPlacesCached(center.latitude, center.longitude, 300).catch(() => []),
+      ),
+    );
+
+    for (const places of results) {
+      for (const place of places) {
+        if (place.place_id) seenIds.add(place.place_id);
+      }
+    }
+
+    const count = seenIds.size;
+    setCache(cacheKey, count);
+    return count;
+  } catch (error) {
+    console.error('[Safety] fetchOpenPlacesForRoute: Error:', error);
+    return 0;
+  }
+};
+
+/**
+ * Fetch highway ways with node coordinates for segment-based analysis
+ */
+export const fetchWaysWithNodesForSegment = async (
+  segment: RouteSegment,
+  bufferMeters = 20,
+): Promise<
+  Array<{
+    id: number;
+    highway: string;
+    lit: 'yes' | 'no' | 'unknown';
+    nodes: LatLng[];
+    name?: string;
+  }>
+> => {
+  try {
+    const bbox = computeBoundingBox([segment.start, segment.end], bufferMeters);
+
+    if (!bbox) return [];
+
+    const query = `
+      [out:json][timeout:12];
+      (
+        way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|secondary|tertiary|primary)$"](${bbox.minLat},${bbox.minLng},${bbox.maxLat},${bbox.maxLng});
+      );
+      out body center;
+    `;
+
+    const params = new URLSearchParams({ data: query });
+    
+    const response = await queueOverpassRequest<any>(params.toString(), 12000, 'ways-nodes');
+
+    // Build a map of node IDs to coordinates
+    const nodeCoordinates: Record<number, LatLng> = {};
+    for (const element of (response.elements ?? [])) {
+      if (element.type === 'node' && element.lat && element.lon) {
+        nodeCoordinates[element.id] = {
+          latitude: element.lat,
+          longitude: element.lon,
+        };
+      }
+    }
+
+    const ways: Array<{
+      id: number;
+      highway: string;
+      lit: 'yes' | 'no' | 'unknown';
+      nodes: LatLng[];
+      name?: string;
+    }> = [];
+
+    // Process ways
+    for (const element of (response.elements ?? [])) {
+      if (element.type !== 'way' || !element.tags) continue;
+
+      const nodeIds: number[] = element.nodes ?? [];
+      const nodes = nodeIds
+        .map((id: number) => nodeCoordinates[id])
+        .filter((node: LatLng | undefined): node is LatLng => node !== undefined);
+
+      if (nodes.length < 2) continue;
+
+      const highway = element.tags.highway ?? 'unknown';
+      const litValue = element.tags.lit;
+      let lit: 'yes' | 'no' | 'unknown' = 'unknown';
+
+      if (litValue === 'yes' || litValue === 'night') {
+        lit = 'yes';
+      } else if (litValue === 'no' || litValue === 'disused') {
+        lit = 'no';
+      }
+
+      ways.push({
+        id: element.id ?? 0,
+        highway,
+        lit,
+        nodes,
+        name: element.tags.name,
+      });
+    }
+
+    return ways;
+  } catch (error) {
+    console.error('[Safety] fetchWaysWithNodesForSegment: Error for segment', segment.id, ':', error);
+    return [];
+  }
+};
+
+export const fetchRouteSafetyBySegments = async (
+  path: LatLng[],
+  onProgress?: SafetyProgressCallback
+): Promise<
+  Array<{
+    segment: RouteSegment;
+    crimes: CrimeIncident[];
+    highwayStats: OverpassHighwayStats;
+    roadTypesSummary: Record<string, number>;
+    openPlacesCount: number;
+  }>
+> => {
+  if (path.length < 2) return [];
+
+  try {
+    // Determine segment length based on total route distance
+    let totalDistance = 0;
+    for (let i = 1; i < path.length; i++) {
+      totalDistance += haversineDistance(path[i - 1], path[i]);
+    }
+
+    const distanceKm = (totalDistance / 1000).toFixed(1);
+    onProgress?.(`📏 Route is ${distanceKm}km - preparing analysis...`, 10);
+
+    const segmentLength = totalDistance > 1000 ? 80 : 50;
+    const segments = splitRouteIntoSegments(path, segmentLength);
+
+    if (segments.length === 0) return [];
+
+    onProgress?.(`🗺️ Divided into ${segments.length} segments for detailed analysis`, 20);
+
+    // Fetch all data for the entire route in parallel
+    onProgress?.('🔍 Fetching safety data...', 30);
+
+    const defaultHighwayData = {
+      stats: {
+        totalHighways: 0,
+        unlitCount: 0,
+        wellLitCount: 0,
+        unknownLitCount: 0,
+        byHighway: {} as Record<string, number>,
+        roadSegments: [],
+      },
+      ways: [] as RoadWayData[],
+    };
+
+    const [allCrimes, highwayData, totalOpenPlaces] = await Promise.all([
+      fetchCrimesForRoute(path, 75).catch(() => [] as CrimeIncident[]),
+      fetchHighwaysForRoute(path, 20).catch(() => defaultHighwayData),
+      fetchOpenPlacesForRoute(path).catch(() => 0),
+    ]);
+
+    onProgress?.(
+      `📋 Found ${allCrimes.length} incidents, ${highwayData.ways.length} road segments, ${totalOpenPlaces} open places`,
+      70,
+    );
+    onProgress?.('🔄 Mapping safety data to route segments...', 80);
+
+    // ---- Build spatial grids for fast O(1) lookups ----
+    const crimeGrid = buildSpatialGrid(allCrimes, (c) => c.location);
+    const wayGrid = buildSpatialGrid(highwayData.ways, (w) => w.center);
+
+    // Ways without a center coordinate can't be placed in the grid;
+    // include them for every segment as a fallback.
+    const waysWithoutCenter = highwayData.ways.filter((w) => !w.center);
+
+    const openPlacesPerSegment =
+      segments.length > 0 ? Math.round(totalOpenPlaces / segments.length) : 0;
+
+    const results: Array<{
+      segment: RouteSegment;
+      crimes: CrimeIncident[];
+      highwayStats: OverpassHighwayStats;
+      roadTypesSummary: Record<string, number>;
+      openPlacesCount: number;
+    }> = [];
+
+    for (const segment of segments) {
+      try {
+        const lat = segment.center.latitude;
+        const lng = segment.center.longitude;
+
+        // --- Crimes: spatial grid query then refine by haversine ---
+        const crimeCandidates = queryGrid(crimeGrid, lat, lng);
+        const segmentCrimes = crimeCandidates.filter(
+          (crime) => haversineDistance(crime.location, segment.center) <= segmentLength,
+        );
+
+        // --- Ways: spatial grid query then refine ---
+        const wayCandidates = queryGrid(wayGrid, lat, lng);
+        const segmentWays = wayCandidates.filter(
+          (way) => way.center && haversineDistance(way.center, segment.center) <= segmentLength,
+        );
+        const allSegmentWays = [...segmentWays, ...waysWithoutCenter];
+
+        const segmentStats: OverpassHighwayStats = {
+          totalHighways: allSegmentWays.length,
+          unlitCount: allSegmentWays.filter((w) => w.lit === 'no').length,
+          wellLitCount: allSegmentWays.filter((w) => w.lit === 'yes').length,
+          unknownLitCount: allSegmentWays.filter((w) => w.lit === 'unknown').length,
+          byHighway: {},
+          roadSegments: allSegmentWays.map((w) => ({
+            id: w.id,
+            roadType: w.highway,
+            lit: w.lit,
+            isWellLit: w.isWellLit,
+            name: w.name,
+          })),
+        };
+
+        for (const way of allSegmentWays) {
+          segmentStats.byHighway[way.highway] = (segmentStats.byHighway[way.highway] ?? 0) + 1;
+        }
+
+        results.push({
+          segment,
+          crimes: segmentCrimes,
+          highwayStats: segmentStats,
+          roadTypesSummary: segmentStats.byHighway,
+          openPlacesCount: openPlacesPerSegment,
+        });
+      } catch (segmentError) {
+        console.error('[Safety] Error processing segment', segment.id, ':', segmentError);
+      }
+    }
+
+    return results;
+  } catch (error) {
+    console.error('[Safety] fetchRouteSafetyBySegments: Fatal error:', error);
+    onProgress?.('⚠️ Some safety data unavailable, continuing with partial results...', 60);
+    return [];
+  }
+};
+
+export const fetchRouteSafetyBySegmentsWithDetails = async (
+  path: LatLng[]
+): Promise<
+  Array<{
+    segment: RouteSegment;
+    crimes: CrimeIncident[];
+    highwayStats: OverpassHighwayStats;
+    roadTypesSummary: Record<string, number>;
+    waysWithNodes: Array<{
+      id: number;
+      highway: string;
+      lit: 'yes' | 'no' | 'unknown';
+      nodes: LatLng[];
+      name?: string;
+    }>;
+    openPlacesCount: number;
+  }>
+> => {
+  try {
+    const baseResults = await fetchRouteSafetyBySegments(path);
+    return baseResults.map((result) => ({ ...result, waysWithNodes: [] }));
+  } catch (error) {
+    console.error('[Safety] fetchRouteSafetyBySegmentsWithDetails: Error:', error);
+    return [];
+  }
+};
+
+/**
+ * Fetch aggregated safety summary for a route.
+ * Aggregates all segment data into a single summary.
+ */
+export const fetchRouteSafetySummary = async (
+  path: LatLng[],
+  onProgress?: SafetyProgressCallback
+): Promise<SafetySummary> => {
+  try {
+    onProgress?.('🔍 Analyzing your route...', 0);
+
+    const segmentResults = await fetchRouteSafetyBySegments(path, onProgress);
+
+    onProgress?.('📊 Compiling safety report...', 90);
+
+    const allCrimes: CrimeIncident[] = [];
+    const aggregatedHighwayStats: OverpassHighwayStats = {
+      totalHighways: 0,
+      unlitCount: 0,
+      wellLitCount: 0,
+      unknownLitCount: 0,
+      byHighway: {},
+      roadSegments: [],
+    };
+    let totalOpenPlaces = 0;
+
+    for (const result of segmentResults) {
+      allCrimes.push(...result.crimes);
+
+      aggregatedHighwayStats.totalHighways += result.highwayStats.totalHighways;
+      aggregatedHighwayStats.unlitCount += result.highwayStats.unlitCount;
+      aggregatedHighwayStats.wellLitCount += result.highwayStats.wellLitCount;
+      aggregatedHighwayStats.unknownLitCount += result.highwayStats.unknownLitCount;
+
+      for (const [highway, count] of Object.entries(result.highwayStats.byHighway)) {
+        aggregatedHighwayStats.byHighway[highway] =
+          (aggregatedHighwayStats.byHighway[highway] ?? 0) + count;
+      }
+
+      aggregatedHighwayStats.roadSegments.push(...result.highwayStats.roadSegments);
+      totalOpenPlaces += result.openPlacesCount;
+    }
+
+    onProgress?.('✅ Safety analysis complete!', 100);
+
+    return {
+      crimeCount: allCrimes.length,
+      crimes: allCrimes,
+      highwayStats: aggregatedHighwayStats,
+      openPlacesCount: totalOpenPlaces,
+    };
+  } catch (error) {
+    console.error('[Safety] fetchRouteSafetySummary: Error:', error);
+    onProgress?.('❌ Unable to complete safety analysis', 0);
+
+    if (error instanceof AppError) throw error;
+    throw new AppError('safety_summary_error', 'Unable to load safety data', error);
+  }
+};
