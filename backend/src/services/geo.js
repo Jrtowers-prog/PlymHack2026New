@@ -118,3 +118,38 @@ function buildSpatialGrid(items, latKey = 'lat', lngKey = 'lng', cellSize = 0.00
     const c = Math.floor(item[lngKey] / cellSize);
     const key = `${r},${c}`;
     if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(item);
+  }
+  return { grid, cellSize };
+}
+
+/**
+ * Find items near a point using the spatial grid.
+ * Returns items with .dist property, sorted by distance (nearest first).
+ */
+function findNearby(spatialGrid, lat, lng, radiusMetres) {
+  const { grid, cellSize } = spatialGrid;
+  const cellsToCheck = Math.ceil((radiusMetres / 111_320) / cellSize) + 1;
+  const r0 = Math.floor(lat / cellSize);
+  const c0 = Math.floor(lng / cellSize);
+  const results = [];
+
+  for (let dr = -cellsToCheck; dr <= cellsToCheck; dr++) {
+    for (let dc = -cellsToCheck; dc <= cellsToCheck; dc++) {
+      const key = `${r0 + dr},${c0 + dc}`;
+      const cell = grid.get(key);
+      if (!cell) continue;
+      for (const item of cell) {
+        const d = fastDistance(lat, lng, item.lat, item.lng);
+        if (d <= radiusMetres) {
+          results.push({ ...item, dist: d });
+        }
+      }
+    }
+  }
+
+  // Sort by distance (nearest first) — enables inverse-distance weighting
+  results.sort((a, b) => a.dist - b.dist);
+  return results;
+}
+
