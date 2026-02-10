@@ -78,3 +78,68 @@ async function overpassQuery(query, timeout = 90) {
  *   • Street lamps + lit ways
  *   • CCTV / surveillance cameras (NEW accuracy signal)
  *   • Amenities, shops, leisure, tourism (open places)
+ *   • Bus stops + public transport
+ *
+ * Returns pre-split categorised data.
+ * This replaces the old 4-query approach and cuts latency ~70%.
+ */
+async function fetchAllSafetyData(bbox) {
+  const key = dataCacheKey(bbox);
+  const cached = dataCache.get(key);
+  if (cached && Date.now() - cached.timestamp < DATA_CACHE_TTL) {
+    console.log('[overpass] 📋 Data cache hit');
+    return cached.data;
+  }
+
+  const { south, west, north, east } = bbox;
+  const b = `${south},${west},${north},${east}`;
+
+  // Single combined Overpass query with named sets
+  const query = `
+    (
+      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
+    )->.roads;
+    (
+      node["highway"="street_lamp"](${b});
+      way["lit"="yes"](${b});
+    )->.lights;
+    (
+      node["man_made"="surveillance"](${b});
+    )->.cctv;
+    (
+      node["amenity"](${b});
+      node["shop"](${b});
+      node["leisure"](${b});
+      node["tourism"](${b});
+      way["amenity"](${b});
+      way["shop"](${b});
+    )->.places;
+    (
+      node["highway"="bus_stop"](${b});
+      node["public_transport"="stop_position"](${b});
+      node["public_transport"="platform"](${b});
+    )->.transit;
+    .roads out body;
+    .roads >;
+    out skel qt;
+    .lights out body;
+    .lights >;
+    out skel qt;
+    .cctv out body;
+    .places out center;
+    .transit out body;
+  `;
+
+  console.log('[overpass] 🌐 Fetching ALL safety data in single query...');
+  const t0 = Date.now();
+  const raw = await overpassQuery(query, 120);
+  console.log(`[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`);
+
+  const result = splitElements(raw.elements);
+
+  // Cache the split result
+  dataCache.set(key, { data: result, timestamp: Date.now() });
+
+  // Evict stale entries
+  if (dataCache.size > 50) {
+    const now = Date.now();
