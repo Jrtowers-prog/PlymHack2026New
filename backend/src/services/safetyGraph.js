@@ -538,3 +538,83 @@ function aStarSafety(osmNodes, edges, adjacency, startId, endId, maxDistM) {
     edges: usedEdges,
     totalDist,
     avgSafety: totalDist > 0 ? totalWeightedSafety / totalDist : 0,
+  };
+}
+
+/**
+ * Generate K diverse routes using iterative penalty + A*.
+ */
+function findKSafestRoutes(osmNodes, edges, adjacency, startId, endId, maxDistM, k = 5) {
+  const routes = [];
+  const penaltyIncrement = 0.15;
+
+  for (const e of edges) e.penalty = 0;
+
+  for (let i = 0; i < k + 3; i++) {
+    const route = aStarSafety(osmNodes, edges, adjacency, startId, endId, maxDistM);
+    if (!route) break;
+
+    const isDuplicate = routes.some((existing) => {
+      const overlap = countEdgeOverlap(existing.edges, route.edges);
+      return overlap > 0.85;
+    });
+
+    if (!isDuplicate) {
+      routes.push(route);
+      if (routes.length >= k) break;
+    }
+
+    for (const eIdx of route.edges) {
+      edges[eIdx].penalty += penaltyIncrement;
+    }
+  }
+
+  for (const e of edges) e.penalty = 0;
+  routes.sort((a, b) => b.avgSafety - a.avgSafety);
+  return routes;
+}
+
+function countEdgeOverlap(edgesA, edgesB) {
+  const setA = new Set(edgesA);
+  let overlap = 0;
+  for (const e of edgesB) if (setA.has(e)) overlap++;
+  return edgesB.length > 0 ? overlap / edgesB.length : 0;
+}
+
+/**
+ * Convert a route (list of node IDs) to a polyline [{lat, lng}, ...].
+ */
+function routeToPolyline(osmNodes, path) {
+  const points = [];
+  for (const nid of path) {
+    const node = osmNodes.get(nid);
+    if (node) points.push({ lat: node.lat, lng: node.lng });
+  }
+  return points;
+}
+
+/**
+ * Compute detailed per-segment safety breakdown for a route.
+ */
+function routeSafetyBreakdown(edges, usedEdgeIdxs, weights) {
+  let totalDist = 0;
+  let weightedRoad = 0, weightedLight = 0, weightedCrime = 0;
+  let weightedCctv = 0, weightedPlace = 0, weightedTraffic = 0;
+  const roadTypes = {};
+
+  for (const eIdx of usedEdgeIdxs) {
+    const e = edges[eIdx];
+    const d = e.distance;
+    totalDist += d;
+    weightedRoad += e.roadScore * d;
+    weightedLight += e.lightScore * d;
+    weightedCrime += e.crimeScore * d;
+    weightedCctv += (e.cctvScore || 0) * d;
+    weightedPlace += e.placeScore * d;
+    weightedTraffic += e.trafficScore * d;
+    roadTypes[e.highway] = (roadTypes[e.highway] || 0) + d;
+  }
+
+  if (totalDist === 0) {
+    return {
+      roadType: 0, lighting: 0, crime: 0, cctv: 0, openPlaces: 0,
