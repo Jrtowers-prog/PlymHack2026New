@@ -93,3 +93,55 @@ router.get('/details', async (req, res) => {
     const placeIdResult = validatePlaceId(req.query.place_id);
     if (!placeIdResult.valid) return res.status(400).json({ error: placeIdResult.error });
 
+    const placeId = placeIdResult.value;
+
+    // Parse OSM-style place_id: osm-node-12345 or osm-way-12345
+    const osmMatch = placeId.match(/^osm-(node|way|relation)-(\d+)$/);
+    let url;
+
+    if (osmMatch) {
+      const [, osmType, osmId] = osmMatch;
+      const osmTypeChar = osmType === 'node' ? 'N' : osmType === 'way' ? 'W' : 'R';
+      url = `${NOMINATIM_BASE}/lookup?format=json&osm_ids=${osmTypeChar}${osmId}&addressdetails=1`;
+    } else {
+      // Fallback: search by the ID as text
+      url = `${NOMINATIM_BASE}/search?format=json&q=${encodeURIComponent(placeId)}&limit=1&addressdetails=1`;
+    }
+
+    await nominatimThrottle();
+    detailsApiCalls++;
+    console.log(`[places/details] 🌐 Nominatim call #${detailsApiCalls} → place_id="${placeId}"`);
+
+    const response = await fetch(url, {
+      headers: { 'User-Agent': USER_AGENT },
+    });
+    const data = await response.json();
+
+    const result = Array.isArray(data) ? data[0] : data;
+
+    if (!result || !result.lat || !result.lon) {
+      return res.json({ status: 'NOT_FOUND', result: null });
+    }
+
+    console.log(`[places/details] 📦 Response: name="${result.name || result.display_name?.split(',')[0] || 'N/A'}"`);
+
+    res.json({
+      status: 'OK',
+      result: {
+        place_id: placeId,
+        name: result.name || result.display_name?.split(',')[0] || '',
+        geometry: {
+          location: {
+            lat: parseFloat(result.lat),
+            lng: parseFloat(result.lon),
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error('[places/details] Error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router;
