@@ -378,3 +378,169 @@ export const fetchSmartDirections = async (
       );
 
       // If car route (when walked) is greater than walking route time
+      if (carWalkTime > walkTime) {
+        const timeDifference = carWalkTime - walkTime;
+        const percentDifference = (timeDifference / carWalkTime) * 100;
+        
+        // If more than 40% longer, prefer walking
+        if (percentDifference > 40) {
+          console.log(`[smartDirections] 🚶 Walking preferred (${percentDifference.toFixed(0)}% shorter than car route distance)`);
+          return [
+            ...smartRoutes.filter((r) => r.mode === 'walking'),
+            ...smartRoutes.filter((r) => r.mode === 'car'),
+          ];
+        } else {
+          // Within 40% tolerance - prefer car if walking path exists
+          console.log(`[smartDirections] 🚗 Car preferred (walking is only ${percentDifference.toFixed(0)}% shorter - within 40% tolerance)`);
+          return [
+            ...smartRoutes.filter((r) => r.mode === 'car'),
+            ...smartRoutes.filter((r) => r.mode === 'walking'),
+          ];
+        }
+      } else {
+        // Walking is shorter, prefer walking
+        console.log(`[smartDirections] 🚶 Walking preferred (${(walkTime / 60).toFixed(0)}min vs ${(carWalkTime / 60).toFixed(0)}min car-walked)`);
+        return [
+          ...smartRoutes.filter((r) => r.mode === 'walking'),
+          ...smartRoutes.filter((r) => r.mode === 'car'),
+        ];
+      }
+    }
+
+    // Default: sort by walking time (best first)
+    smartRoutes.sort((a, b) => a.walkingETASeconds - b.walkingETASeconds);
+    console.log(`[🧠 smartDirections] ✅ Returning ${smartRoutes.length} smart routes (sorted by walking time)`);
+    smartRoutes.forEach((r, i) => {
+      console.log(`  Route ${i + 1}: ${r.mode.toUpperCase()} - ${(r.walkingETASeconds / 60).toFixed(0)}min walk, ${(r.distanceMeters / 1000).toFixed(1)}km`);
+    });
+    return smartRoutes;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('smart_directions_error', 'Failed to fetch smart directions', error);
+  }
+};
+export const fetchDirections = async (
+  origin: LatLng,
+  destination: LatLng
+): Promise<DirectionsRoute[]> => {
+  // Check directions cache first
+  const cacheKey = directionsKey(origin, destination);
+  const cachedResult = directionsCache.get(cacheKey);
+  if (cachedResult && Date.now() - cachedResult.timestamp < DIRECTIONS_CACHE_TTL) {
+    console.log(`[OSM] ✅ Directions CACHE HIT (${cachedResult.data.length} routes)`);
+    return cachedResult.data;
+  }
+
+  const base = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=walking`;
+
+  // 1. Primary request – gets up to ~3 alternatives (rate limited)
+  const baseData = await directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(base));
+  if (baseData.status !== 'OK') {
+    throw new AppError(
+        'osm_directions_error',
+        baseData.error_message ?? `OSM Directions failed: ${baseData.status}`
+    );
+  }
+  const baseRoutes = parseDirectionsResponse(baseData, 0);
+
+  // 2. Offset waypoints at midpoint — road-type driven, gentle nudge
+  //    LIMITED to 1 offset pair (2 calls) to reduce API costs
+  const heaviness = pathHeaviness(baseRoutes);
+  const offsetPct = 0.03 + heaviness * 0.07; // 3 %–10 %, gentle to avoid loops
+  const offsets = generateOffsetWaypoints(origin, destination, offsetPct).slice(0, 2);
+  const extras = await Promise.all(
+    offsets.map((wp, i) =>
+      directionsRateLimiter.execute(() =>
+        fetchJson<GoogleDirectionsResponse>(
+          `${base}&waypoints=${encodeURIComponent(`via:${wp.latitude},${wp.longitude}`)}`
+        )
+      )
+        .then((d) => parseDirectionsResponse(d, (i + 1) * 10))
+        .catch(() => [] as DirectionsRoute[])
+    )
+  ).then((arr) => arr.flat());
+
+  // 3. Merge, deduplicate
+  let merged = deduplicateRoutes([...baseRoutes, ...extras]);
+
+  // ── 3b. "Drive-then-walk" main-road discovery ──────────────────────
+  // Walking directions prefer footpaths/shortcuts. To discover proper-
+  // road alternatives (like Eggbuckland Rd vs a footpath), we request
+  // a DRIVING route (which must use real roads) and feed sample points
+  // from it as via-waypoints into a walking request. This guides the
+  // walker onto the road network without needing large offsets.
+  try {
+    const drivingUrl = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=driving`;
+    const drivingData = await directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(drivingUrl));
+    if (drivingData.status === 'OK') {
+      const drivePath = parseDirectionsResponse(drivingData, 0)[0]?.path ?? [];
+      if (drivePath.length >= 6) {
+        // Sample points at 25 %, 50 %, 75 % of the driving path
+        const viaPoints = [0.25, 0.5, 0.75].map((frac) => {
+          const idx = Math.min(Math.floor(frac * drivePath.length), drivePath.length - 1);
+          return drivePath[idx];
+        });
+        // Single walking request through all road via-points
+        const viaStr = viaPoints.map((p) => `via:${p.latitude},${p.longitude}`).join('|');
+        const roadWalking = await directionsRateLimiter.execute(() =>
+          fetchJson<GoogleDirectionsResponse>(
+            `${base}&waypoints=${encodeURIComponent(viaStr)}`
+          )
+        ).then((d) => parseDirectionsResponse(d, 200)).catch(() => [] as DirectionsRoute[]);
+        merged = deduplicateRoutes([...merged, ...roadWalking]);
+      }
+    }
+  } catch {
+    // Non-critical — just skip the road-discovery step
+  }
+
+  // 4. REMOVED — retry offsets generated up to 8 extra Directions API calls
+  //    per search. With steps 1-3 we typically get 3-5 diverse routes already.
+
+  // 5. Drop routes that detour too far, sort sensibly
+  const shortest = Math.min(...merged.map((r) => r.distanceMeters));
+  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.6);
+  reasonable.sort((a, b) => {
+    const distDiff = a.distanceMeters - b.distanceMeters;
+    if (Math.abs(distDiff) > shortest * 0.05) return distDiff;
+    return mainRoadScore(b.summary) - mainRoadScore(a.summary);
+  });
+  const result = reasonable.slice(0, 5).map((r, i) => ({ ...r, id: `route-${i}` }));
+
+  // Cache the result
+  directionsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  return result;
+};
+
+export const buildStaticMapUrl = (params: {
+  origin?: LatLng | null;
+  destination?: LatLng | null;
+  encodedPolyline?: string | null;
+  width: number;
+  height: number;
+  scale?: number;
+}): string | null => {
+  const { origin, destination, encodedPolyline, width, height, scale = 2 } = params;
+
+  const queryParts: string[] = [
+    `width=${Math.max(1, Math.round(width))}`,
+    `height=${Math.max(1, Math.round(height))}`,
+    `scale=${scale}`,
+  ];
+
+  if (origin) {
+    queryParts.push(`origin_lat=${origin.latitude}`);
+    queryParts.push(`origin_lng=${origin.longitude}`);
+  }
+
+  if (destination) {
+    queryParts.push(`dest_lat=${destination.latitude}`);
+    queryParts.push(`dest_lng=${destination.longitude}`);
+  }
+
+  if (encodedPolyline) {
+    queryParts.push(`polyline=${encodeURIComponent(encodedPolyline)}`);
+  }
+
+  return `${BACKEND_API_BASE}/api/staticmap?${queryParts.join('&')}`;
+};
