@@ -58,3 +58,48 @@ function getWeights(hour) {
   if (isLateNight) {
     return {
       roadType: 0.22,
+      lighting: 0.28,     // lighting matters most late night
+      crimeRate: 0.25,    // crime matters more
+      cctv: 0.08,         // CCTV is a reassurance factor
+      openPlaces: 0.07,   // fewer places open, less weight
+      gpsTraffic: 0.10,
+    };
+  }
+  if (isEvening) {
+    return {
+      roadType: 0.23,
+      lighting: 0.25,
+      crimeRate: 0.22,
+      cctv: 0.07,
+      openPlaces: 0.12,
+      gpsTraffic: 0.11,
+    };
+  }
+  // Daytime fallback (shouldn't normally be used — app is for night)
+  return {
+    roadType: 0.25,
+    lighting: 0.15,
+    crimeRate: 0.20,
+    cctv: 0.05,
+    openPlaces: 0.15,
+    gpsTraffic: 0.20,
+  };
+}
+
+// ── Coverage maps ───────────────────────────────────────────────────────────
+// Pre-compute density grids so edge scoring is O(1) per edge.
+// Cell size ~25m for fine granularity.
+const COVERAGE_CELL_DEG = 0.00025; // ~28m
+
+/**
+ * Build a lighting coverage map using inverse-distance-squared weighting.
+ * Each cell gets a "brightness" value 0–1 based on nearby lamps.
+ */
+function buildLightingCoverage(lightNodes, litWayNodePositions, bbox) {
+  const rows = Math.ceil((bbox.north - bbox.south) / COVERAGE_CELL_DEG);
+  const cols = Math.ceil((bbox.east - bbox.west) / COVERAGE_CELL_DEG);
+  const grid = new Float32Array(rows * cols); // flat 2D array
+
+  const LAMP_RADIUS = 60; // metres — effective illumination range
+  const LAMP_RADIUS_DEG = LAMP_RADIUS / 111320;
+
