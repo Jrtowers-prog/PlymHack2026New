@@ -448,3 +448,118 @@ export const RouteMap = ({
       p.routes.map((r) => r.id).join(','),
       p.selectedRouteId ?? '',
     ].join('|');
+    const fitBounds = geoKey !== prevGeoKeyRef.current;
+    if (fitBounds) prevGeoKeyRef.current = geoKey;
+
+    // panTo
+    let panToData: { lat: number; lng: number } | null = null;
+    if (p.panTo && p.panTo.key !== prevPanKeyRef.current) {
+      prevPanKeyRef.current = p.panTo.key;
+      panToData = toLL(p.panTo.location);
+    }
+
+    const payload = {
+      origin: p.origin ? toLL(p.origin) : null,
+      destination: p.destination ? toLL(p.destination) : null,
+      routes: mappedRoutes,
+      segments,
+      safetyMarkers: mkrs,
+      roadLabels: labels,
+      fitBounds,
+      panTo: panToData,
+      navLocation:
+        p.isNavigating && p.navigationLocation
+          ? toLL(p.navigationLocation)
+          : null,
+      navHeading: p.navigationHeading,
+    };
+
+    const js = `try{updateMap(${JSON.stringify(payload)})}catch(e){}true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, []);
+
+  // Push whenever any data changes
+  useEffect(() => {
+    pushUpdate();
+  }, [
+    origin,
+    destination,
+    routes,
+    selectedRouteId,
+    safetyMarkers,
+    routeSegments,
+    roadLabels,
+    panTo,
+    isNavigating,
+    navigationLocation,
+    navigationHeading,
+    pushUpdate,
+  ]);
+
+  // Update map type when it changes
+  useEffect(() => {
+    if (!readyRef.current || !webViewRef.current) return;
+    if (mapType === mapTypeRef.current) return;
+    mapTypeRef.current = mapType;
+    const js = `try{setMapType('${mapType}')}catch(e){}true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, [mapType]);
+
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      try {
+        const msg = JSON.parse(event.nativeEvent.data);
+        const cbs = callbacksRef.current;
+        switch (msg.type) {
+          case 'ready':
+            readyRef.current = true;
+            // Flush update now that the map is ready
+            pushUpdate();
+            break;
+          case 'press':
+            cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'longpress':
+            cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'selectRoute':
+            cbs.onSelectRoute?.(msg.id);
+            break;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    },
+    [pushUpdate],
+  );
+
+  return (
+    <View style={styles.container}>
+      <WebView
+        ref={webViewRef}
+        source={{ html: buildMapHtml(mapType) }}
+        style={{ flex: 1 }}
+        originWhitelist={['*']}
+        javaScriptEnabled
+        domStorageEnabled
+        onMessage={handleMessage}
+        scrollEnabled={false}
+        overScrollMode="never"
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
+        startInLoadingState={false}
+        cacheEnabled
+        // Android: allow mixed content (http tiles from https page)
+        mixedContentMode="compatibility"
+      />
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f2f4f7', overflow: 'hidden' as const },
+});
+
+export default RouteMap;
