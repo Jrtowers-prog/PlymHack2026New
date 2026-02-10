@@ -54,3 +54,77 @@ export interface SearchBarProps {
 
 export function SearchBar({
   topInset,
+  location,
+  isUsingCurrentLocation,
+  setIsUsingCurrentLocation,
+  originSearch,
+  manualOrigin,
+  setManualOrigin,
+  destSearch,
+  manualDest,
+  setManualDest,
+  pinMode,
+  setPinMode,
+  onPanTo,
+  onClearRoute,
+}: SearchBarProps) {
+  const originInputRef = useRef<TextInput>(null);
+  const destInputRef = useRef<TextInput>(null);
+
+  // Focus / blur management
+  const [focusedField, setFocusedFieldState] = React.useState<'origin' | 'destination' | null>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFocusedFieldRef = useRef<'origin' | 'destination' | null>(null);
+  const suppressBlurRef = useRef(false);
+
+  const handleBlur = useCallback(() => {
+    if (suppressBlurRef.current) {
+      suppressBlurRef.current = false;
+      return;
+    }
+    blurTimerRef.current = setTimeout(() => setFocusedFieldState(null), 200);
+  }, []);
+
+  const cancelBlurTimer = useCallback(() => {
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (focusedField) lastFocusedFieldRef.current = focusedField;
+  }, [focusedField]);
+
+  const activePredictions =
+    focusedField === 'origin' && !manualOrigin && !originSearch.place
+      ? originSearch.predictions
+      : focusedField === 'destination' && !manualDest && !destSearch.place
+        ? destSearch.predictions
+        : [];
+
+  const handlePredictionSelect = useCallback(
+    (pred: PlacePrediction) => {
+      cancelBlurTimer();
+      suppressBlurRef.current = false;
+      const field = focusedField ?? lastFocusedFieldRef.current;
+      if (field === 'origin') {
+        originSearch.selectPrediction(pred);
+        setManualOrigin(null);
+        setIsUsingCurrentLocation(false);
+        if (pred.location) onPanTo(pred.location);
+      } else {
+        destSearch.selectPrediction(pred);
+        setManualDest(null);
+        if (pred.location) onPanTo(pred.location);
+      }
+      onClearRoute();
+      originInputRef.current?.blur();
+      destInputRef.current?.blur();
+      setFocusedFieldState(null);
+    },
+    [focusedField, originSearch, destSearch, setManualOrigin, setManualDest, setIsUsingCurrentLocation, onPanTo, onClearRoute, cancelBlurTimer],
+  );
+
+  return (
+    <ScrollView
