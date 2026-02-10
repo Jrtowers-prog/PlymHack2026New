@@ -10,7 +10,7 @@ export const formatDistance = (meters: number): string => {
   return `${meters.toFixed(0)} m`;
 };
 
-
+/** Format seconds to a human-readable duration string. */
 export const formatDuration = (seconds: number): string => {
   if (seconds >= 3600) {
     const hours = Math.floor(seconds / 3600);
@@ -19,4 +19,8 @@ export const formatDuration = (seconds: number): string => {
   }
   return `${Math.max(1, Math.round(seconds / 60))} min`;
 };
+
+/** Strip HTML tags from instruction strings. */
+
+  html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
 
