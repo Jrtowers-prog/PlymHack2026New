@@ -73,3 +73,77 @@ export function useSafeRoutes(
 
     const batchId = ++cancelRef.current;
     setStatus('loading');
+    setError(null);
+    setOutOfRange(false);
+    setOutOfRangeMessage('');
+
+    try {
+      console.log(
+        `[useSafeRoutes] 🔍 Fetching safe routes: ` +
+          `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)} → ` +
+          `${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`,
+      );
+
+      const result = await fetchSafeRoutes(origin, destination);
+
+      if (cancelRef.current !== batchId) return; // stale
+
+      setRoutes(result.routes);
+      setSelectedIndex(0); // safest route is first
+      setMeta(result.meta);
+      setStatus('ready');
+
+      console.log(
+        `[useSafeRoutes] ✅ ${result.routes.length} safe routes — ` +
+          `safest: ${result.routes[0]?.safety?.score}/100, ` +
+          `compute: ${result.meta?.computeTimeMs}ms`,
+      );
+    } catch (caught) {
+      if (cancelRef.current !== batchId) return;
+
+      const appError =
+        caught instanceof AppError
+          ? caught
+          : new AppError('safe_routes_error', 'Unable to compute safe routes', caught);
+
+      if (appError.code === 'DESTINATION_OUT_OF_RANGE') {
+        setOutOfRange(true);
+        setOutOfRangeMessage(appError.message);
+      }
+
+      setError(appError);
+      setStatus('error');
+    }
+  }, [origin, destination]);
+
+  useEffect(() => {
+    refresh().catch(() => {
+      setStatus('error');
+    });
+    return () => {
+      cancelRef.current++; // cancel on unmount
+    };
+  }, [refresh]);
+
+  const selectRoute = useCallback(
+    (index: number) => {
+      if (index >= 0 && index < routes.length) {
+        setSelectedIndex(index);
+      }
+    },
+    [routes.length],
+  );
+
+  return {
+    status,
+    routes,
+    safestRoute: routes.length > 0 ? routes[0] : null,
+    selectedIndex,
+    selectRoute,
+    error,
+    outOfRange,
+    outOfRangeMessage,
+    meta,
+    refresh,
+  };
+}
