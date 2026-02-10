@@ -1398,3 +1398,503 @@ function JailLoadingAnimation() {
         Animated.timing(barWidth, { toValue: 1, duration: 3000, useNativeDriver: false }),
         Animated.timing(barWidth, { toValue: 0, duration: 0, useNativeDriver: false }),
       ]),
+    ).start();
+  }, []);
+
+  // Bounce the icon
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounceAnim, { toValue: -6, duration: 400, useNativeDriver: true }),
+        Animated.timing(bounceAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]),
+    ).start();
+  }, []);
+
+  const stage = LOADING_STAGES[stageIdx];
+
+  return (
+    <View style={jailStyles.container}>
+      {/* Jail bars background */}
+      <View style={jailStyles.barsContainer}>
+        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+          <View key={i} style={jailStyles.bar} />
+        ))}
+      </View>
+
+      {/* Bouncing icon */}
+      <Animated.View style={[jailStyles.iconWrap, { transform: [{ translateY: bounceAnim }] }]}>
+        <Text style={jailStyles.icon}>{stage.icon}</Text>
+      </Animated.View>
+
+      {/* Status text */}
+      <Animated.Text style={[jailStyles.statusText, { opacity: fadeAnim }]}>
+        {stage.text}
+      </Animated.Text>
+
+      {/* Progress bar */}
+      <View style={jailStyles.progressTrack}>
+        <Animated.View
+          style={[
+            jailStyles.progressFill,
+            {
+              width: barWidth.interpolate({
+                inputRange: [0, 1],
+                outputRange: ['0%', '100%'],
+              }),
+            },
+          ]}
+        />
+      </View>
+
+      {/* Subtitle */}
+      <Text style={jailStyles.subtitle}>Finding the safest path for you</Text>
+    </View>
+  );
+}
+
+const jailStyles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  barsContainer: {
+    position: 'absolute',
+    top: 10,
+    left: 20,
+    right: 20,
+    bottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    opacity: 0.06,
+  },
+  bar: {
+    width: 4,
+    height: '100%',
+    backgroundColor: '#1e293b',
+    borderRadius: 2,
+  },
+  iconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+  },
+  icon: {
+    fontSize: 30,
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'center',
+  },
+  progressTrack: {
+    width: '80%',
+    height: 5,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 3,
+  },
+  subtitle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+});
+
+// ── Interactive safety profile chart (smooth, like hiking elevation charts) ──
+function SafetyProfileChart({
+  segments,
+  enrichedSegments,
+  roadNameChanges,
+  totalDistance,
+}: {
+  segments: { score: number; color: string }[];
+  enrichedSegments?: EnrichedSegment[];
+  roadNameChanges?: Array<{ segmentIndex: number; name: string; distance: number }>;
+  totalDistance?: number;
+}) {
+  const [chartWidth, setChartWidth] = useState(0);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const CHART_H = 140;
+  const PAD_TOP = 14;
+  const PAD_BOT = 6;
+  const DRAW_H = CHART_H - PAD_TOP - PAD_BOT;
+  const ANNOTATION_H = 28;
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    setChartWidth(e.nativeEvent.layout.width);
+  };
+
+  // Use enriched segments if available for per-segment scores
+  const segScores = useMemo(() => {
+    if (enrichedSegments && enrichedSegments.length > 0) {
+      return enrichedSegments.map((s) => s.safetyScore);
+    }
+    return segments.map((s) => s.score);
+  }, [segments, enrichedSegments]);
+
+  // Smooth the raw scores using a moving-average window
+  const smoothed = useMemo(() => {
+    if (segScores.length === 0) return [];
+    const raw = segScores;
+    const windowSize = Math.max(3, Math.ceil(raw.length / 8));
+    const half = Math.floor(windowSize / 2);
+    return raw.map((_, i) => {
+      let sum = 0;
+      let count = 0;
+      for (let j = i - half; j <= i + half; j++) {
+        if (j >= 0 && j < raw.length) { sum += raw[j]; count++; }
+      }
+      return sum / count;
+    });
+  }, [segScores]);
+
+  // Build annotations from enriched segment data
+  const annotations = useMemo(() => {
+    if (!enrichedSegments || !chartWidth || smoothed.length === 0) return [];
+    const step = chartWidth / Math.max(1, smoothed.length - 1);
+    const annots: Array<{ x: number; label: string; icon: string; color: string }> = [];
+    const usedXRanges: number[] = [];
+
+    // Road name labels from roadNameChanges
+    if (roadNameChanges) {
+      for (const ch of roadNameChanges) {
+        if (ch.segmentIndex < smoothed.length) {
+          const x = ch.segmentIndex * step;
+          if (!usedXRanges.some(ux => Math.abs(ux - x) < 50)) {
+            usedXRanges.push(x);
+            annots.push({ x, label: ch.name.length > 14 ? ch.name.slice(0, 12) + '…' : ch.name, icon: '📍', color: '#475467' });
+          }
+        }
+      }
+    }
+
+    // Mark dead ends, surface changes, CCTV
+    for (let i = 0; i < enrichedSegments.length; i++) {
+      const seg = enrichedSegments[i];
+      const x = i * step;
+      if (seg.isDeadEnd && !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: 'Dead end', icon: '⛔', color: '#f97316' });
+      }
+      if (seg.surfaceType !== 'paved' && seg.surfaceType !== 'asphalt' && seg.surfaceType !== 'concrete' &&
+          i > 0 && enrichedSegments[i - 1].surfaceType !== seg.surfaceType &&
+          !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: seg.surfaceType, icon: '🪨', color: '#92400e' });
+      }
+      if (seg.cctvScore > 0 && (i === 0 || enrichedSegments[i - 1].cctvScore === 0) &&
+          !usedXRanges.some(ux => Math.abs(ux - x) < 40)) {
+        usedXRanges.push(x);
+        annots.push({ x, label: 'CCTV', icon: '📷', color: '#7c3aed' });
+      }
+    }
+
+    return annots;
+  }, [enrichedSegments, chartWidth, smoothed, roadNameChanges]);
+
+  // Overall average for the reference line
+  const avg = useMemo(() => {
+    if (smoothed.length === 0) return 0;
+    return smoothed.reduce((a, b) => a + b, 0) / smoothed.length;
+  }, [smoothed]);
+
+  // Convert smoothed scores to chart points
+  const points = useMemo(() => {
+    if (!chartWidth || smoothed.length === 0) return [];
+    const step = chartWidth / Math.max(1, smoothed.length - 1);
+    return smoothed.map((val, i) => {
+      const score100 = Math.round(val * 100);
+      // Interpolate colour: red→amber→green based on smoothed value
+      const c = val < 0.5
+        ? lerpColor(0xef4444, 0xeab308, val / 0.5)
+        : lerpColor(0xeab308, 0x22c55e, (val - 0.5) / 0.5);
+      return {
+        x: i * step,
+        y: PAD_TOP + DRAW_H * (1 - val),
+        score: score100,
+        color: c,
+        raw: segments[i]?.score ?? val,
+      };
+    });
+  }, [chartWidth, smoothed, segments]);
+
+  // Average line Y
+  const avgY = PAD_TOP + DRAW_H * (1 - avg);
+
+  const idxFromX = (pageX: number, viewX: number) => {
+    if (!chartWidth || points.length === 0) return null;
+    const x = pageX - viewX;
+    const step = chartWidth / Math.max(1, points.length - 1);
+    const idx = Math.round(x / step);
+    return Math.max(0, Math.min(points.length - 1, idx));
+  };
+
+  const chartRef = useRef<View>(null);
+  const viewXRef = useRef(0);
+
+  const handleTouchStart = (e: GestureResponderEvent) => {
+    chartRef.current?.measureInWindow((wx: number) => {
+      viewXRef.current = wx;
+      setActiveIdx(idxFromX(e.nativeEvent.pageX, wx));
+    });
+  };
+  const handleTouchMove = (e: GestureResponderEvent) => {
+    setActiveIdx(idxFromX(e.nativeEvent.pageX, viewXRef.current));
+  };
+  const handleTouchEnd = () => { /* keep tooltip visible */ };
+
+  const activePoint = activeIdx !== null ? points[activeIdx] : null;
+
+  return (
+    <View style={styles.chartContainer}>
+      {/* Header row */}
+      <View style={styles.chartHeaderRow}>
+        <Text style={styles.chartTitle}>Safety Profile</Text>
+        {activePoint ? (
+          <View style={[styles.chartPill, { backgroundColor: activePoint.color + '22' }]}>
+            <View style={[styles.chartPillDot, { backgroundColor: activePoint.color }]} />
+            <Text style={[styles.chartPillText, { color: activePoint.color }]}>
+              {activePoint.score}
+            </Text>
+          </View>
+        ) : (
+          <View style={[styles.chartPill, { backgroundColor: '#64748b18' }]}>  
+            <Text style={styles.chartPillHint}>Tap to inspect</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Chart body */}
+      <View
+        ref={chartRef}
+        style={[styles.chartArea, { height: CHART_H }]}
+        onLayout={onLayout}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderGrant={handleTouchStart}
+        onResponderMove={handleTouchMove}
+        onResponderRelease={handleTouchEnd}
+      >
+        {/* Subtle grid lines */}
+        {[0, 25, 50, 75, 100].map((v) => {
+          const y = PAD_TOP + DRAW_H * (1 - v / 100);
+          return (
+            <View key={`g-${v}`} style={[styles.chartGridLine, { top: y }]}>
+              {(v === 0 || v === 50 || v === 100) && (
+                <Text style={styles.chartGridLabel}>{v}</Text>
+              )}
+            </View>
+          );
+        })}
+
+        {/* Gradient-like filled area using thin columns */}
+        {points.map((pt, i) => {
+          if (!chartWidth) return null;
+          const step = chartWidth / Math.max(1, points.length - 1);
+          const colW = Math.max(2, step + 1);
+          const h = Math.max(0, CHART_H - PAD_BOT - pt.y);
+          return (
+            <View
+              key={`area-${i}`}
+              style={{
+                position: 'absolute',
+                left: pt.x - colW / 2,
+                bottom: PAD_BOT,
+                width: colW,
+                height: h,
+                backgroundColor: pt.color + '20',
+              }}
+            />
+          );
+        })}
+
+        {/* Smooth line — rendered as short segments with rounded ends */}
+        {points.map((pt, i) => {
+          if (i === 0) return null;
+          const prev = points[i - 1];
+          const dx = pt.x - prev.x;
+          const dy = pt.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          return (
+            <View
+              key={`ln-${i}`}
+              style={{
+                position: 'absolute',
+                left: prev.x,
+                top: prev.y - 1.5,
+                width: len + 1,
+                height: 3,
+                borderRadius: 1.5,
+                backgroundColor: pt.color,
+                transform: [{ rotate: `${angle}deg` }],
+                transformOrigin: '0 50%',
+                opacity: 0.85,
+              }}
+            />
+          );
+        })}
+
+        {/* Average reference line */}
+        <View style={[styles.chartAvgLine, { top: avgY }]} />
+        <View style={[styles.chartAvgBadge, { top: avgY - 9 }]}>
+          <Text style={styles.chartAvgText}>avg {Math.round(avg * 100)}</Text>
+        </View>
+
+        {/* Active cursor & glow */}
+        {activePoint && (
+          <>
+            {/* Vertical cursor */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 0.5,
+                top: PAD_TOP,
+                width: 1,
+                height: DRAW_H,
+                backgroundColor: activePoint.color + '66',
+                zIndex: 4,
+              }}
+            />
+            {/* Glow dot */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 8,
+                top: activePoint.y - 8,
+                width: 16,
+                height: 16,
+                borderRadius: 8,
+                backgroundColor: activePoint.color + '33',
+                zIndex: 5,
+              }}
+            />
+            {/* Solid dot */}
+            <View
+              style={{
+                position: 'absolute',
+                left: activePoint.x - 5,
+                top: activePoint.y - 5,
+                width: 10,
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: activePoint.color,
+                borderWidth: 2,
+                borderColor: '#ffffff',
+                zIndex: 6,
+              }}
+            />
+          </>
+        )}
+      </View>
+
+      {/* Annotation markers row */}
+      {annotations.length > 0 && (
+        <View style={{ height: ANNOTATION_H, position: 'relative', marginTop: 2 }}>
+          {annotations.map((a, i) => (
+            <View
+              key={`ann-${i}`}
+              style={{
+                position: 'absolute',
+                left: Math.max(0, Math.min(chartWidth - 60, a.x - 30)),
+                top: 0,
+                alignItems: 'center',
+                width: 60,
+              }}
+            >
+              <Text style={{ fontSize: 10, lineHeight: 12 }}>{a.icon}</Text>
+              <Text
+                style={{ fontSize: 7, color: a.color, textAlign: 'center', fontWeight: '600' }}
+                numberOfLines={1}
+              >
+                {a.label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* X axis labels */}
+      <View style={styles.chartXAxis}>
+        <Text style={styles.chartXLabel}>🏠 Start</Text>
+        <Text style={[styles.chartXLabel, { color: '#cbd5e1' }]}>
+          {totalDistance ? `${(totalDistance / 1000).toFixed(1)} km • ${segments.length} seg` : `── ${segments.length} segments ──`}
+        </Text>
+        <Text style={styles.chartXLabel}>📍 End</Text>
+      </View>
+    </View>
+  );
+}
+
+/** Interpolate between two hex-packed colours (0xRRGGBB). Returns CSS hex. */
+function lerpColor(a: number, b: number, t: number): string {
+  const clamp = Math.max(0, Math.min(1, t));
+  const rA = (a >> 16) & 0xff, gA = (a >> 8) & 0xff, bA = a & 0xff;
+  const rB = (b >> 16) & 0xff, gB = (b >> 8) & 0xff, bB = b & 0xff;
+  const r = Math.round(rA + (rB - rA) * clamp);
+  const g = Math.round(gA + (gB - gA) * clamp);
+  const bl = Math.round(bA + (bB - bA) * clamp);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`;
+}
+
+/** Map Google maneuver strings to Ionicons names */
+function maneuverIcon(maneuver?: string): string {
+  switch (maneuver) {
+    case 'turn-left': return 'arrow-back';
+    case 'turn-right': return 'arrow-forward';
+    case 'turn-slight-left': return 'arrow-back';
+    case 'turn-slight-right': return 'arrow-forward';
+    case 'turn-sharp-left': return 'return-down-back';
+    case 'turn-sharp-right': return 'return-down-forward';
+    case 'uturn-left': case 'uturn-right': return 'refresh';
+    case 'roundabout-left': case 'roundabout-right': return 'sync';
+    default: return 'arrow-up';
+  }
+}
+
+/** Strip HTML tags from Google's instruction strings */
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+}
+
+const formatDistance = (meters: number): string => {
+  if (meters >= 1000) {
+    return `${(meters / 1000).toFixed(1)} km`;
+  }
+
+  return `${meters.toFixed(0)} m`;
+};
+
+const formatDuration = (seconds: number): string => {
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.round((seconds % 3600) / 60);
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  
+  // Top Search Container
+  topSearchContainer: {
+    position: 'absolute',
