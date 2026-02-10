@@ -53,3 +53,56 @@ export const MapTypeControl = ({ mapType, onMapTypeChange }: MapTypeControlProps
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 1000,
+  },
+  compactButton: {
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  compactText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1D2939',
+  },
+  expandedContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+    overflow: 'hidden',
+  },
+  optionButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F2F4F7',
+  },
+  optionButtonActive: {
+    backgroundColor: '#EFF8FF',
+  },
+  optionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#475467',
+  },
+  optionTextActive: {
+    color: '#1570EF',
+    fontWeight: '600',
+  },
+});
