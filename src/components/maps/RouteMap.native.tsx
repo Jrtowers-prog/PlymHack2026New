@@ -1,47 +1,72 @@
 /**
- * RouteMap.native — WebView-based Google Maps for Expo Go (no dev build needed).
+ * RouteMap.native — Leaflet + OSM tiles in a WebView (100 % free, no API key).
  *
- * Embeds the full Google Maps JS API inside a WebView so the native app
- * gets an interactive map with routes, markers, safety segments, road labels,
- * navigation tracking, etc — identical to the web version.
+ * Replaces Google Maps JS API in WebView entirely.
  */
 import { useCallback, useEffect, useRef } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
-import { env } from '@/src/config/env';
 
 // ---------------------------------------------------------------------------
-// Build the HTML page that runs Google Maps inside the WebView
+// Build the HTML page that runs Leaflet + OSM tiles inside the WebView
 // ---------------------------------------------------------------------------
 
-const buildMapHtml = (apiKey: string) => `
+const buildMapHtml = (mapType: string = 'roadmap') => `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    html,body,#map{width:100%;height:100%;overflow:hidden;touch-action:none}
+    html,body{width:100%;height:100%;overflow:hidden;touch-action:none}
+    #viewport{width:100%;height:100%;overflow:hidden;position:relative}
+    #map{width:100%;height:100%;touch-action:none;transition:transform 0.5s ease-out;transform-origin:center 65%}
+    .map-ctrl{position:absolute;right:12px;bottom:100px;z-index:1000;display:flex;flex-direction:column;gap:4px}
+    .map-btn{width:42px;height:42px;border:none;border-radius:10px;background:rgba(255,255,255,.95);
+      box-shadow:0 2px 8px rgba(0,0,0,.2);font-size:22px;font-weight:700;color:#1D2939;
+      cursor:pointer;display:flex;align-items:center;justify-content:center;
+      -webkit-tap-highlight-color:transparent;user-select:none;pointer-events:auto;line-height:1;touch-action:auto}
+    .map-btn:active{background:#e4e7ec}
+    .recenter-btn{position:absolute;right:12px;bottom:50px;z-index:1000;width:42px;height:42px;
+      border:none;border-radius:50%;background:rgba(255,255,255,.95);
+      box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;display:none;align-items:center;
+      justify-content:center;pointer-events:auto;touch-action:auto}
+    .recenter-btn:active{background:#e4e7ec}
+    .road-label{background:rgba(0,0,0,.7);color:#fff;padding:2px 8px;border-radius:9px;
+      font-size:9px;font-weight:600;white-space:nowrap;border:none;box-shadow:none}
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <div id="viewport">
+    <div id="map"></div>
+    <div class="map-ctrl">
+      <button class="map-btn" onclick="map.zoomIn()">+</button>
+      <button class="map-btn" onclick="map.zoomOut()">&minus;</button>
+    </div>
+    <button class="recenter-btn" id="recenterBtn" onclick="recenterMap()">
+      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1D2939" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+    </button>
+  </div>
   <script>
-    // ── State ──────────────────────────────────────────────────
-    var map, gm;
+    var map, tileLayer;
     var markers = [];
     var polylines = [];
     var navMarker = null;
     var longPressTimer = null;
     var longPressPos = null;
     var touchMoved = false;
+    var isNavMode = false;
+    var currentRotation = 0;
+    var userInteracted = false;
+    var lastNavLL = null;
 
-    // ── Helpers ────────────────────────────────────────────────
     function clearArray(arr) {
-      for (var i = 0; i < arr.length; i++) arr[i].setMap(null);
+      for (var i = 0; i < arr.length; i++) map.removeLayer(arr[i]);
       arr.length = 0;
     }
 
@@ -54,485 +79,72 @@ const buildMapHtml = (apiKey: string) => `
     }
 
     // ── Init ───────────────────────────────────────────────────
-    function initMap() {
-      gm = google.maps;
-      map = new gm.Map(document.getElementById('map'), {
-        center: { lat: 50.3755, lng: -4.1427 },
-        zoom: 13,
-        disableDefaultUI: true,
-        clickableIcons: false,
-        gestureHandling: 'greedy',
-      });
-
-      // Normal click / tap
-      gm.event.addListener(map, 'click', function(e) {
-        if (e.latLng) {
-          sendMsg('press', { lat: e.latLng.lat(), lng: e.latLng.lng() });
-        }
-      });
-
-      // Right-click (desktop fallback)
-      gm.event.addListener(map, 'rightclick', function(e) {
-        if (e.latLng) {
-          sendMsg('longpress', { lat: e.latLng.lat(), lng: e.latLng.lng() });
-        }
-      });
-
-      // ── Touch-based long-press (mobile) ──
-      // Google Maps JS swallows raw touch events for its own gestures,
-      // so we detect long-press by timing touchstart → touchend and
-      // converting the screen coordinates to lat/lng via the map bounds.
-      var mapDiv = document.getElementById('map');
-
-      mapDiv.addEventListener('touchstart', function(e) {
-        touchMoved = false;
-        if (e.touches.length === 1) {
-          var touch = e.touches[0];
-          longPressPos = { x: touch.clientX, y: touch.clientY };
-          longPressTimer = setTimeout(function() {
-            if (!touchMoved && longPressPos) {
-              // Convert screen point → LatLng via map bounds
-              var bounds = map.getBounds();
-              if (bounds) {
-                var ne = bounds.getNorthEast();
-                var sw = bounds.getSouthWest();
-                var mapEl = mapDiv.getBoundingClientRect();
-                var xFrac = longPressPos.x / mapEl.width;
-                var yFrac = longPressPos.y / mapEl.height;
-                var lat = ne.lat() - yFrac * (ne.lat() - sw.lat());
-                var lng = sw.lng() + xFrac * (ne.lng() - sw.lng());
-                sendMsg('longpress', { lat: lat, lng: lng });
-              }
-            }
-            longPressTimer = null;
-          }, 600);
-        }
-      }, { passive: true });
-
-      mapDiv.addEventListener('touchmove', function(e) {
-        if (longPressPos && e.touches.length === 1) {
-          var dx = e.touches[0].clientX - longPressPos.x;
-          var dy = e.touches[0].clientY - longPressPos.y;
-          if (Math.sqrt(dx*dx + dy*dy) > 10) {
-            touchMoved = true;
-            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-          }
-        }
-      }, { passive: true });
-
-      mapDiv.addEventListener('touchend', function() {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        longPressPos = null;
-      }, { passive: true });
-
-      mapDiv.addEventListener('touchcancel', function() {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        longPressPos = null;
-      }, { passive: true });
-
-      sendMsg('ready', {});
-    }
-
-    // ── Update handler (called from RN via injectJavaScript) ──
-    function updateMap(data) {
-      if (!map || !gm) return;
-
-      clearArray(markers);
-      clearArray(polylines);
-
-      var bounds = new gm.LatLngBounds();
-      var hasBounds = false;
-
-      // Origin – blue dot (hidden during navigation — arrow replaces it)
-      if (data.origin && !data.navLocation) {
-        var pos = new gm.LatLng(data.origin.lat, data.origin.lng);
-        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">' +
-          '<circle cx="12" cy="12" r="11" fill="#4285F4" opacity="0.25"/>' +
-          '<circle cx="12" cy="12" r="7" fill="#4285F4"/>' +
-          '<circle cx="12" cy="12" r="3.5" fill="#ffffff"/></svg>';
-        markers.push(new gm.Marker({
-          position: pos, map: map, title: 'Your location', zIndex: 50,
-          icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-                  scaledSize: new gm.Size(24,24), anchor: new gm.Point(12,12) },
-        }));
-        bounds.extend(pos);
-        hasBounds = true;
-      }
-
-      // Destination marker
-      if (data.destination) {
-        var dPos = new gm.LatLng(data.destination.lat, data.destination.lng);
-        markers.push(new gm.Marker({ position: dPos, map: map, title: 'Destination' }));
-        bounds.extend(dPos);
-        hasBounds = true;
-      }
-
-      // Unselected routes – grey, wider stroke for touch targets
-      (data.routes || []).forEach(function(r) {
-        if (r.selected) return;
-        var path = r.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
-        var pl = new gm.Polyline({
-          path: path, strokeColor: '#98a2b3', strokeOpacity: 0.5,
-          strokeWeight: 5, map: map, clickable: true,
-        });
-        gm.event.addListener(pl, 'click', function() {
-          sendMsg('selectRoute', { id: r.id });
-        });
-        polylines.push(pl);
-        path.forEach(function(p) { bounds.extend(p); });
-        hasBounds = true;
-      });
-
-      // ── Helper: find nearest point index on a path ──
-      function nearestIdx(path, pt) {
-        var best = 0, bestD = 1e18;
-        for (var i = 0; i < path.length; i++) {
-          var dlat = path[i].lat - pt.lat, dlng = path[i].lng - pt.lng;
-          var d = dlat*dlat + dlng*dlng;
-          if (d < bestD) { bestD = d; best = i; }
-        }
-        return best;
-      }
-
-      // Selected route – safety-coloured segments or blue fallback
-      var sel = (data.routes || []).find(function(r) { return r.selected; });
-      if (sel) {
-        // During navigation: split into traveled (black) + remaining (colored)
-        if (data.navLocation && sel.path.length > 1) {
-          var navPt = { lat: data.navLocation.lat, lng: data.navLocation.lng };
-          var splitIdx = nearestIdx(sel.path, navPt);
-
-          // ── Traveled portion → black ──
-          if (splitIdx > 0) {
-            var traveledPath = [];
-            for (var ti = 0; ti <= splitIdx; ti++) {
-              traveledPath.push(new gm.LatLng(sel.path[ti].lat, sel.path[ti].lng));
-            }
-            traveledPath.push(new gm.LatLng(navPt.lat, navPt.lng));
-            polylines.push(new gm.Polyline({
-              path: traveledPath, strokeColor: '#1D2939', strokeOpacity: 0.7,
-              strokeWeight: 7, map: map, clickable: false, zIndex: 5,
-            }));
-          }
-
-          // ── Remaining portion → safety colors or blue ──
-          if (data.segments && data.segments.length > 0) {
-            data.segments.forEach(function(seg) {
-              // Filter segment points: keep only those at or after the nav position
-              var filteredPath = [];
-              var started = false;
-              for (var si = 0; si < seg.path.length; si++) {
-                var sp = seg.path[si];
-                if (!started) {
-                  var dlat = sp.lat - navPt.lat, dlng = sp.lng - navPt.lng;
-                  if (Math.sqrt(dlat*dlat + dlng*dlng) < 0.0003) started = true;
-                  // Also start if this segment point is past the split on the main path
-                  if (!started) {
-                    var spIdx = nearestIdx(sel.path, sp);
-                    if (spIdx >= splitIdx) started = true;
-                  }
-                }
-                if (started) filteredPath.push(new gm.LatLng(sp.lat, sp.lng));
-              }
-              if (filteredPath.length >= 2) {
-                polylines.push(new gm.Polyline({
-                  path: filteredPath, strokeColor: seg.color, strokeOpacity: 0.9,
-                  strokeWeight: 7, map: map, clickable: false, zIndex: 8,
-                }));
-              }
-            });
-          } else {
-            // No segments — blue remaining
-            var remPath = [new gm.LatLng(navPt.lat, navPt.lng)];
-            for (var ri = splitIdx; ri < sel.path.length; ri++) {
-              remPath.push(new gm.LatLng(sel.path[ri].lat, sel.path[ri].lng));
-            }
-            polylines.push(new gm.Polyline({
-              path: remPath, strokeColor: '#4285F4', strokeOpacity: 0.85,
-              strokeWeight: 6, map: map, clickable: false, zIndex: 8,
-            }));
-          }
-        } else {
-          // Not navigating — normal rendering
-          if (data.segments && data.segments.length > 0) {
-            data.segments.forEach(function(seg) {
-              var segPath = seg.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
-              polylines.push(new gm.Polyline({
-                path: segPath, strokeColor: seg.color, strokeOpacity: 0.9,
-                strokeWeight: 7, map: map, clickable: false,
-              }));
-            });
-          } else {
-            var selPath = sel.path.map(function(p) { return new gm.LatLng(p.lat, p.lng); });
-            polylines.push(new gm.Polyline({
-              path: selPath, strokeColor: '#4285F4', strokeOpacity: 0.85,
-              strokeWeight: 6, map: map, clickable: false,
-            }));
-          }
-        }
-        sel.path.forEach(function(p) { bounds.extend(new gm.LatLng(p.lat, p.lng)); });
-        hasBounds = true;
-      }
-
-      // Safety markers
-      var markerColors = { crime: '#ef4444', shop: '#22c55e', light: '#facc15' };
-      (data.safetyMarkers || []).forEach(function(m) {
-        markers.push(new gm.Marker({
-          position: new gm.LatLng(m.lat, m.lng), map: map,
-          title: m.label || m.kind,
-          icon: { path: 0, scale: 4,
-                  fillColor: markerColors[m.kind] || '#94a3b8',
-                  fillOpacity: 0.9, strokeColor: '#fff', strokeWeight: 1 },
-        }));
-      });
-
-      // Road labels
-      (data.roadLabels || []).forEach(function(lbl) {
-        var text = lbl.name.slice(0, 12);
-        var w = Math.round(text.length * 6.5 + 16);
-        var h = 18;
-        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
-          '<rect rx="' + (h/2) + '" ry="' + (h/2) + '" width="' + w + '" height="' + h + '" fill="' + lbl.color + '" opacity="0.8"/>' +
-          '<text x="' + (w/2) + '" y="12.5" text-anchor="middle" fill="white" font-size="9" font-weight="600" font-family="-apple-system,BlinkMacSystemFont,sans-serif" letter-spacing="0.3">' + text + '</text></svg>';
-        markers.push(new gm.Marker({
-          position: new gm.LatLng(lbl.lat, lbl.lng), map: map, clickable: false, zIndex: 30,
-          icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-                  scaledSize: new gm.Size(w, h), anchor: new gm.Point(w/2, h/2) },
-        }));
-      });
-
-      // Fit bounds only when geography changed – with padding for phone UI
-      if (data.fitBounds && hasBounds && !data.navLocation) {
-        map.fitBounds(bounds, { top: 80, bottom: 120, left: 20, right: 20 });
-        gm.event.addListenerOnce(map, 'idle', function() {
-          if (map.getZoom() > 16) map.setZoom(16);
-        });
-      }
-
-      // Pan-to
-      if (data.panTo) {
-        map.panTo(new gm.LatLng(data.panTo.lat, data.panTo.lng));
-        if (map.getZoom() < 14) map.setZoom(14);
-      }
-
-      // Navigation marker
-      if (navMarker) { navMarker.setMap(null); navMarker = null; }
-      if (data.navLocation) {
-        var heading = data.navHeading || 0;
-        var arrowSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">' +
-          '<circle cx="18" cy="18" r="16" fill="#1570EF" stroke="white" stroke-width="3"/>' +
-          '<polygon points="18,6 24,22 18,18 12,22" fill="white" transform="rotate(' + heading + ', 18, 18)"/></svg>';
-        navMarker = new gm.Marker({
-          position: new gm.LatLng(data.navLocation.lat, data.navLocation.lng),
-          map: map, zIndex: 999, clickable: false,
-          icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg),
-                  scaledSize: new gm.Size(36,36), anchor: new gm.Point(18,18) },
-        });
-        // Navigation camera: 3D tilt, heading rotation, close zoom
-        map.panTo(new gm.LatLng(data.navLocation.lat, data.navLocation.lng));
-        if (map.setTilt) map.setTilt(45);
-        if (map.setHeading) map.setHeading(heading);
-        if (map.getZoom() < 18) map.setZoom(18);
-      } else {
-        // Reset camera when not navigating
-        if (map.getTilt && map.getTilt() !== 0 && map.setTilt) map.setTilt(0);
-        if (map.getHeading && map.getHeading() !== 0 && map.setHeading) map.setHeading(0);
-      }
-    }
-  </script>
-  <script src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initMap" async defer></script>
-</body>
-</html>
-`;
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-export const RouteMap = ({
-  origin,
-  destination,
-  routes,
-  selectedRouteId,
-  safetyMarkers = [],
-  routeSegments = [],
-  roadLabels = [],
-  panTo,
-  isNavigating = false,
-  navigationLocation,
-  navigationHeading,
-  onSelectRoute,
-  onLongPress,
-  onMapPress,
-}: RouteMapProps) => {
-  const webViewRef = useRef<WebView>(null);
-  const readyRef = useRef(false);
-  const prevGeoKeyRef = useRef('');
-  const prevPanKeyRef = useRef(-1);
-
-  // Keep latest props in refs so pushUpdate always reads fresh values
-  // (fixes the stale-closure problem when called from the 'ready' handler)
-  const propsRef = useRef({
-    origin, destination, routes, selectedRouteId,
-    safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading,
-  });
-  propsRef.current = {
-    origin, destination, routes, selectedRouteId,
-    safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading,
-  };
-
-  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute });
-  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute };
-
-  // Serialize current props → a JS call the WebView can execute
-  const pushUpdate = useCallback(() => {
-    if (!readyRef.current || !webViewRef.current) return;
-
-    const p = propsRef.current;
-    const toLL = (c: { latitude: number; longitude: number }) => ({
-      lat: c.latitude,
-      lng: c.longitude,
+    map = L.map('map', {
+      center: [50.3755, -4.1427],
+      zoom: 13,
+      zoomControl: false,
+      attributionControl: true,
     });
 
-    const mappedRoutes = p.routes.map((r) => ({
-      id: r.id,
-      selected: r.id === p.selectedRouteId,
-      path: r.path.map(toLL),
-    }));
+    tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
 
-    const segments = p.routeSegments.map((seg) => ({
-      color: seg.color,
-      path: seg.path.map(toLL),
-    }));
+    // Normal click / tap
+    map.on('click', function(e) {
+      sendMsg('press', { lat: e.latlng.lat, lng: e.latlng.lng });
+    });
 
-    const mkrs = p.safetyMarkers.map((m) => ({
-      kind: m.kind,
-      label: m.label,
-      lat: m.coordinate.latitude,
-      lng: m.coordinate.longitude,
-    }));
+    // Right-click (desktop fallback)
+    map.on('contextmenu', function(e) {
+      sendMsg('longpress', { lat: e.latlng.lat, lng: e.latlng.lng });
+    });
 
-    const labels = p.roadLabels.map((l) => ({
-      name: l.displayName,
-      color: l.color,
-      lat: l.coordinate.latitude,
-      lng: l.coordinate.longitude,
-    }));
+    // ── Touch-based long-press (mobile) ──
+    var mapDiv = document.getElementById('map');
 
-    // Detect geography changes to decide whether to fitBounds
-    const geoKey = [
-      p.origin ? `${p.origin.latitude},${p.origin.longitude}` : '',
-      p.destination ? `${p.destination.latitude},${p.destination.longitude}` : '',
-      p.routes.map((r) => r.id).join(','),
-      p.selectedRouteId ?? '',
-    ].join('|');
-    const fitBounds = geoKey !== prevGeoKeyRef.current;
-    if (fitBounds) prevGeoKeyRef.current = geoKey;
-
-    // panTo
-    let panToData: { lat: number; lng: number } | null = null;
-    if (p.panTo && p.panTo.key !== prevPanKeyRef.current) {
-      prevPanKeyRef.current = p.panTo.key;
-      panToData = toLL(p.panTo.location);
-    }
-
-    const payload = {
-      origin: p.origin ? toLL(p.origin) : null,
-      destination: p.destination ? toLL(p.destination) : null,
-      routes: mappedRoutes,
-      segments,
-      safetyMarkers: mkrs,
-      roadLabels: labels,
-      fitBounds,
-      panTo: panToData,
-      navLocation:
-        p.isNavigating && p.navigationLocation
-          ? toLL(p.navigationLocation)
-          : null,
-      navHeading: p.navigationHeading,
-    };
-
-    const js = `try{updateMap(${JSON.stringify(payload)})}catch(e){}true;`;
-    webViewRef.current.injectJavaScript(js);
-  }, []);
-
-  // Push whenever any data changes
-  useEffect(() => {
-    pushUpdate();
-  }, [
-    origin,
-    destination,
-    routes,
-    selectedRouteId,
-    safetyMarkers,
-    routeSegments,
-    roadLabels,
-    panTo,
-    isNavigating,
-    navigationLocation,
-    navigationHeading,
-    pushUpdate,
-  ]);
-
-  const handleMessage = useCallback(
-    (event: WebViewMessageEvent) => {
-      try {
-        const msg = JSON.parse(event.nativeEvent.data);
-        const cbs = callbacksRef.current;
-        switch (msg.type) {
-          case 'ready':
-            readyRef.current = true;
-            // Flush update now that the map is ready
-            pushUpdate();
-            break;
-          case 'press':
-            cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
-            break;
-          case 'longpress':
-            cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
-            break;
-          case 'selectRoute':
-            cbs.onSelectRoute?.(msg.id);
-            break;
-        }
-      } catch {
-        // ignore parse errors
+    mapDiv.addEventListener('touchstart', function(e) {
+      touchMoved = false;
+      if (e.touches.length === 1) {
+        var touch = e.touches[0];
+        longPressPos = { x: touch.clientX, y: touch.clientY };
+        longPressTimer = setTimeout(function() {
+          if (!touchMoved && longPressPos) {
+            var pt = map.containerPointToLatLng(L.point(longPressPos.x, longPressPos.y));
+            sendMsg('longpress', { lat: pt.lat, lng: pt.lng });
+          }
+          longPressTimer = null;
+        }, 600);
       }
-    },
-    [pushUpdate],
-  );
+    }, { passive: true });
 
-  return (
-    <View style={styles.container}>
-      <WebView
-        ref={webViewRef}
-        source={{ html: buildMapHtml(env.googleMapsApiKey) }}
-        style={StyleSheet.absoluteFill}
-        originWhitelist={['*']}
-        javaScriptEnabled
-        domStorageEnabled
-        onMessage={handleMessage}
-        scrollEnabled={false}
-        overScrollMode="never"
-        showsHorizontalScrollIndicator={false}
-        showsVerticalScrollIndicator={false}
-        allowsInlineMediaPlayback
-        mediaPlaybackRequiresUserAction={false}
-        startInLoadingState={false}
-        cacheEnabled
-        // Android: allow mixed content (http tiles from https page)
-        mixedContentMode="compatibility"
-        // Prevent pull-to-refresh interfering on Android
-        {...(Platform.OS === 'android' ? { nestedScrollEnabled: true } : {})}
-      />
-    </View>
-  );
-};
+    mapDiv.addEventListener('touchmove', function(e) {
+      if (longPressPos && e.touches.length === 1) {
+        var dx = e.touches[0].clientX - longPressPos.x;
+        var dy = e.touches[0].clientY - longPressPos.y;
+        if (Math.sqrt(dx*dx + dy*dy) > 10) {
+          touchMoved = true;
+          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        }
+      }
+    }, { passive: true });
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f4f7' },
-});
+    mapDiv.addEventListener('touchend', function() {
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      longPressPos = null;
+    }, { passive: true });
 
-export default RouteMap;
+    mapDiv.addEventListener('touchcancel', function() {
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      longPressPos = null;
+    }, { passive: true });
+
+    sendMsg('ready', {});
+
+    // Track user drag to pause auto-follow in nav mode
+    map.on('dragstart', function() { if (isNavMode) userInteracted = true; });
+
+    // Recenter on user location
+    function recenterMap() {
+      userInteracted = false;
