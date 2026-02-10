@@ -208,3 +208,123 @@ const generateOffsetWaypoints = (
 const pathHeaviness = (routes: DirectionsRoute[]): number => {
   if (routes.length === 0) return 0;
   let pathHits = 0;
+  let mainHits = 0;
+  for (const r of routes) {
+    const s = r.summary ?? '';
+    if (/\b(path|trail|footpath|footway|alley|steps|track)\b/i.test(s)) pathHits++;
+    if (/\b[ABM]\d|\b(road|street|ave|avenue|boulevard|drive)\b/i.test(s)) mainHits++;
+  }
+  const total = pathHits + mainHits;
+  return total > 0 ? pathHits / total : 0.5;
+};
+
+/** Drop routes whose distance AND duration are within 5 %/8 % of an already-kept route */
+const deduplicateRoutes = (routes: DirectionsRoute[]): DirectionsRoute[] => {
+  const unique: DirectionsRoute[] = [];
+  for (const r of routes) {
+    const dup = unique.some((u) => {
+      const avgD = (u.distanceMeters + r.distanceMeters) / 2 || 1;
+      const avgT = (u.durationSeconds + r.durationSeconds) / 2 || 1;
+      return (
+        Math.abs(u.distanceMeters - r.distanceMeters) / avgD < 0.05 &&
+        Math.abs(u.durationSeconds - r.durationSeconds) / avgT < 0.08
+      );
+    });
+    if (!dup) unique.push(r);
+  }
+  return unique;
+};
+
+/** Score a route summary – named / numbered roads rank higher (main roads) */
+const mainRoadScore = (summary?: string): number => {
+  if (!summary) return 0;
+  let score = 0;
+  // A-roads, B-roads, M-roads, numbered routes (e.g. A386, B3214)
+  if (/\b[ABM]\d/i.test(summary)) score += 3;
+  // Named "Road", "Street", "Avenue" etc. – indicates an actual named road vs footpath
+  if (/\b(road|street|ave|avenue|boulevard|blvd|highway|hwy|drive|lane|way)\b/i.test(summary)) score += 2;
+  // Penalise paths/trails/footways
+  if (/\b(path|trail|footpath|footway|alley|steps|track)\b/i.test(summary)) score -= 3;
+  return score;
+};
+
+/** Parse one Directions REST response into route objects */
+const parseDirectionsResponse = (
+  data: GoogleDirectionsResponse,
+  idOffset: number,
+): DirectionsRoute[] => {
+  if (data.status !== 'OK') return [];
+  return data.routes.map((route, i) => {
+    const encodedPolyline = route.overview_polyline?.points ?? '';
+    if (!encodedPolyline) return null!;
+    const legs = route.legs ?? [];
+    // Extract turn-by-turn steps from all legs
+    const steps: NavigationStep[] = legs.flatMap((leg) =>
+      (leg.steps ?? []).map((s) => ({
+        instruction: s.html_instructions ?? '',
+        distanceMeters: s.distance?.value ?? 0,
+        durationSeconds: s.duration?.value ?? 0,
+        startLocation: {
+          latitude: s.start_location?.lat ?? 0,
+          longitude: s.start_location?.lng ?? 0,
+        },
+        endLocation: {
+          latitude: s.end_location?.lat ?? 0,
+          longitude: s.end_location?.lng ?? 0,
+        },
+        maneuver: s.maneuver,
+      }))
+    );
+    return {
+      id: `route-${idOffset + i}`,
+      distanceMeters: legs.reduce((t, l) => t + (l.distance?.value ?? 0), 0),
+      durationSeconds: legs.reduce((t, l) => t + (l.duration?.value ?? 0), 0),
+      encodedPolyline,
+      path: decodePolyline(encodedPolyline),
+      steps,
+      summary: route.summary,
+    };
+  }).filter(Boolean);
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart route comparison: Car ETA vs Walking ETA with safety validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+const WALKING_SPEED_MS = 1.4; // ~5 km/h typical walking speed
+
+/**
+ * Calculate estimated walking time for a route based on distance.
+ * Assumes average walking speed of ~1.4 m/s (5 km/h)
+ */
+const calculateWalkingTime = (distanceMeters: number): number => {
+  return Math.round(distanceMeters / WALKING_SPEED_MS);
+};
+
+export type SmartRoute = DirectionsRoute & {
+  mode: 'car' | 'walking';
+  carETASeconds: number;
+  walkingETASeconds: number;
+  reason?: string;
+};
+
+/**
+ * Fetch smart routes: compares car routes (with calculated walking time)
+ * against walking routes. If walking time is within 40% of car route walking time,
+ * prefers walking. Otherwise uses car if a walking path exists.
+ */
+export const fetchSmartDirections = async (
+  origin: LatLng,
+  destination: LatLng
+): Promise<SmartRoute[]> => {
+  try {
+    console.log(`[🧠 smartDirections] Starting smart route comparison...`);
+    
+    // Fetch car and walking routes IN PARALLEL (both free OSRM calls)
+    const carBase = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=driving`;
+    const walkBase = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=walking`;
+
+    console.log(`[🧠 smartDirections] Fetching car + walking routes in parallel...`);
+    const [carData, walkData] = await Promise.all([
+      directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(carBase)),
+      directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(walkBase)),
+    ]);
