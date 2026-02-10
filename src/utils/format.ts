@@ -9,3 +9,14 @@ export const formatDistance = (meters: number): string => {
   }
   return `${meters.toFixed(0)} m`;
 };
+
+
+export const formatDuration = (seconds: number): string => {
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.round((seconds % 3600) / 60);
+    return `${hours}h ${minutes}m`;
+  }
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
+};
+
