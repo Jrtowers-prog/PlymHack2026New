@@ -80,3 +80,66 @@ function GridCard({ emoji, value, label, color }: { emoji: string; value: number
   return (
     <View style={[styles.gridCard, { borderColor: color + '44' }]}>
       <Text style={[styles.gridIcon, { color }]}>{emoji}</Text>
+      <View>
+        <Text style={[styles.gridValue, { color }]}>{value}</Text>
+        <Text style={styles.gridLabel}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
+function DetailCard({ icon, value, label, warn }: { icon: string; value: string; label: string; warn?: boolean }) {
+  return (
+    <View style={[styles.detailCard, warn && styles.detailCardWarning]}>
+      <Text style={styles.detailIcon}>{icon}</Text>
+      <Text style={[styles.detailValue, warn && { color: '#f97316' }]}>{value}</Text>
+      <Text style={styles.detailLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function RoadTypeBreakdown({ roadTypes }: { roadTypes: Record<string, number> }) {
+  const sorted = Object.entries(roadTypes).sort(([, a], [, b]) => b - a);
+  const barColors: Record<string, string> = {
+    primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+    residential: '#93c5fd', footway: '#fbbf24', path: '#f59e0b',
+    steps: '#f97316', pedestrian: '#34d399', service: '#94a3b8',
+    cycleway: '#a78bfa', living_street: '#67e8f9', track: '#d97706',
+    trunk: '#1d4ed8', unclassified: '#cbd5e1',
+  };
+  const labelMap: Record<string, string> = {
+    primary: 'Main', secondary: 'Secondary', tertiary: 'Minor',
+    residential: 'Residential', footway: 'Path', path: 'Path',
+    steps: 'Steps', pedestrian: 'Pedestrian', service: 'Service',
+    cycleway: 'Cycleway', living_street: 'Living St', track: 'Track',
+    trunk: 'Highway', unclassified: 'Other',
+  };
+
+  return (
+    <View style={styles.roadTypeWrap}>
+      <Text style={styles.roadTypeTitle}>Road Type Breakdown</Text>
+      <View style={styles.roadTypeBar}>
+        {sorted.map(([type, pct]) => (
+          <View key={type} style={[styles.roadTypeSeg, { flex: pct, backgroundColor: barColors[type] || '#94a3b8' }]} />
+        ))}
+      </View>
+      <View style={styles.roadTypeLegend}>
+        {sorted.slice(0, 4).map(([type, pct]) => (
+          <Text key={type} style={styles.roadTypeLegendItem}>
+            {labelMap[type] || type}: {pct}%
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// ── Styles ──────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  column: {
+    marginTop: 12,
+  },
+  columnWeb: {
+    flex: 1,
+    maxWidth: '50%' as any,
