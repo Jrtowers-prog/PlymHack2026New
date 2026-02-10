@@ -138,3 +138,73 @@ router.get('/', async (req, res) => {
       rejectInflight(err);
       if (err.statusCode && err.code) {
         return res.status(err.statusCode).json({
+          error: err.code,
+          message: err.message,
+        });
+      }
+      throw err;
+    } finally {
+      inflight.delete(cacheKey);
+    }
+
+    // Clean stale route cache entries
+    if (routeCache.size > 100) {
+      const now = Date.now();
+      for (const [key, val] of routeCache) {
+        if (now - val.timestamp > CACHE_TTL_MS) routeCache.delete(key);
+      }
+    }
+  } catch (err) {
+    console.error(`[safe-routes] ❌ Error:`, err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'An error occurred while computing safe routes. Please try again.',
+      });
+    }
+  }
+});
+
+/**
+ * Core computation — separated for request coalescing.
+ */
+async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, straightLineKm, startTime) {
+  console.log(`[safe-routes] 🔍 Computing: ${oLatV},${oLngV} → ${dLatV},${dLngV} (${straightLineKm.toFixed(1)} km)`);
+
+  // ── 5. Compute bounding box ─────────────────────────────────────────
+  const bufferM = Math.max(500, Math.min(2000, straightLineDist * 0.4));
+  const bbox = bboxFromPoints(
+    [{ lat: oLatV, lng: oLngV }, { lat: dLatV, lng: dLngV }],
+    bufferM,
+  );
+
+  // ── 6. Fetch ALL data — single Overpass query + crime (2 requests total, not 5)
+  console.log(`[safe-routes] 📡 Fetching data (1 Overpass + 1 Crime API)...`);
+  const t0 = Date.now();
+
+  const [allData, crimes] = await Promise.all([
+    fetchAllSafetyData(bbox),
+    fetchCrimesInBbox(bbox),
+  ]);
+
+  const dataTime = Date.now() - t0;
+  console.log(`[safe-routes] 📡 Data fetched in ${dataTime}ms`);
+
+  const roadCount = allData.roads.elements.filter((e) => e.type === 'way').length;
+  const nodeCount = allData.roads.elements.filter((e) => e.type === 'node').length;
+  console.log(`[safe-routes] 📊 Data: ${roadCount} roads, ${nodeCount} nodes, ${crimes.length} crimes, ${allData.lights.elements.length} lights, ${allData.cctv.elements.length} CCTV`);
+
+  // ── 6b. Extract light & place node positions for POI markers ────────
+  const lightNodes = [];
+  for (const el of allData.lights.elements) {
+    if (el.type === 'node' && el.tags?.highway === 'street_lamp' && el.lat && el.lon) {
+      lightNodes.push({ lat: el.lat, lng: el.lon });
+    }
+  }
+  const placeNodes = [];
+  for (const el of allData.places.elements) {
+    const lat = el.lat || el.center?.lat;
+    const lng = el.lon || el.center?.lon;
+    if (lat && lng) placeNodes.push({ lat, lng });
+  }
+
