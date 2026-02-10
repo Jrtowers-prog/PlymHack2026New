@@ -83,3 +83,68 @@ export function JailLoadingAnimation() {
         />
       </View>
 
+      <Text style={styles.subtitle}>Finding the safest path for you</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  barsContainer: {
+    position: 'absolute',
+    top: 10,
+    left: 20,
+    right: 20,
+    bottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    opacity: 0.06,
+  },
+  bar: {
+    width: 4,
+    height: '100%',
+    backgroundColor: '#1e293b',
+    borderRadius: 2,
+  },
+  iconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+  },
+  icon: {
+    fontSize: 30,
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'center',
+  },
+  progressTrack: {
+    width: '80%',
+    height: 5,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 3,
+  },
+  subtitle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+});
