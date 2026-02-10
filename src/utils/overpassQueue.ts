@@ -108,3 +108,47 @@ export const queueOverpassRequest = async <T = any>(
   body: string,
   timeoutMs = 15_000,
   label = '',
+): Promise<T> => {
+  totalCalls++;
+  const callNum = totalCalls;
+  const logLabel = label ? ` (${label})` : '';
+
+  // Wait for a concurrency slot
+  if (inflight >= MAX_CONCURRENT) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+
+  // Enforce minimum gap between dispatches
+  const elapsed = Date.now() - lastRequestTime;
+  if (elapsed < MIN_GAP_MS) {
+    await new Promise((r) => setTimeout(r, MIN_GAP_MS - elapsed));
+  }
+
+  inflight++;
+  lastRequestTime = Date.now();
+  queuedCalls++;
+  console.log(`[OverpassQ] 🌐 #${callNum}${logLabel} | inflight: ${inflight}/${MAX_CONCURRENT}, total: ${totalCalls}`);
+
+  try {
+    return await fetchWithFallback(body, timeoutMs) as T;
+  } finally {
+    inflight--;
+    // Release next waiter if any
+    if (waiting.length > 0) {
+      const next = waiting.shift()!;
+      next();
+    }
+  }
+};
+
+/**
+ * Convenience: build body from a query string and queue it.
+ */
+export const queueOverpassQuery = async <T = any>(
+  query: string,
+  timeoutMs = 15_000,
+  label = '',
+): Promise<T> => {
+  const body = `data=${encodeURIComponent(query)}`;
+  return queueOverpassRequest<T>(body, timeoutMs, label);
+};
