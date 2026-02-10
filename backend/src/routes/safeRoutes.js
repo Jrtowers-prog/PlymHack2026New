@@ -398,3 +398,53 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
 
 /**
  * Collect POI positions along a route for map display.
+ * Returns CCTV cameras, transit stops, dead-end nodes, street lights,
+ * open places, and crime locations near the route path.
+ */
+function collectRoutePOIs(routePath, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimeNodes) {
+  const pois = { cctv: [], transit: [], deadEnds: [], lights: [], places: [], crimes: [] };
+  const seen = new Set();
+  const NEARBY_M = 30;
+
+  // Collect dead-end nodes on the route
+  for (const nid of routePath) {
+    const deg = nodeDegree.get(nid) || 0;
+    if (deg <= 1) {
+      const n = osmNodes.get(nid);
+      if (n) {
+        const key = `de:${n.lat.toFixed(5)},${n.lng.toFixed(5)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          pois.deadEnds.push({ lat: n.lat, lng: n.lng });
+        }
+      }
+    }
+  }
+
+  // Build route sample points for proximity search
+  const step = Math.max(1, Math.floor(routePath.length / 80));
+  const samplePoints = [];
+  for (let i = 0; i < routePath.length; i += step) {
+    const n = osmNodes.get(routePath[i]);
+    if (n) samplePoints.push(n);
+  }
+
+  // Helper: check if a point is near any sample point on the route
+  function isNearRoute(lat, lng) {
+    for (const sp of samplePoints) {
+      const d = Math.sqrt((lat - sp.lat) ** 2 + (lng - sp.lng) ** 2) * 111320;
+      if (d < NEARBY_M) return true;
+    }
+    return false;
+  }
+
+  // Collect CCTV near route
+  for (const cam of cctvNodes) {
+    if (isNearRoute(cam.lat, cam.lng)) {
+      const key = `cc:${cam.lat.toFixed(5)},${cam.lng.toFixed(5)}`;
+      if (!seen.has(key)) { seen.add(key); pois.cctv.push({ lat: cam.lat, lng: cam.lng }); }
+    }
+  }
+
+  // Collect transit stops near route
+  for (const ts of transitNodes) {
