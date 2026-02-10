@@ -153,3 +153,39 @@ function findNearby(spatialGrid, lat, lng, radiusMetres) {
   return results;
 }
 
+/**
+ * Count items near a point (avoids object creation — faster for density checks).
+ */
+function countNearby(spatialGrid, lat, lng, radiusMetres) {
+  const { grid, cellSize } = spatialGrid;
+  const cellsToCheck = Math.ceil((radiusMetres / 111_320) / cellSize) + 1;
+  const r0 = Math.floor(lat / cellSize);
+  const c0 = Math.floor(lng / cellSize);
+  let count = 0;
+
+  for (let dr = -cellsToCheck; dr <= cellsToCheck; dr++) {
+    for (let dc = -cellsToCheck; dc <= cellsToCheck; dc++) {
+      const key = `${r0 + dr},${c0 + dc}`;
+      const cell = grid.get(key);
+      if (!cell) continue;
+      for (const item of cell) {
+        if (fastDistance(lat, lng, item.lat, item.lng) <= radiusMetres) {
+          count++;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+module.exports = {
+  haversine,
+  fastDistance,
+  bboxFromPoints,
+  decodePolyline,
+  encodePolyline,
+  buildSpatialGrid,
+  findNearby,
+  countNearby,
+  EARTH_RADIUS_M,
+};
