@@ -68,3 +68,22 @@ app.use(express.json({ limit: '10kb' }));
 app.use('/api/places', placesRouter);
 app.use('/api/directions', directionsRouter);
 app.use('/api/staticmap', staticmapRouter);
+app.use('/api/safe-routes', safeRoutesRouter);
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ─── 6. Global error handler ────────────────────────────────────────────────
+app.use((err, _req, res, _next) => {
+  console.error('[server] Unhandled error:', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ─── Start ──────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`✅ Backend proxy running on http://localhost:${PORT}`);
+  console.log(`   CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : '(any)'}`);
+  console.log(`   Rate limit: 100 req / 15 min per IP`);
+});
