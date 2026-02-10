@@ -158,3 +158,53 @@ function buildCrimeCoverage(crimes, bbox) {
     const severity = crime.severity || 0.4;
 
     for (let r = rMin; r <= rMax; r++) {
+      for (let c = cMin; c <= cMax; c++) {
+        const cellLat = bbox.south + (r + 0.5) * COVERAGE_CELL_DEG;
+        const cellLng = bbox.west + (c + 0.5) * COVERAGE_CELL_DEG;
+        const d = fastDistance(crime.lat, crime.lng, cellLat, cellLng);
+        if (d < CRIME_RADIUS) {
+          // Distance-weighted severity: closer crime = more impact
+          const impact = severity / (1 + (d / 30) ** 1.5);
+          grid[r * cols + c] += impact;
+        }
+      }
+    }
+  }
+
+  return { grid, rows, cols, bbox };
+}
+
+/**
+ * Sample a coverage grid at a lat/lng position. Returns 0–1 (clamped).
+ */
+function sampleCoverage(coverage, lat, lng) {
+  const r = Math.floor((lat - coverage.bbox.south) / COVERAGE_CELL_DEG);
+  const c = Math.floor((lng - coverage.bbox.west) / COVERAGE_CELL_DEG);
+  if (r < 0 || r >= coverage.rows || c < 0 || c >= coverage.cols) return 0;
+  return coverage.grid[r * coverage.cols + c];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GRAPH BUILDING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a walking graph from raw OSM data with pre-computed coverage maps.
+ *
+ * Uses coverage maps for lighting and crime (O(1) per edge) instead of
+ * per-edge findNearby calls (which were thousands of spatial lookups).
+ */
+function buildGraph(roadData, lightData, cctvData, placeData, transitData, crimes, bbox) {
+  const hour = new Date().getHours();
+  const weights = getWeights(hour);
+
+  // 1. Index all OSM nodes by ID
+  const osmNodes = new Map();
+  for (const el of roadData.elements) {
+    if (el.type === 'node') {
+      osmNodes.set(el.id, { lat: el.lat, lng: el.lon, id: el.id });
+    }
+  }
+
+  // 2. Build coverage maps (batch pre-computation)
+  const lightNodes = [];
