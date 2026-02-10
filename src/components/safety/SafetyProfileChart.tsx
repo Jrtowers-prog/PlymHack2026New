@@ -323,3 +323,109 @@ export function SafetyProfileChart({
         <Text style={styles.xLabel}>📍 End</Text>
       </View>
     </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#eaecf0',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 1px 4px rgba(0,0,0,0.06)' } : {}),
+    elevation: 2,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  title: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#101828',
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 5,
+  },
+  pillDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  pillText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  pillHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  area: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+  },
+  gridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  gridLabel: {
+    position: 'absolute',
+    left: 4,
+    fontSize: 8,
+    fontWeight: '600',
+    color: '#cbd5e1',
+  },
+  avgLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    borderWidth: 0,
+    borderTopWidth: 1,
+    borderColor: '#94a3b8',
+    borderStyle: 'dashed',
+    zIndex: 3,
+  } as any,
+  avgBadge: {
+    position: 'absolute',
+    right: 4,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    zIndex: 3,
+  },
+  avgText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  xAxis: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingHorizontal: 2,
+  },
+  xLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+});
