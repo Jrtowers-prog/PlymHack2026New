@@ -648,3 +648,353 @@ export default function HomeScreen() {
                 {!isUsingCurrentLocation && (
                   <Pressable
                     style={styles.mapPinButton}
+                    onPress={() => {
+                      setIsUsingCurrentLocation(true);
+                      setManualOrigin(null);
+                      originSearch.clear();
+                      if (location) {
+                        setMapPanTo({ location, key: Date.now() });
+                      }
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Use current location"
+                  >
+                    <Ionicons name="locate-outline" size={20} color="#667085" />
+                  </Pressable>
+                )}
+              </View>
+            </Pressable>
+          </View>
+
+          {/* Divider line connecting the dots */}
+          <View style={styles.inputDivider} />
+
+          {/* Destination Input */}
+          <View style={styles.inputRow}>
+            <View style={styles.inputIconWrap}>
+              <View style={styles.iconPin} />
+            </View>
+            <Pressable
+              style={[styles.inputFieldWrap, focusedField === 'destination' && styles.inputFieldWrapFocused]}
+              onPress={() => destInputRef.current?.focus()}
+            >
+              <TextInput
+                ref={destInputRef}
+                value={manualDest ? (manualDest.name ?? 'Dropped pin') : destSearch.query}
+                onChangeText={(text: string) => {
+                  setManualDest(null);
+                  destSearch.setQuery(text);
+                  setSelectedRouteId(null);
+                }}
+                placeholder="Where to?"
+                placeholderTextColor="#98a2b3"
+                accessibilityLabel="Destination"
+                autoCorrect={false}
+                style={styles.inputField}
+                onFocus={() => { cancelBlurTimer(); setFocusedField('destination'); }}
+                onBlur={handleBlur}
+              />
+              <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
+                {destSearch.status === 'searching' && (
+                  <ActivityIndicator size="small" color="#1570ef" />
+                )}
+                {(destSearch.status === 'found' || manualDest) && (
+                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                )}
+                <Pressable
+                  style={styles.mapPinButton}
+                  onPress={() => {
+                    if (pinMode === 'destination') { setPinMode(null); }
+                    else { setPinMode('destination'); }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Pick on map"
+                >
+                  <Ionicons name="location-outline" size={20} color={pinMode === 'destination' ? '#d92d20' : '#667085'} />
+                </Pressable>
+                {(destSearch.place || manualDest) && (
+                  <Pressable
+                    style={styles.mapPinButton}
+                    onPress={() => {
+                      destSearch.clear();
+                      setManualDest(null);
+                      setSelectedRouteId(null);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear destination"
+                  >
+                    <Ionicons name="close-circle-outline" size={20} color="#98a2b3" />
+                  </Pressable>
+                )}
+              </View>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Search predictions dropdown */}
+        {activePredictions.length > 0 && (
+          <View style={styles.predictionsDropdown}>
+            {activePredictions.map((pred, idx) => (
+              <Pressable
+                key={pred.placeId}
+                style={({ pressed }: { pressed: boolean }) => [
+                  styles.predictionItem,
+                  idx === 0 && styles.predictionItemFirst,
+                  idx === activePredictions.length - 1 && styles.predictionItemLast,
+                  pressed && styles.predictionItemPressed,
+                ]}
+                onPressIn={() => {
+                  // On web, onPressIn fires BEFORE onBlur. Set suppress flag so
+                  // handleBlur knows a prediction tap is in progress.
+                  // On native, onBlur fires first — cancelBlurTimer kills the timer.
+                  suppressBlurRef.current = true;
+                  cancelBlurTimer();
+                }}
+                onPress={() => {
+                  cancelBlurTimer();
+                  suppressBlurRef.current = false;
+                  const field = focusedField ?? lastFocusedFieldRef.current;
+                  if (field === 'origin') {
+                    originSearch.selectPrediction(pred);
+                    setManualOrigin(null);
+                    setIsUsingCurrentLocation(false);
+                    if (pred.location) {
+                      setMapPanTo({ location: pred.location, key: Date.now() });
+                    }
+                  } else {
+                    destSearch.selectPrediction(pred);
+                    setManualDest(null);
+                    if (pred.location) {
+                      setMapPanTo({ location: pred.location, key: Date.now() });
+                    }
+                  }
+                  setSelectedRouteId(null);
+                  originInputRef.current?.blur();
+                  destInputRef.current?.blur();
+                  setFocusedField(null);
+                }}
+              >
+                <View style={styles.predictionIcon}>
+                  <Ionicons name="location-outline" size={18} color="#667085" />
+                </View>
+                <View style={styles.predictionText}>
+                  <Text style={styles.predictionPrimary} numberOfLines={1}>
+                    {pred.primaryText}
+                  </Text>
+                  {pred.secondaryText ? (
+                    <Text style={styles.predictionSecondary} numberOfLines={1}>
+                      {pred.secondaryText}
+                    </Text>
+                  ) : null}
+                </View>
+                {idx === 0 && (
+                  <View style={styles.predictionBadge}>
+                    <Text style={styles.predictionBadgeText}>Top</Text>
+                  </View>
+                )}
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </ScrollView>}
+      
+      {/* Floating AI button above the bottom sheet */}
+      {safetyResult && !isNavActive && routes.length > 0 && (
+        <Animated.View
+          style={[
+            styles.aiFloatingWrap,
+            { bottom: Animated.add(sheetHeight, 12) },
+          ]}
+          pointerEvents="box-none"
+        >
+          <Pressable
+            style={styles.aiFloatingButton}
+            onPress={() => {
+              setShowAIModal(true);
+              if (ai.status === 'idle') ai.ask();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Why is this the safest route"
+          >
+            <Ionicons name="sparkles" size={16} color="#ffffff" />
+            <Text style={styles.aiFloatingText}>Why is this the safest route?</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {/* Bottom Sheet with Results — hidden during navigation */}
+      {(routes.length > 0 || directionsStatus === 'loading') && !isNavActive && (
+        <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
+          <View {...handlePanResponder.panHandlers} style={styles.sheetDragZone}>
+            <View style={styles.sheetHandle} />
+          </View>
+          <View ref={sheetBodyRef} style={{ flex: 1 }}>
+            <ScrollView
+              ref={scrollViewRef}
+              {...bodyPanResponder.panHandlers}
+              style={styles.sheetScroll}
+              contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 24 }]}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={handleSheetScroll}
+              bounces={false}
+            >
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Routes</Text>
+              <Text style={styles.sheetMeta}>
+                {distanceLabel} · {durationLabel}
+              </Text>
+            </View>
+            
+            {directionsStatus === 'loading' && (
+              <JailLoadingAnimation />
+            )}
+            
+            {outOfRange && (
+              <View style={[styles.scoringBanner, { backgroundColor: '#fef2f2' }]}>
+                <Ionicons name="alert-circle" size={18} color="#dc2626" />
+                <Text style={[styles.scoringBannerText, { color: '#dc2626' }]}>
+                  {outOfRangeMessage || 'Destination is out of range (max 20 km).'}
+                </Text>
+              </View>
+            )}
+
+            {directionsError && !outOfRange && <Text style={styles.error}>{directionsError.message}</Text>}
+
+            {/* ── Web: side-by-side layout | Mobile: stacked ── */}
+            <View style={[
+              styles.routeAndSafetyContainer,
+              Platform.OS === 'web' && styles.routeAndSafetyContainerWeb,
+            ]}>
+              {/* ── Left column: Route cards ── */}
+              <View style={[
+                styles.routesColumn,
+                Platform.OS === 'web' && styles.routesColumnWeb,
+              ]}>
+                {(safeRoutes as SafeRoute[]).slice(0, 5).map((route, index) => {
+                  const isSelected = route.id === selectedRouteId;
+                  const isBest = route.isSafest;
+                  const safety = route.safety;
+                  const label = isBest ? 'Safest Route' : `Route ${index + 1}`;
+
+                  return (
+                    <Pressable
+                      key={route.id}
+                      onPress={() => setSelectedRouteId(route.id)}
+                      accessibilityRole="button"
+                      style={[
+                        styles.routeCard,
+                        isSelected && styles.routeCardSelected,
+                        isBest && styles.routeCardBest,
+                      ]}
+                    >
+                      <View style={styles.routeHeader}>
+                        <View style={styles.routeLabelRow}>
+                          {isBest && (
+                            <View style={styles.bestBadge}>
+                              <Text style={styles.bestBadgeTick}>✓</Text>
+                            </View>
+                          )}
+                          <Text
+                            style={[
+                              styles.routeLabel,
+                              isSelected && styles.routeLabelSelected,
+                              isBest && styles.routeLabelBest,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                        </View>
+                        <View style={[styles.scoreChip, { backgroundColor: safety.color + '20' }]}>
+                          <View style={[styles.scoreChipDot, { backgroundColor: safety.color }]} />
+                          <Text style={[styles.scoreChipText, { color: safety.color }]}>
+                            {safety.score}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.routeDetails}>
+                        🚶 {formatDistance(route.distanceMeters)} · {formatDuration(route.durationSeconds)}
+                        {` · ${safety.label}`}
+                      </Text>
+                      {isSelected && (
+                        <Text style={styles.routeDetailsSubtle}>
+                          Main roads: {safety.mainRoadRatio}% · Lighting: {safety.breakdown.lighting}% · CCTV: {safety.breakdown.cctv}%
+                        </Text>
+                      )}
+                    </Pressable>
+                  );
+                })}
+
+                {/* Start Navigation Button */}
+                {selectedRoute && nav.state === 'idle' && (
+                  <Pressable
+                    style={styles.startNavButton}
+                    onPress={nav.start}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start navigation"
+                  >
+                    <Ionicons name="navigate" size={20} color="#ffffff" />
+                    <Text style={styles.startNavButtonText}>Start Navigation</Text>
+                  </Pressable>
+                )}
+              </View>
+
+              {/* ── Right column: Safety parameters ── */}
+              {showSafety && safetyResult && (
+                <View style={[
+                  styles.safetyColumn,
+                  Platform.OS === 'web' && styles.safetyColumnWeb,
+                ]}>
+                  {safetyError && <Text style={styles.error}>{safetyError.message}</Text>}
+
+                  {/* Overall Score — big hero card */}
+                  <View style={[styles.safetyHeroCard, { borderColor: safetyResult.safetyColor + '44' }]}>
+                    <CircleProgress
+                      size={Platform.OS === 'web' ? 64 : 52}
+                      strokeWidth={5}
+                      progress={safetyResult.safetyScore}
+                      color={safetyResult.safetyColor}
+                    />
+                    <Text style={[styles.safetyHeroLabel, { color: safetyResult.safetyColor }]}>
+                      {safetyResult.safetyLabel}
+                    </Text>
+                  </View>
+
+                  {/* 2×2 grid of key metrics */}
+                  <View style={styles.safetyGridWeb}>
+                    {/* Crime */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#ef444444' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#ef4444' }]}>🔴</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#ef4444' }]}>{safetyResult.crimeCount}</Text>
+                        <Text style={styles.safetyGridLabel}>Crimes</Text>
+                      </View>
+                    </View>
+                    {/* Lights */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#eab30844' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#eab308' }]}>💡</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#eab308' }]}>{safetyResult.streetLights}</Text>
+                        <Text style={styles.safetyGridLabel}>Lights</Text>
+                      </View>
+                    </View>
+                    {/* CCTV */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#6366f144' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#6366f1' }]}>📷</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#6366f1' }]}>{selectedSafeRoute?.routeStats?.cctvCamerasNearby ?? 0}</Text>
+                        <Text style={styles.safetyGridLabel}>CCTV</Text>
+                      </View>
+                    </View>
+                    {/* Open Places */}
+                    <View style={[styles.safetyGridCard, { borderColor: '#22c55e44' }]}>
+                      <Text style={[styles.safetyGridIcon, { color: '#22c55e' }]}>🏪</Text>
+                      <View>
+                        <Text style={[styles.safetyGridValue, { color: '#22c55e' }]}>{safetyResult.openPlaces}</Text>
+                        <Text style={styles.safetyGridLabel}>Open</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
