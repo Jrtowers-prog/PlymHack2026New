@@ -438,3 +438,92 @@ export const fetchDirections = async (
   // Fire offset requests + driving request concurrently
   const drivingUrl = `${BACKEND_API_BASE}/api/directions?origin_lat=${origin.latitude}&origin_lng=${origin.longitude}&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}&mode=driving`;
 
+  const [extras, drivingRoutes] = await Promise.all([
+    // Offset waypoints
+    Promise.all(
+      offsets.map((wp, i) =>
+        directionsRateLimiter.execute(() =>
+          fetchJson<GoogleDirectionsResponse>(
+            `${base}&waypoints=${encodeURIComponent(`via:${wp.latitude},${wp.longitude}`)}`
+          )
+        )
+          .then((d) => parseDirectionsResponse(d, (i + 1) * 10))
+          .catch(() => [] as DirectionsRoute[])
+      )
+    ).then((arr) => arr.flat()),
+
+    // Drive-then-walk main-road discovery
+    directionsRateLimiter.execute(() => fetchJson<GoogleDirectionsResponse>(drivingUrl))
+      .then(async (drivingData) => {
+        if (drivingData.status !== 'OK') return [];
+        const drivePath = parseDirectionsResponse(drivingData, 0)[0]?.path ?? [];
+        if (drivePath.length < 6) return [];
+        // Sample points at 25 %, 50 %, 75 % of the driving path
+        const viaPoints = [0.25, 0.5, 0.75].map((frac) => {
+          const idx = Math.min(Math.floor(frac * drivePath.length), drivePath.length - 1);
+          return drivePath[idx];
+        });
+        const viaStr = viaPoints.map((p) => `via:${p.latitude},${p.longitude}`).join('|');
+        return directionsRateLimiter.execute(() =>
+          fetchJson<GoogleDirectionsResponse>(
+            `${base}&waypoints=${encodeURIComponent(viaStr)}`
+          )
+        ).then((d) => parseDirectionsResponse(d, 200)).catch(() => [] as DirectionsRoute[]);
+      })
+      .catch(() => [] as DirectionsRoute[]),
+  ]);
+
+  // 3. Merge, deduplicate
+  let merged = deduplicateRoutes([...baseRoutes, ...extras, ...drivingRoutes]);
+
+  // 4. REMOVED — retry offsets generated up to 8 extra Directions API calls
+  //    per search. With steps 1-3 we typically get 3-5 diverse routes already.
+
+  // 5. Drop routes that detour too far, sort sensibly
+  const shortest = Math.min(...merged.map((r) => r.distanceMeters));
+  const reasonable = merged.filter((r) => r.distanceMeters <= shortest * 1.6);
+  reasonable.sort((a, b) => {
+    const distDiff = a.distanceMeters - b.distanceMeters;
+    if (Math.abs(distDiff) > shortest * 0.05) return distDiff;
+    return mainRoadScore(b.summary) - mainRoadScore(a.summary);
+  });
+  const result = reasonable.slice(0, 5).map((r, i) => ({ ...r, id: `route-${i}` }));
+
+  // Cache the result
+  directionsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  return result;
+};
+
+export const buildStaticMapUrl = (params: {
+  origin?: LatLng | null;
+  destination?: LatLng | null;
+  encodedPolyline?: string | null;
+  width: number;
+  height: number;
+  scale?: number;
+}): string | null => {
+  const { origin, destination, encodedPolyline, width, height, scale = 2 } = params;
+
+  const queryParts: string[] = [
+    `width=${Math.max(1, Math.round(width))}`,
+    `height=${Math.max(1, Math.round(height))}`,
+    `scale=${scale}`,
+  ];
+
+  if (origin) {
+    queryParts.push(`origin_lat=${origin.latitude}`);
+    queryParts.push(`origin_lng=${origin.longitude}`);
+  }
+
+  if (destination) {
+    queryParts.push(`dest_lat=${destination.latitude}`);
+    queryParts.push(`dest_lng=${destination.longitude}`);
+  }
+
+  if (encodedPolyline) {
+    queryParts.push(`polyline=${encodeURIComponent(encodedPolyline)}`);
+  }
+
+  return `${BACKEND_API_BASE}/api/staticmap?${queryParts.join('&')}`;
+};
+
