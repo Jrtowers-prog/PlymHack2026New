@@ -50,3 +50,31 @@ function validateLatitude(lat) {
 }
 
 /**
+ * Validate longitude value
+ */
+function validateLongitude(lng) {
+  const n = Number(lng);
+  if (isNaN(n) || n < -180 || n > 180) {
+    return { valid: false, error: `Invalid longitude: ${lng}` };
+  }
+  return { valid: true, value: n };
+}
+
+/**
+ * Validate a positive number (e.g. radius)
+ */
+function validatePositiveNumber(value, name, max = Infinity) {
+  const n = Number(value);
+  if (isNaN(n) || n <= 0 || n > max) {
+    return { valid: false, error: `Invalid ${name}: ${value}` };
+  }
+  return { valid: true, value: n };
+}
+
+module.exports = {
+  validateTextInput,
+  validatePlaceId,
+  validateLatitude,
+  validateLongitude,
+  validatePositiveNumber,
+};
