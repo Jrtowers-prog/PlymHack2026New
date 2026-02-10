@@ -68,3 +68,38 @@ export class RateLimiter {
     }
   }
 
+  private cleanup(): void {
+    const cutoff = Date.now() - this.windowMs;
+    while (this.timestamps.length > 0 && this.timestamps[0] < cutoff) {
+      this.timestamps.shift();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-configured rate limiters for free APIs (OSRM, Nominatim)
+// ---------------------------------------------------------------------------
+
+/** OSRM Directions: max 30 requests per 10 seconds (generous, OSRM is fast) */
+export const directionsRateLimiter = new RateLimiter({
+  maxCalls: 30,
+  windowMs: 10_000,
+});
+
+/** Nominatim Autocomplete: max 10 requests per second */
+export const placesAutocompleteRateLimiter = new RateLimiter({
+  maxCalls: 10,
+  windowMs: 1_000,
+});
+
+/** Nominatim Details: max 10 requests per second */
+export const placesDetailsRateLimiter = new RateLimiter({
+  maxCalls: 10,
+  windowMs: 1_000,
+});
+
+/** General API rate limiter: max 100 requests per minute */
+export const googleApiRateLimiter = new RateLimiter({
+  maxCalls: 100,
+  windowMs: 60_000,
+});
