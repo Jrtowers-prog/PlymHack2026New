@@ -21,6 +21,32 @@ export const formatDuration = (seconds: number): string => {
 };
 
 /** Strip HTML tags from instruction strings. */
-
+export const stripHtml = (html: string): string =>
   html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+
+
+export const maneuverIcon = (maneuver?: string): string => {
+  switch (maneuver) {
+    case 'turn-left':
+      return 'arrow-back';
+    case 'turn-right':
+      return 'arrow-forward';
+    case 'turn-slight-left':
+      return 'arrow-back';
+    case 'turn-slight-right':
+      return 'arrow-forward';
+    case 'turn-sharp-left':
+      return 'return-down-back';
+    case 'turn-sharp-right':
+      return 'return-down-forward';
+    case 'uturn-left':
+    case 'uturn-right':
+      return 'refresh';
+    case 'roundabout-left':
+    case 'roundabout-right':
+      return 'sync';
+    default:
+      return 'arrow-up';
+  }
+};
 
