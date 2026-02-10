@@ -278,3 +278,113 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
   // 5. Detect dead-end nodes (degree = 1)
   const nodeDegree = new Map();
 
+  // 6. Build edges from ways
+  const edges = [];
+  const adjacency = new Map();
+
+  for (const el of roadData.elements) {
+    if (el.type !== 'way' || !el.nodes || !el.tags?.highway) continue;
+    const highway = el.tags.highway;
+    if (!WALKABLE_HIGHWAYS.has(highway)) continue;
+
+    const wayTags = el.tags;
+    const nodeIds = el.nodes;
+
+    for (let i = 0; i < nodeIds.length - 1; i++) {
+      const nA = osmNodes.get(nodeIds[i]);
+      const nB = osmNodes.get(nodeIds[i + 1]);
+      if (!nA || !nB) continue;
+
+      const dist = fastDistance(nA.lat, nA.lng, nB.lat, nB.lng);
+      if (dist < 0.5) continue;
+
+      const midLat = (nA.lat + nB.lat) / 2;
+      const midLng = (nA.lng + nB.lng) / 2;
+
+      // ── Score each factor ──
+
+      // Road type
+      const roadScore = ROAD_TYPE_SCORES[highway] || 0.3;
+
+      // Lighting — sample from pre-computed coverage map (O(1)!)
+      let lightScore = sampleCoverage(lightCoverage, midLat, midLng);
+      if (wayTags.lit === 'yes') lightScore = Math.max(lightScore, 0.85);
+      lightScore = Math.min(1.0, lightScore);
+
+      // Crime — sample from severity-weighted coverage map
+      const crimeDensity = sampleCoverage(crimeCoverage, midLat, midLng);
+      const crimeScore = Math.max(0, 1.0 - Math.min(1.0, crimeDensity * 0.5));
+
+      // CCTV — nearby surveillance cameras
+      const nearbyCctv = countNearby(cctvGrid, midLat, midLng, 80);
+      const cctvScore = Math.min(1.0, nearbyCctv * 0.4);
+
+      // Open places — activity within 80m
+      const nearbyPlaces = countNearby(placeGrid, midLat, midLng, 80);
+      // At night, apply a discount — many places will be closed
+      const nightDiscount = (hour >= 22 || hour < 6) ? 0.4 : (hour >= 18 ? 0.7 : 1.0);
+      const placeScore = Math.min(1.0, nearbyPlaces * 0.15 * nightDiscount);
+
+      // Foot traffic proxy
+      const nearbyTransit = countNearby(transitGrid, midLat, midLng, 150);
+      let trafficScore = (ROAD_TYPE_SCORES[highway] || 0.3) * 0.7 +
+        Math.min(0.3, nearbyTransit * 0.1) + 0.1;
+      if (wayTags.sidewalk && wayTags.sidewalk !== 'no') {
+        trafficScore = Math.min(1.0, trafficScore + 0.15);
+      }
+      trafficScore = Math.min(1.0, trafficScore);
+
+      // Surface penalty — unpaved is scarier at night
+      const surface = wayTags.surface;
+      let surfacePenalty = 0;
+      if (surface === 'gravel' || surface === 'dirt' || surface === 'grass' ||
+          surface === 'mud' || surface === 'sand' || surface === 'earth') {
+        surfacePenalty = 0.1;
+      }
+
+      // ── Combine into single safety score ──
+      const safetyScore = Math.max(0.01,
+        weights.roadType * roadScore +
+        weights.lighting * lightScore +
+        weights.crimeRate * crimeScore +
+        weights.cctv * cctvScore +
+        weights.openPlaces * placeScore +
+        weights.gpsTraffic * trafficScore -
+        surfacePenalty
+      );
+
+      // Extra metadata for frontend
+      const hasSidewalk = !!(wayTags.sidewalk && wayTags.sidewalk !== 'no');
+      const surfaceType = surface || 'paved';
+      const roadName = wayTags.name || '';
+
+      const edgeIdx = edges.length;
+      edges.push({
+        idx: edgeIdx,
+        from: nodeIds[i],
+        to: nodeIds[i + 1],
+        distance: dist,
+        highway,
+        safetyScore,
+        roadScore,
+        lightScore,
+        crimeScore,
+        cctvScore,
+        placeScore,
+        trafficScore,
+        penalty: 0,
+        hasSidewalk,
+        surfaceType,
+        roadName,
+        nearbyCctvCount: nearbyCctv,
+        nearbyTransitCount: nearbyTransit,
+        surfacePenalty,
+      });
+
+      // Bidirectional adjacency
+      if (!adjacency.has(nodeIds[i])) adjacency.set(nodeIds[i], []);
+      if (!adjacency.has(nodeIds[i + 1])) adjacency.set(nodeIds[i + 1], []);
+      adjacency.get(nodeIds[i]).push({ edgeIdx, neighborId: nodeIds[i + 1] });
+      adjacency.get(nodeIds[i + 1]).push({ edgeIdx, neighborId: nodeIds[i] });
+
+      // Track node degree for dead-end detection
