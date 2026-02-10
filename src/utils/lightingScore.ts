@@ -133,3 +133,163 @@ export const lampCountMultiplier = (data: LightingData): number => {
  * Calculate lighting score for a segment
  * Combines OSM explicit tags with road type heuristics
  */
+export const calculateLightingScore = (
+  lightingDataArray: LightingData[],
+  currentTime: Date = new Date(),
+): SegmentLightingScore => {
+  const isNight = isNighttime(currentTime);
+
+  if (lightingDataArray.length === 0) {
+    // No data - use conservative estimate
+    return {
+      score: isNight ? 0.3 : 0.7, // During night, be pessimistic
+      dayScore: 0.7,
+      nightScore: 0.3,
+      hasLighting: false,
+      confidence: 0.2,
+      lightingData: [],
+    };
+  }
+
+  // Weight explicit OSM tags more heavily than heuristics
+  let explicitScore = 0;
+  let heuristicScore = 0;
+  let explicitCount = 0;
+  let heuristicCount = 0;
+
+  lightingDataArray.forEach((data) => {
+    const baseLitScore = data.isLit ? 1 : 0;
+
+    // Apply lamp quality and count multipliers for lit fixtures
+    const qualityMult = data.isLit ? lampQualityMultiplier(data) : 1;
+    const countMult   = data.isLit ? lampCountMultiplier(data) : 1;
+    // Effective score capped at 1.0 — the multipliers just reward better lighting
+    const litScore = Math.min(1, baseLitScore * qualityMult * countMult);
+
+    if (data.source === 'osm_explicit') {
+      explicitScore += litScore;
+      explicitCount += 1;
+    } else {
+      heuristicScore += litScore;
+      heuristicCount += 1;
+    }
+  });
+
+  // Calculate weighted average
+  let finalScore = 0;
+  if (explicitCount > 0 && heuristicCount > 0) {
+    finalScore = (explicitScore / explicitCount) * 0.8 + (heuristicScore / heuristicCount) * 0.2;
+  } else if (explicitCount > 0) {
+    finalScore = explicitScore / explicitCount;
+  } else {
+    finalScore = heuristicScore / heuristicCount;
+  }
+
+  // Calculate average confidence
+  const avgConfidence =
+    lightingDataArray.reduce((sum, d) => sum + d.confidence, 0) / lightingDataArray.length;
+
+  // During daytime, lighting is less critical
+  const dayScore = 0.7 + finalScore * 0.3; // Minimum 0.7 even if unlit
+  // During nighttime, lighting is critical
+  const nightScore = finalScore;
+
+  return {
+    score: isNight ? nightScore : dayScore,
+    dayScore,
+    nightScore,
+    hasLighting: finalScore >= 0.6,
+    confidence: avgConfidence,
+    lightingData: lightingDataArray,
+  };
+};
+
+/**
+ * Find nearby lighting data for a segment
+ * This would be called with data fetched from OSM
+ */
+export const getLightingDataForSegment = (
+  segmentMidpoint: LatLng,
+  nearbyWays: Array<{
+    id: number;
+    highway: string;
+    lit: 'yes' | 'no' | 'unknown';
+    nodes: LatLng[];
+    tags?: Record<string, string>;
+  }>,
+  radiusMeters: number = 30,
+): LightingData[] => {
+  const lightingDataArray: LightingData[] = [];
+
+  nearbyWays.forEach((way) => {
+    // Check if this way is close to the segment
+    let isClose = false;
+
+    for (const node of way.nodes) {
+      const distance = calculateDistance(segmentMidpoint, node);
+      if (distance <= radiusMeters) {
+        isClose = true;
+        break;
+      }
+    }
+
+    if (!isClose) return;
+
+    // Extract detailed lamp tags from OSM
+    const tags = way.tags ?? {};
+    const lampType = tags['lamp_type'] ?? tags['lamp'] ?? undefined;
+    const lightMethod = tags['light:method'] ?? tags['light:type'] ?? undefined;
+    const lightCountRaw = tags['light:count'];
+    const lightCount = lightCountRaw ? parseInt(lightCountRaw, 10) || undefined : undefined;
+    const lightDirection = tags['light:direction'] ?? undefined;
+
+    // Determine if it's lit
+    let isLit = false;
+    let confidence = 0.5;
+    let source: LightingData['source'] = 'osm_inferred';
+
+    if (way.lit === 'yes') {
+      isLit = true;
+      confidence = 1.0;
+      source = 'osm_explicit';
+    } else if (way.lit === 'no') {
+      isLit = false;
+      confidence = 1.0;
+      source = 'osm_explicit';
+    } else {
+      // Use road type heuristic
+      isLit = roadTypeToLightingLikelihood(way.highway) >= 0.5;
+      confidence = roadTypeToLightingLikelihood(way.highway) / 1.5;
+      source = 'road_type_heuristic';
+    }
+
+    lightingDataArray.push({
+      isLit,
+      confidence,
+      roadType: way.highway,
+      source,
+      lampType,
+      lightMethod,
+      lightCount,
+      lightDirection,
+    });
+  });
+
+  return lightingDataArray;
+};
+
+/**
+ * Example: How to use this in the app
+ * 
+ * const lightingData = getLightingDataForSegment(
+ *   segment.midpointCoord,
+ *   osmWaysData,
+ *   30
+ * );
+ * 
+ * const lightingScore = calculateLightingScore(lightingData);
+ * // At night: score = 0.8 (well lit)
+ * // During day: score = 0.95 (lighting less critical)
+ * 
+ * const { color, riskLevel } = scoreToColor(lightingScore.score);
+ */
