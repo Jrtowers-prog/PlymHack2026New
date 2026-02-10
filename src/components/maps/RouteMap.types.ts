@@ -1,6 +1,8 @@
 import type { RoadLabel, RouteSegment, SafetyMarker } from '@/src/services/safetyMapData';
 import type { DirectionsRoute, LatLng } from '@/src/types/google';
 
+export type MapType = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
+
 export type RouteMapProps = {
   origin: LatLng | null;
   destination: LatLng | null;
@@ -17,6 +19,8 @@ export type RouteMapProps = {
   navigationLocation?: LatLng | null;
   /** User heading in degrees (0 = north) */
   navigationHeading?: number | null;
+  /** Map display type (roadmap, satellite, hybrid, terrain) */
+  mapType?: MapType;
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;
