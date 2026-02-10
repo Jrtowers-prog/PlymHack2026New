@@ -998,3 +998,403 @@ export default function HomeScreen() {
                 </View>
               )}
             </View>
+
+            {/* ── Below the side-by-side: Detailed cards (full width) ── */}
+            {showSafety && safetyResult && (
+              <>
+                  {/* Row 2: Detailed parameter cards — why is this route safer? */}
+                  {selectedSafeRoute?.routeStats && (
+                    <>
+                    <Text style={styles.sectionLabel}>Route Details</Text>
+                    <View style={styles.safetyCardsRow}>
+                      {/* Road Type */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🛣️</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.safety.mainRoadRatio}%</Text>
+                        <Text style={styles.detailLabel}>Main Roads</Text>
+                      </View>
+                      {/* Sidewalks */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🚶</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.routeStats.sidewalkPct}%</Text>
+                        <Text style={styles.detailLabel}>Sidewalks</Text>
+                      </View>
+                      {/* Transit Stops */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>🚏</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.routeStats.transitStopsNearby}</Text>
+                        <Text style={styles.detailLabel}>Transit</Text>
+                      </View>
+                    </View>
+                    <View style={styles.safetyCardsRow}>
+                      {/* Dead Ends */}
+                      <View style={[styles.detailCard, selectedSafeRoute.routeStats.deadEnds > 0 && styles.detailCardWarning]}>
+                        <Text style={styles.detailIcon}>⛔</Text>
+                        <Text style={[styles.detailValue, selectedSafeRoute.routeStats.deadEnds > 0 && { color: '#f97316' }]}>
+                          {selectedSafeRoute.routeStats.deadEnds}
+                        </Text>
+                        <Text style={styles.detailLabel}>Dead Ends</Text>
+                      </View>
+                      {/* Surface */}
+                      <View style={[styles.detailCard, selectedSafeRoute.routeStats.unpavedPct > 0 && styles.detailCardWarning]}>
+                        <Text style={styles.detailIcon}>🪨</Text>
+                        <Text style={[styles.detailValue, selectedSafeRoute.routeStats.unpavedPct > 0 && { color: '#f97316' }]}>
+                          {selectedSafeRoute.routeStats.unpavedPct}%
+                        </Text>
+                        <Text style={styles.detailLabel}>Unpaved</Text>
+                      </View>
+                      {/* Foot Traffic (from breakdown) */}
+                      <View style={[styles.detailCard]}>
+                        <Text style={styles.detailIcon}>👣</Text>
+                        <Text style={styles.detailValue}>{selectedSafeRoute.safety.breakdown.traffic}%</Text>
+                        <Text style={styles.detailLabel}>Foot Traffic</Text>
+                      </View>
+                    </View>
+
+                    {/* Road type breakdown */}
+                    {Object.keys(selectedSafeRoute.safety.roadTypes).length > 0 && (
+                      <View style={styles.roadTypeBreakdown}>
+                        <Text style={styles.roadTypeTitle}>Road Type Breakdown</Text>
+                        <View style={styles.roadTypeBar}>
+                          {Object.entries(selectedSafeRoute.safety.roadTypes)
+                            .sort(([, a], [, b]) => (b as number) - (a as number))
+                            .map(([type, pct]) => {
+                              const colors: Record<string, string> = {
+                                primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
+                                residential: '#93c5fd', footway: '#fbbf24', path: '#f59e0b',
+                                steps: '#f97316', pedestrian: '#34d399', service: '#94a3b8',
+                                cycleway: '#a78bfa', living_street: '#67e8f9', track: '#d97706',
+                                trunk: '#1d4ed8', unclassified: '#cbd5e1',
+                              };
+                              return (
+                                <View key={type} style={[styles.roadTypeSegment, {
+                                  flex: pct as number,
+                                  backgroundColor: colors[type] || '#94a3b8',
+                                }]} />
+                              );
+                            })}
+                        </View>
+                        <View style={styles.roadTypeLegend}>
+                          {Object.entries(selectedSafeRoute.safety.roadTypes)
+                            .sort(([, a], [, b]) => (b as number) - (a as number))
+                            .slice(0, 4)
+                            .map(([type, pct]) => {
+                              const labels: Record<string, string> = {
+                                primary: 'Main', secondary: 'Secondary', tertiary: 'Minor',
+                                residential: 'Residential', footway: 'Path', path: 'Path',
+                                steps: 'Steps', pedestrian: 'Pedestrian', service: 'Service',
+                                cycleway: 'Cycleway', living_street: 'Living St', track: 'Track',
+                                trunk: 'Highway', unclassified: 'Other',
+                              };
+                              return (
+                                <Text key={type} style={styles.roadTypeLegendItem}>
+                                  {labels[type] || type}: {pct}%
+                                </Text>
+                              );
+                            })}
+                        </View>
+                      </View>
+                    )}
+                    </>
+                  )}
+
+                {/* Interactive safety profile chart */}
+                {selectedSafeRoute?.enrichedSegments && selectedSafeRoute.enrichedSegments.length > 1 && (
+                  <SafetyProfileChart
+                    segments={routeSegments}
+                    enrichedSegments={selectedSafeRoute.enrichedSegments}
+                    roadNameChanges={selectedSafeRoute.routeStats?.roadNameChanges ?? []}
+                    totalDistance={selectedSafeRoute.distanceMeters}
+                  />
+                )}
+              </>
+            )}
+          </ScrollView>
+          </View>
+        </Animated.View>
+      )}
+      {/* ── AI Explanation Modal ── */}
+      <Modal
+        visible={showAIModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setShowAIModal(false); ai.reset(); }}
+      >
+        <View style={styles.aiOverlay}>
+          <View style={styles.aiCard}>
+            <View style={styles.aiCardHeader}>
+              <View style={styles.aiCardTitleRow}>
+                <Ionicons name="sparkles" size={20} color="#7c3aed" />
+                <Text style={styles.aiCardTitle}>AI Route Insights</Text>
+              </View>
+              <Pressable onPress={() => { setShowAIModal(false); ai.reset(); }}>
+                <Ionicons name="close" size={22} color="#667085" />
+              </Pressable>
+            </View>
+
+            {ai.status === 'loading' && (
+              <View style={styles.aiLoading}>
+                <ActivityIndicator size="small" color="#7c3aed" />
+                <Text style={styles.aiLoadingText}>Thinking…</Text>
+              </View>
+            )}
+
+            {ai.status === 'ready' && ai.explanation && (
+              <ScrollView style={styles.aiBody} showsVerticalScrollIndicator={false}>
+                <Text style={styles.aiExplanation}>{ai.explanation}</Text>
+              </ScrollView>
+            )}
+
+            {ai.status === 'error' && (
+              <View style={styles.aiErrorWrap}>
+                <Text style={styles.aiErrorText}>{ai.error}</Text>
+                <Pressable style={styles.aiRetryButton} onPress={ai.ask}>
+                  <Text style={styles.aiRetryText}>Retry</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {showOnboarding ? (
+        <View style={styles.onboardingOverlay}>
+          <View style={styles.onboardingCard}>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={styles.onboardingLogo}
+              resizeMode="contain"
+              accessibilityLabel="Safe Night Home logo"
+            />
+            <Text style={styles.onboardingTitle}>Safe Night Home</Text>
+            <Text style={styles.onboardingBody}>
+              We use your location to plan walking routes. Results are guidance only and do not
+              guarantee safety.
+            </Text>
+            {onboardingError ? (
+              <Text style={styles.error}>{onboardingError.message}</Text>
+            ) : null}
+            <Pressable
+              style={styles.onboardingButton}
+              onPress={async () => {
+                await accept();
+                setShowOnboarding(false);
+                refreshLocation();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Enable location"
+            >
+              <Text style={styles.onboardingButtonText}>Enable location</Text>
+            </Pressable>
+            <Pressable
+              style={styles.onboardingSecondaryButton}
+              onPress={() => setShowOnboarding(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Maybe later"
+            >
+              <Text style={styles.onboardingSecondaryText}>Maybe later</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {/* ── Navigation Turn-by-turn Overlay ── */}
+      {isNavActive && (
+        <View style={[styles.navOverlay, { pointerEvents: 'box-none' }]}>
+          {/* Instruction card */}
+          <View style={[styles.navInstructionCard, { marginTop: insets.top + 8 }]}>
+            <View style={styles.navIconRow}>
+              <Ionicons
+                name={maneuverIcon(nav.currentStep?.maneuver) as any}
+                size={28}
+                color="#1570EF"
+              />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.navDistance}>
+                  {nav.distanceToNextTurn < 1000
+                    ? `${nav.distanceToNextTurn} m`
+                    : `${(nav.distanceToNextTurn / 1000).toFixed(1)} km`}
+                </Text>
+                <Text style={styles.navInstruction} numberOfLines={2}>
+                  {stripHtml(nav.currentStep?.instruction ?? 'Continue on route')}
+                </Text>
+              </View>
+            </View>
+            {nav.nextStep && (
+              <Text style={styles.navThen} numberOfLines={1}>
+                Then: {stripHtml(nav.nextStep.instruction)}
+              </Text>
+            )}
+          </View>
+
+          {/* Bottom bar: remaining info + stop */}
+          <View style={[styles.navBottomBar, { marginBottom: insets.bottom + 8 }]}>
+            <View>
+              <Text style={styles.navRemaining}>
+                {formatDistance(nav.remainingDistance)} · {formatDuration(nav.remainingDuration)}
+              </Text>
+              {nav.state === 'off-route' && (
+                <Text style={styles.navOffRoute}>Off route — rerouting…</Text>
+              )}
+            </View>
+            <Pressable style={styles.navStopButton} onPress={nav.stop}>
+              <Ionicons name="stop-circle" size={20} color="#ffffff" />
+              <Text style={styles.navStopText}>Stop</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {nav.state === 'arrived' && (
+        <View style={[styles.navArrivedBanner, { bottom: insets.bottom + 16 }]}>
+          <Ionicons name="checkmark-circle" size={28} color="#22c55e" />
+          <Text style={styles.navArrivedText}>You have arrived!</Text>
+          <Pressable style={styles.navDismissButton} onPress={nav.stop}>
+            <Text style={styles.navDismissText}>Done</Text>
+          </Pressable>
+        </View>
+      )}
+
+    </View>
+  );
+}
+
+// ── Circular progress indicator for safety score ──
+function CircleProgress({
+  size,
+  strokeWidth,
+  progress,
+  color,
+}: {
+  size: number;
+  strokeWidth: number;
+  progress: number;
+  color: string;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const innerSize = size - strokeWidth * 2;
+  const clamped = Math.max(0, Math.min(100, progress));
+  // For the rotation-based approach: 0-50% = right half, 50-100% = both halves
+  const isMoreThanHalf = clamped > 50;
+  const rightRotation = isMoreThanHalf ? 180 : (clamped / 50) * 180;
+  const leftRotation = isMoreThanHalf ? ((clamped - 50) / 50) * 180 : 0;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      {/* Background circle */}
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: strokeWidth,
+          borderColor: '#e5e7eb',
+          position: 'absolute',
+        }}
+      />
+      {/* Right half */}
+      <View style={{ position: 'absolute', width: size, height: size, overflow: 'hidden' }}>
+        <View
+          style={{
+            position: 'absolute',
+            width: size / 2,
+            height: size,
+            right: 0,
+            overflow: 'hidden',
+          }}
+        >
+          <View
+            style={{
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderLeftColor: 'transparent',
+              borderBottomColor: 'transparent',
+              transform: [{ rotate: `${rightRotation}deg` }],
+              position: 'absolute',
+              right: 0,
+            }}
+          />
+        </View>
+      </View>
+      {/* Left half (only when > 50%) */}
+      {isMoreThanHalf && (
+        <View style={{ position: 'absolute', width: size, height: size, overflow: 'hidden' }}>
+          <View
+            style={{
+              position: 'absolute',
+              width: size / 2,
+              height: size,
+              left: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <View
+              style={{
+                width: size,
+                height: size,
+                borderRadius: size / 2,
+                borderWidth: strokeWidth,
+                borderColor: color,
+                borderRightColor: 'transparent',
+                borderTopColor: 'transparent',
+                transform: [{ rotate: `${leftRotation}deg` }],
+                position: 'absolute',
+                left: 0,
+              }}
+            />
+          </View>
+        </View>
+      )}
+      {/* Center label */}
+      <Text style={{ fontSize: size * 0.26, fontWeight: '800', color }}>{clamped}</Text>
+    </View>
+  );
+}
+
+// ── Animated "Jailing Criminals" Loading Screen ──────────────────────────────
+const LOADING_STAGES = [
+  { icon: '🔍', text: 'Scanning the streets…' },
+  { icon: '🗺️', text: 'Mapping every dark alley…' },
+  { icon: '💡', text: 'Counting street lights…' },
+  { icon: '📹', text: 'Locating CCTV cameras…' },
+  { icon: '🚨', text: 'Checking crime reports…' },
+  { icon: '🔒', text: 'Locking down unsafe zones…' },
+  { icon: '👮', text: 'Dispatching safety patrol…' },
+  { icon: '⛓️', text: 'Jailing the criminals…' },
+  { icon: '🛡️', text: 'Building your safe route…' },
+  { icon: '✅', text: 'Almost there…' },
+];
+
+function JailLoadingAnimation() {
+  const [stageIdx, setStageIdx] = useState(0);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const barWidth = useRef(new Animated.Value(0)).current;
+  const bounceAnim = useRef(new Animated.Value(0)).current;
+
+  // Cycle through stages
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Fade out
+      Animated.timing(fadeAnim, {
+        toValue: 0, duration: 150, useNativeDriver: true,
+      }).start(() => {
+        setStageIdx((prev) => (prev + 1) % LOADING_STAGES.length);
+        // Fade in
+        Animated.timing(fadeAnim, {
+          toValue: 1, duration: 200, useNativeDriver: true,
+        }).start();
+      });
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Progress bar animation
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(barWidth, { toValue: 1, duration: 3000, useNativeDriver: false }),
+        Animated.timing(barWidth, { toValue: 0, duration: 0, useNativeDriver: false }),
+      ]),
