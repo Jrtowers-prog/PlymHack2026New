@@ -48,3 +48,48 @@ const pruneCache = () => {
   if (nearbyCache.size > MAX_CACHE_SIZE) {
     const entries = [...nearbyCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
     for (let i = 0; i < entries.length / 2; i++) nearbyCache.delete(entries[i][0]);
+  }
+};
+
+// ─── GET /api/places/nearby ──────────────────────────────────────────────────
+router.get('/', nearbyLimiter, async (req, res) => {
+  try {
+    const latResult = validateLatitude(req.query.lat);
+    const lngResult = validateLongitude(req.query.lng);
+    if (!latResult.valid) return res.status(400).json({ error: latResult.error });
+    if (!lngResult.valid) return res.status(400).json({ error: lngResult.error });
+
+    let radius = 200;
+    if (req.query.radius) {
+      const radiusResult = validatePositiveNumber(req.query.radius, 'radius', 500);
+      if (radiusResult.valid) radius = radiusResult.value;
+    }
+
+    pruneCache();
+    const ck = cacheKey(latResult.value, lngResult.value, radius);
+    const cached = nearbyCache.get(ck);
+    if (cached) {
+      backendCacheHits++;
+      totalRequests++;
+      console.log(`[places/nearby] ✅ Cache HIT for ${ck} | Totals: ${totalRequests} requests, ${overpassCalls} Overpass calls, ${backendCacheHits} cache hits`);
+      return res.json(cached.data);
+    }
+
+    // Build Overpass query for amenities, shops, leisure places
+    const around = `(around:${radius},${latResult.value},${lngResult.value})`;
+    const query = `[out:json][timeout:10];(
+      node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre"]${around};
+      node["shop"]${around};
+      node["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};
+      way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre"]${around};
+      way["shop"]${around};
+    );out center tags qt 50;`;
+
+    const response = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(query)}`,
+    });
+
+    const data = await response.json();
+    overpassCalls++;
