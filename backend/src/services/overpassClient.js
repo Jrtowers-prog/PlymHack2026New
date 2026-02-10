@@ -143,3 +143,68 @@ async function fetchAllSafetyData(bbox) {
   // Evict stale entries
   if (dataCache.size > 50) {
     const now = Date.now();
+    for (const [k, v] of dataCache) {
+      if (now - v.timestamp > DATA_CACHE_TTL) dataCache.delete(k);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Split a combined Overpass response into categorised data.
+ */
+function splitElements(elements) {
+  const roadElements = [];
+  const lightElements = [];
+  const cctvElements = [];
+  const placeElements = [];
+  const transitElements = [];
+
+  const roadWayNodeIds = new Set();
+  const lightWayNodeIds = new Set();
+
+  // First pass: classify ways and collect their node refs
+  for (const el of elements) {
+    if (el.type !== 'way') continue;
+    if (el.tags?.highway && WALKABLE_HIGHWAYS.has(el.tags.highway)) {
+      roadElements.push(el);
+      if (el.nodes) for (const nid of el.nodes) roadWayNodeIds.add(nid);
+    }
+    if (el.tags?.lit === 'yes') {
+      lightElements.push(el);
+      if (el.nodes) for (const nid of el.nodes) lightWayNodeIds.add(nid);
+    }
+    if (el.tags?.amenity || el.tags?.shop) {
+      placeElements.push(el);
+    }
+  }
+
+  // Second pass: classify nodes
+  for (const el of elements) {
+    if (el.type !== 'node') continue;
+
+    if (roadWayNodeIds.has(el.id)) roadElements.push(el);
+    if (lightWayNodeIds.has(el.id)) lightElements.push(el);
+    if (el.tags?.highway === 'street_lamp') lightElements.push(el);
+    if (el.tags?.man_made === 'surveillance') cctvElements.push(el);
+    if (el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism) {
+      placeElements.push(el);
+    }
+    if (
+      el.tags?.highway === 'bus_stop' ||
+      el.tags?.public_transport === 'stop_position' ||
+      el.tags?.public_transport === 'platform'
+    ) {
+      transitElements.push(el);
+    }
+  }
+
+  return {
+    roads:   { elements: roadElements },
+    lights:  { elements: lightElements },
+    cctv:    { elements: cctvElements },
+    places:  { elements: placeElements },
+    transit: { elements: transitElements },
+  };
+}
