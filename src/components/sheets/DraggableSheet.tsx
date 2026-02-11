@@ -127,7 +127,11 @@ export function DraggableSheet({
   if (!visible) return null;
 
   return (
-    <Animated.View style={[styles.sheet, { height: sheetHeight }]}>
+    <Animated.View
+      style={[styles.sheet, { height: sheetHeight }]}
+      renderToHardwareTextureAndroid
+      needsOffscreenAlphaCompositing={Platform.OS === 'android'}
+    >
       {/* Drag handle */}
       <View {...handlePanResponder.panHandlers} style={styles.dragZone}>
         <View style={styles.handle} />
