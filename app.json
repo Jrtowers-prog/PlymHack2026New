@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "We use your location to show nearby routes and help you navigate safely."
-      }
+      },
+      "bundleIdentifier": "com.anonymous.PlymHack2026New"
     },
     "android": {
       "adaptiveIcon": {
