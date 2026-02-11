@@ -35,7 +35,7 @@ export default function HomeScreen() {
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(h.selectedRoute);
-  const sheetVisible = (h.routes.length > 0 || h.directionsStatus === 'loading') && !h.isNavActive;
+  const sheetVisible = Platform.OS === 'android' ? true : ((h.routes.length > 0 || h.directionsStatus === 'loading') && !h.isNavActive); // TEMP: always visible on Android
 
   return (
     <View style={styles.container}>
@@ -58,145 +58,153 @@ export default function HomeScreen() {
         onMapPress={h.handleMapPress}
       />
 
-      {/* ── Map type toggle ── */}
-      {!h.isNavActive && <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />}
+      {/*
+       * ── Overlay layer ──
+       * On Android, AndroidOverlayHost creates a separate compositing layer
+       * with high elevation so all UI renders above the native map view.
+       * On iOS/web it's a no-op passthrough.
+       */}
+      <AndroidOverlayHost>
+        {/* ── Map type toggle ── */}
+        {!h.isNavActive && <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />}
 
-      {/* ── Pin-mode banner ── */}
-      {h.pinMode && (
-        <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
-          <View style={styles.pinBannerInner}>
-            <Ionicons name="location" size={18} color="#ffffff" />
-            <Text style={styles.pinBannerText}>
-              Tap anywhere on the map to set your {h.pinMode === 'origin' ? 'starting point' : 'destination'}
-            </Text>
-          </View>
-          <Pressable onPress={() => h.setPinMode(null)} style={styles.pinBannerCancel}>
-            <Text style={styles.pinBannerCancelText}>Cancel</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {/* ── Search bar ── */}
-      {!h.isNavActive && (
-        <SearchBar
-          topInset={insets.top}
-          location={h.location}
-          isUsingCurrentLocation={h.isUsingCurrentLocation}
-          setIsUsingCurrentLocation={h.setIsUsingCurrentLocation}
-          originSearch={h.originSearch}
-          manualOrigin={h.manualOrigin}
-          setManualOrigin={h.setManualOrigin}
-          destSearch={h.destSearch}
-          manualDest={h.manualDest}
-          setManualDest={h.setManualDest}
-          pinMode={h.pinMode}
-          setPinMode={h.setPinMode}
-          onPanTo={h.handlePanTo}
-          onClearRoute={h.clearSelectedRoute}
-        />
-      )}
-
-      {/* ── AI floating button ── */}
-      {h.safetyResult && !h.isNavActive && h.routes.length > 0 && (
-        <Animated.View
-          style={[styles.aiWrap, { bottom: Animated.add(h.sheetHeight, 12) }]}
-          pointerEvents="box-none"
-        >
-          <Pressable
-            style={styles.aiButton}
-            onPress={() => {
-              h.setShowAIModal(true);
-              if (h.ai.status === 'idle') h.ai.ask();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Why is this the safest route"
-          >
-            <Ionicons name="sparkles" size={16} color="#ffffff" />
-            <Text style={styles.aiText}>Why is this the safest route?</Text>
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {/* ── Bottom sheet ── */}
-      <DraggableSheet
-        visible={sheetVisible}
-        bottomInset={insets.bottom}
-        sheetHeight={h.sheetHeight}
-        sheetHeightRef={h.sheetHeightRef}
-      >
-        {/* Header */}
-        <View style={styles.sheetHeader}>
-          <Text style={styles.sheetTitle}>Routes</Text>
-          <Text style={styles.sheetMeta}>{distanceLabel} · {durationLabel}</Text>
-        </View>
-
-        {/* Loading state */}
-        {h.directionsStatus === 'loading' && <JailLoadingAnimation />}
-
-        {/* Out-of-range warning */}
-        {h.outOfRange && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="alert-circle" size={18} color="#dc2626" />
-            <Text style={styles.warningText}>
-              {h.outOfRangeMessage || 'Destination is out of range (max 20 km).'}
-            </Text>
+        {/* ── Pin-mode banner ── */}
+        {h.pinMode && (
+          <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
+            <View style={styles.pinBannerInner}>
+              <Ionicons name="location" size={18} color="#ffffff" />
+              <Text style={styles.pinBannerText}>
+                Tap anywhere on the map to set your {h.pinMode === 'origin' ? 'starting point' : 'destination'}
+              </Text>
+            </View>
+            <Pressable onPress={() => h.setPinMode(null)} style={styles.pinBannerCancel}>
+              <Text style={styles.pinBannerCancelText}>Cancel</Text>
+            </Pressable>
           </View>
         )}
 
-        {h.directionsError && !h.outOfRange && (
-          <Text style={styles.error}>{h.directionsError.message}</Text>
-        )}
-
-        {/* Route cards + safety panel side-by-side on web */}
-        <View style={[styles.routeSafetyRow, Platform.OS === 'web' && styles.routeSafetyRowWeb]}>
-          <RouteList
-            routes={h.safeRoutes}
-            selectedRouteId={h.selectedRouteId}
-            onSelectRoute={h.setSelectedRouteId}
-            navState={h.nav.state}
-            onStartNav={h.nav.start}
+        {/* ── Search bar ── */}
+        {!h.isNavActive && (
+          <SearchBar
+            topInset={insets.top}
+            location={h.location}
+            isUsingCurrentLocation={h.isUsingCurrentLocation}
+            setIsUsingCurrentLocation={h.setIsUsingCurrentLocation}
+            originSearch={h.originSearch}
+            manualOrigin={h.manualOrigin}
+            setManualOrigin={h.setManualOrigin}
+            destSearch={h.destSearch}
+            manualDest={h.manualDest}
+            setManualDest={h.setManualDest}
+            pinMode={h.pinMode}
+            setPinMode={h.setPinMode}
+            onPanTo={h.handlePanTo}
+            onClearRoute={h.clearSelectedRoute}
           />
+        )}
 
-          {showSafety && h.safetyResult && h.selectedSafeRoute && (
-            <SafetyPanel safetyResult={h.safetyResult} selectedSafeRoute={h.selectedSafeRoute} />
+        {/* ── AI floating button ── */}
+        {h.safetyResult && !h.isNavActive && h.routes.length > 0 && (
+          <Animated.View
+            style={[styles.aiWrap, { bottom: Animated.add(h.sheetHeight, 12) }]}
+            pointerEvents="box-none"
+          >
+            <Pressable
+              style={styles.aiButton}
+              onPress={() => {
+                h.setShowAIModal(true);
+                if (h.ai.status === 'idle') h.ai.ask();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Why is this the safest route"
+            >
+              <Ionicons name="sparkles" size={16} color="#ffffff" />
+              <Text style={styles.aiText}>Why is this the safest route?</Text>
+            </Pressable>
+          </Animated.View>
+        )}
+
+        {/* ── Bottom sheet ── */}
+        <DraggableSheet
+          visible={sheetVisible}
+          bottomInset={insets.bottom}
+          sheetHeight={h.sheetHeight}
+          sheetHeightRef={h.sheetHeightRef}
+        >
+          {/* Header */}
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>Routes</Text>
+            <Text style={styles.sheetMeta}>{distanceLabel} · {durationLabel}</Text>
+          </View>
+
+          {/* Loading state */}
+          {h.directionsStatus === 'loading' && <JailLoadingAnimation />}
+
+          {/* Out-of-range warning */}
+          {h.outOfRange && (
+            <View style={styles.warningBanner}>
+              <Ionicons name="alert-circle" size={18} color="#dc2626" />
+              <Text style={styles.warningText}>
+                {h.outOfRangeMessage || 'Destination is out of range (max 20 km).'}
+              </Text>
+            </View>
           )}
-        </View>
 
-        {/* Safety profile chart */}
-        {showSafety &&
-          h.selectedSafeRoute?.enrichedSegments &&
-          h.selectedSafeRoute.enrichedSegments.length > 1 && (
-            <SafetyProfileChart
-              segments={h.routeSegments}
-              enrichedSegments={h.selectedSafeRoute.enrichedSegments}
-              roadNameChanges={h.selectedSafeRoute.routeStats?.roadNameChanges ?? []}
-              totalDistance={h.selectedSafeRoute.distanceMeters}
+          {h.directionsError && !h.outOfRange && (
+            <Text style={styles.error}>{h.directionsError.message}</Text>
+          )}
+
+          {/* Route cards + safety panel side-by-side on web */}
+          <View style={[styles.routeSafetyRow, Platform.OS === 'web' && styles.routeSafetyRowWeb]}>
+            <RouteList
+              routes={h.safeRoutes}
+              selectedRouteId={h.selectedRouteId}
+              onSelectRoute={h.setSelectedRouteId}
+              navState={h.nav.state}
+              onStartNav={h.nav.start}
             />
-          )}
-      </DraggableSheet>
 
-      {/* ── Modals / Overlays ── */}
-      <AIExplanationModal
-        visible={h.showAIModal}
-        ai={h.ai}
-        onClose={() => {
-          h.setShowAIModal(false);
-          h.ai.reset();
-        }}
-      />
+            {showSafety && h.safetyResult && h.selectedSafeRoute && (
+              <SafetyPanel safetyResult={h.safetyResult} selectedSafeRoute={h.selectedSafeRoute} />
+            )}
+          </View>
 
-      <OnboardingModal
-        visible={h.showOnboarding}
-        error={h.onboardingError}
-        onAccept={h.handleAcceptOnboarding}
-        onDismiss={() => h.setShowOnboarding(false)}
-      />
+          {/* Safety profile chart */}
+          {showSafety &&
+            h.selectedSafeRoute?.enrichedSegments &&
+            h.selectedSafeRoute.enrichedSegments.length > 1 && (
+              <SafetyProfileChart
+                segments={h.routeSegments}
+                enrichedSegments={h.selectedSafeRoute.enrichedSegments}
+                roadNameChanges={h.selectedSafeRoute.routeStats?.roadNameChanges ?? []}
+                totalDistance={h.selectedSafeRoute.distanceMeters}
+              />
+            )}
+        </DraggableSheet>
 
-      <NavigationOverlay
-        nav={h.nav}
-        topInset={insets.top}
-        bottomInset={insets.bottom}
-      />
+        {/* ── Modals / Overlays ── */}
+        <AIExplanationModal
+          visible={h.showAIModal}
+          ai={h.ai}
+          onClose={() => {
+            h.setShowAIModal(false);
+            h.ai.reset();
+          }}
+        />
+
+        <OnboardingModal
+          visible={h.showOnboarding}
+          error={h.onboardingError}
+          onAccept={h.handleAcceptOnboarding}
+          onDismiss={() => h.setShowOnboarding(false)}
+        />
+
+        <NavigationOverlay
+          nav={h.nav}
+          topInset={insets.top}
+          bottomInset={insets.bottom}
+        />
+      </AndroidOverlayHost>
     </View>
   );
 }
