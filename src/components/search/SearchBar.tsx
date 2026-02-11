@@ -8,14 +8,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef } from 'react';
 import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import type { UseAutoPlaceSearchReturn } from '@/src/hooks/useAutoPlaceSearch';
@@ -82,7 +82,9 @@ export function SearchBar({
       suppressBlurRef.current = false;
       return;
     }
-    blurTimerRef.current = setTimeout(() => setFocusedFieldState(null), 200);
+    // Longer delay on Android — focus/blur fires unreliably above WebView
+    const delay = Platform.OS === 'android' ? 1000 : 200;
+    blurTimerRef.current = setTimeout(() => setFocusedFieldState(null), delay);
   }, []);
 
   const cancelBlurTimer = useCallback(() => {
@@ -96,12 +98,31 @@ export function SearchBar({
     if (focusedField) lastFocusedFieldRef.current = focusedField;
   }, [focusedField]);
 
+  // On Android, focus/blur events are unreliable above a WebView, so
+  // fall back to checking which field has active predictions when
+  // focusedField is null.
+  const activeField: 'origin' | 'destination' | null =
+    focusedField ?? lastFocusedFieldRef.current ?? null;
+
   const activePredictions =
-    focusedField === 'origin' && !manualOrigin && !originSearch.place
-      ? originSearch.predictions
-      : focusedField === 'destination' && !manualDest && !destSearch.place
-        ? destSearch.predictions
-        : [];
+    Platform.OS === 'android'
+      ? // Android: use activeField (focus OR last-focused), then fall back
+        // to whichever field actually has predictions available.
+        activeField === 'origin' && !manualOrigin && !originSearch.place
+        ? originSearch.predictions
+        : activeField === 'destination' && !manualDest && !destSearch.place
+          ? destSearch.predictions
+          : !manualDest && !destSearch.place && destSearch.predictions.length > 0
+            ? destSearch.predictions
+            : !manualOrigin && !originSearch.place && originSearch.predictions.length > 0
+              ? originSearch.predictions
+              : []
+      : // Web / iOS: original strict focus-based logic
+        focusedField === 'origin' && !manualOrigin && !originSearch.place
+        ? originSearch.predictions
+        : focusedField === 'destination' && !manualDest && !destSearch.place
+          ? destSearch.predictions
+          : [];
 
   const handlePredictionSelect = useCallback(
     (pred: PlacePrediction) => {
