@@ -82,8 +82,8 @@ app.use((err, _req, res, _next) => {
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`✅ Backend proxy running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Backend proxy running on http://0.0.0.0:${PORT}`);
   console.log(`   CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : '(any)'}`);
   console.log(`   Rate limit: 100 req / 15 min per IP`);
 });
