@@ -1,5 +1,13 @@
+import { Platform } from 'react-native';
+
 // Backend proxy base URL — all Places / Directions / Static Map calls go here
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+// On Android devices, localhost refers to the device itself, not the dev machine.
+// Use the LAN IP so the physical device can reach the backend.
+const rawApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const apiBaseUrl =
+  Platform.OS === 'android'
+    ? rawApiBaseUrl.replace('localhost', '10.18.181.220').replace('127.0.0.1', '10.18.181.220')
+    : rawApiBaseUrl;
 // TODO: Set EXPO_PUBLIC_OS_MAPS_API_KEY in .env / EAS env vars.
 const osMapsApiKey = process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ?? '';
 const osMapsLayer = process.env.EXPO_PUBLIC_OS_MAPS_LAYER ?? 'Road_3857';
