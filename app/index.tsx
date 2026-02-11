@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost';
 import { MapTypeControl } from '@/src/components/maps/MapTypeControl';
 import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
