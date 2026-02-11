@@ -551,6 +551,8 @@ export const RouteMap = ({
         mediaPlaybackRequiresUserAction={false}
         startInLoadingState={false}
         cacheEnabled
+        // Android: force TextureView instead of SurfaceView to fix z-ordering
+        androidLayerType="hardware"
         // Android: allow mixed content (http tiles from https page)
         mixedContentMode="compatibility"
       />
