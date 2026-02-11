@@ -38,7 +38,7 @@ const SHEET_MAX = SCREEN_HEIGHT * 0.75;
 const SHEET_DEFAULT = SCREEN_HEIGHT * 0.4;
 const SHEET_MIN = 80;
 
-export { SHEET_MAX, SHEET_DEFAULT, SHEET_MIN };
+export { SHEET_DEFAULT, SHEET_MAX, SHEET_MIN };
 
 export function DraggableSheet({
   children,
