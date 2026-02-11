@@ -1,12 +1,13 @@
 import { Platform } from 'react-native';
 
 // Backend proxy base URL — all Places / Directions / Static Map calls go here
-// On Android devices, localhost refers to the device itself, not the dev machine.
-// Use the LAN IP so the physical device can reach the backend.
+// In production, set EXPO_PUBLIC_API_BASE_URL to your deployed backend (e.g. https://safenighthome-api.onrender.com)
+// In local dev on Android, localhost refers to the device itself, so we swap to 10.0.2.2 (emulator) or your LAN IP.
 const rawApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const isLocalhost = rawApiBaseUrl.includes('localhost') || rawApiBaseUrl.includes('127.0.0.1');
 const apiBaseUrl =
-  Platform.OS === 'android'
-    ? rawApiBaseUrl.replace('localhost', '10.18.181.220').replace('127.0.0.1', '10.18.181.220')
+  Platform.OS === 'android' && isLocalhost
+    ? rawApiBaseUrl.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2')
     : rawApiBaseUrl;
 // TODO: Set EXPO_PUBLIC_OS_MAPS_API_KEY in .env / EAS env vars.
 const osMapsApiKey = process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ?? '';
