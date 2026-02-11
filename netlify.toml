@@ -1,0 +1,15 @@
+# Netlify config for Expo web static export
+[build]
+  command = "npx expo export --platform web"
+  publish = "dist"
+
+# Environment variables (set these in Netlify Dashboard > Site settings > Environment variables):
+#   EXPO_PUBLIC_API_BASE_URL = https://plymhack2026-fork.onrender.com
+#   EXPO_PUBLIC_OSM_USER_AGENT = SafeNightHome/1.0
+#   EXPO_PUBLIC_OPENAI_API_KEY = sk-...
+
+# SPA fallback — all routes serve index.html (Expo Router handles client-side routing)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

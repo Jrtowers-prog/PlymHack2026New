@@ -23,6 +23,7 @@ const placesRouter = require('./routes/places');
 const directionsRouter = require('./routes/directions');
 const staticmapRouter = require('./routes/staticmap');
 const safeRoutesRouter = require('./routes/safeRoutes');
+const explainRouter = require('./routes/explain');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -69,6 +70,7 @@ app.use('/api/places', placesRouter);
 app.use('/api/directions', directionsRouter);
 app.use('/api/staticmap', staticmapRouter);
 app.use('/api/safe-routes', safeRoutesRouter);
+app.use('/api', explainRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

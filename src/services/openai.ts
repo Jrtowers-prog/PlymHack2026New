@@ -28,81 +28,43 @@ export interface AIExplanationInput {
   bestRouteId: string;
 }
 
-const fmtDist = (m: number) =>
-  m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
-const fmtTime = (s: number) => `${Math.max(1, Math.round(s / 60))} min`;
-
 /**
- * Ask OpenAI for a concise (≤150 word) explanation of why the
+ * Ask backend for a concise (≤150 word) explanation of why the
  * safest route is safer than the alternatives.
+ *
+ * NOTE: The OpenAI API key is kept SECRET on the backend.
+ * This frontend function now only sends the route data to the backend,
+ * which handles the OpenAI call securely.
  */
 export const fetchAIExplanation = async (input: AIExplanationInput): Promise<string> => {
-  const apiKey = env.openaiApiKey;
-  if (!apiKey) {
-    throw new Error('Missing EXPO_PUBLIC_OPENAI_API_KEY. Set it in your .env file.');
+  const apiBaseUrl = env.apiBaseUrl;
+  if (!apiBaseUrl) {
+    throw new Error('Missing EXPO_PUBLIC_API_BASE_URL. Set it in your .env file.');
   }
 
-  const { safetyResult, routes, bestRouteId } = input;
+  console.log(`[OpenAI] 🌐 Backend call → ${apiBaseUrl}/api/explain-route`);
 
-  // Build a block for every route so the AI can compare all of them
-  const routeBlocks = routes.map((r, i) => {
-    const isBest = r.routeId === bestRouteId;
-    const tag = isBest ? ' ← RECOMMENDED' : '';
-    const s = r.score;
-    return [
-      `Route ${i + 1}${tag}:`,
-      `  Distance: ${fmtDist(r.distanceMeters)}, Walking time: ${fmtTime(r.durationSeconds)}`,
-      s?.status === 'done'
-        ? `  Safety score: ${s.score}/100 (${s.label}), Pathfinding score: ${s.pathfindingScore}, Main-road ratio: ${(s.mainRoadRatio * 100).toFixed(0)}%`
-        : '  Safety score: not available',
-      r.summary ? `  Summary: ${r.summary}` : '',
-    ].filter(Boolean).join('\n');
-  }).join('\n\n');
-
-  const prompt = `You are a concise walking-safety assistant. We analysed ${routes.length} walking routes. Based ONLY on the data below, explain in 1–2 short paragraphs (max 150 words total) why the recommended route is the safest choice compared to the others. Reference specific numbers. Do NOT give general safety tips.
-
-RECOMMENDED ROUTE DETAILED DATA:
-- Safety score: ${safetyResult.safetyScore}/100 (${safetyResult.safetyLabel})
-- Crime reports nearby: ${safetyResult.crimeCount}
-- Street lights: ${safetyResult.streetLights}
-- Lit roads: ${safetyResult.litRoads}, Unlit roads: ${safetyResult.unlitRoads}
-- Open places (shops/cafés): ${safetyResult.openPlaces}
-- Bus stops nearby: ${safetyResult.busStops}
-- Main-road ratio: ${(safetyResult.mainRoadRatio * 100).toFixed(0)}%
-
-ALL ${routes.length} ROUTES:
-${routeBlocks}
-
-Respond with 1–2 paragraphs, max 150 words. Explain why the recommended route is safer.`;
-
-  console.log(`[OpenAI] 🌐 API call → gpt-4o-mini (max_tokens=200)`);
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(`${apiBaseUrl}/api/explain-route`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 200,
-      temperature: 0.6,
-    }),
+    body: JSON.stringify(input),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    console.error(`[OpenAI] ❌ API error ${response.status}`);
-    throw new Error(`OpenAI API error ${response.status}: ${body}`);
+    console.error(`[OpenAI] ❌ Backend error ${response.status}`);
+    throw new Error(`Backend error ${response.status}: ${body}`);
   }
 
   const data = await response.json();
-  const text: string | undefined = data?.choices?.[0]?.message?.content;
-  console.log(`[OpenAI] 📦 Response: ${text ? text.length + ' chars' : 'empty'}, tokens=${data?.usage?.total_tokens ?? '?'}`);
+  const explanation: string | undefined = data?.explanation;
+  console.log(`[OpenAI] 📦 Response: ${explanation ? explanation.length + ' chars' : 'empty'}`);
 
-  if (!text) {
-    throw new Error('No response from OpenAI');
+  if (!explanation) {
+    throw new Error('No explanation from backend');
   }
 
-  return text.trim();
+  return explanation.trim();
 };
