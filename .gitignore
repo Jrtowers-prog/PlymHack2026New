@@ -50,3 +50,6 @@ app-example
 .env
 # IDE
 .idea/
+
+# Build artifacts
+android_build_log.txt
