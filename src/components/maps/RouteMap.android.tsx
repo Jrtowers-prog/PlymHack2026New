@@ -363,12 +363,202 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
 `;
 
 // ---------------------------------------------------------------------------
-// Component placeholder — full implementation follows
+// Component
 // ---------------------------------------------------------------------------
 
-export const RouteMap = (_props: RouteMapProps) => (
-  <View style={styles.container} />
-);
+export const RouteMap = ({
+  origin,
+  destination,
+  routes,
+  selectedRouteId,
+  safetyMarkers = [],
+  routeSegments = [],
+  roadLabels = [],
+  panTo,
+  isNavigating = false,
+  navigationLocation,
+  navigationHeading,
+  mapType = 'roadmap',
+  onSelectRoute,
+  onLongPress,
+  onMapPress,
+}: RouteMapProps) => {
+  const webViewRef = useRef<WebView>(null);
+  const readyRef = useRef(false);
+  const prevGeoKeyRef = useRef('');
+  const prevPanKeyRef = useRef(-1);
+
+  // Keep latest props in refs so pushUpdate always reads fresh values
+  // (fixes the stale-closure problem when called from the 'ready' handler)
+  const propsRef = useRef({
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
+  });
+  propsRef.current = {
+    origin, destination, routes, selectedRouteId,
+    safetyMarkers, routeSegments, roadLabels, panTo,
+    isNavigating, navigationLocation, navigationHeading,
+  };
+
+  const mapTypeRef = useRef(mapType);
+
+  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute });
+  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute };
+
+  // Serialize current props → a JS call the WebView can execute
+  const pushUpdate = useCallback(() => {
+    if (!readyRef.current || !webViewRef.current) return;
+
+    const p = propsRef.current;
+    const toLL = (c: { latitude: number; longitude: number }) => ({
+      lat: c.latitude,
+      lng: c.longitude,
+    });
+
+    const mappedRoutes = p.routes.map((r) => ({
+      id: r.id,
+      selected: r.id === p.selectedRouteId,
+      path: r.path.map(toLL),
+    }));
+
+    const segments = p.routeSegments.map((seg) => ({
+      color: seg.color,
+      path: seg.path.map(toLL),
+    }));
+
+    const mkrs = p.safetyMarkers.map((m) => ({
+      kind: m.kind,
+      label: m.label,
+      lat: m.coordinate.latitude,
+      lng: m.coordinate.longitude,
+    }));
+
+    const labels = p.roadLabels.map((l) => ({
+      name: l.displayName,
+      color: l.color,
+      lat: l.coordinate.latitude,
+      lng: l.coordinate.longitude,
+    }));
+
+    // Detect geography changes to decide whether to fitBounds
+    const geoKey = [
+      p.origin ? `${p.origin.latitude},${p.origin.longitude}` : '',
+      p.destination ? `${p.destination.latitude},${p.destination.longitude}` : '',
+      p.routes.map((r) => r.id).join(','),
+      p.selectedRouteId ?? '',
+    ].join('|');
+    const fitBounds = geoKey !== prevGeoKeyRef.current;
+    if (fitBounds) prevGeoKeyRef.current = geoKey;
+
+    // panTo
+    let panToData: { lat: number; lng: number } | null = null;
+    if (p.panTo && p.panTo.key !== prevPanKeyRef.current) {
+      prevPanKeyRef.current = p.panTo.key;
+      panToData = toLL(p.panTo.location);
+    }
+
+    const payload = {
+      origin: p.origin ? toLL(p.origin) : null,
+      destination: p.destination ? toLL(p.destination) : null,
+      routes: mappedRoutes,
+      segments,
+      safetyMarkers: mkrs,
+      roadLabels: labels,
+      fitBounds,
+      panTo: panToData,
+      navLocation:
+        p.isNavigating && p.navigationLocation
+          ? toLL(p.navigationLocation)
+          : null,
+      navHeading: p.navigationHeading,
+    };
+
+    const js = `try{updateMap(${JSON.stringify(payload)})}catch(e){}true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, []);
+
+  // Push whenever any data changes
+  useEffect(() => {
+    pushUpdate();
+  }, [
+    origin,
+    destination,
+    routes,
+    selectedRouteId,
+    safetyMarkers,
+    routeSegments,
+    roadLabels,
+    panTo,
+    isNavigating,
+    navigationLocation,
+    navigationHeading,
+    pushUpdate,
+  ]);
+
+  // Update map type when it changes
+  useEffect(() => {
+    if (!readyRef.current || !webViewRef.current) return;
+    if (mapType === mapTypeRef.current) return;
+    mapTypeRef.current = mapType;
+    const js = `try{setMapType('${mapType}')}catch(e){}true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, [mapType]);
+
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      try {
+        const msg = JSON.parse(event.nativeEvent.data);
+        const cbs = callbacksRef.current;
+        switch (msg.type) {
+          case 'ready':
+            readyRef.current = true;
+            // Flush update now that the map is ready
+            pushUpdate();
+            break;
+          case 'press':
+            cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'longpress':
+            cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
+            break;
+          case 'selectRoute':
+            cbs.onSelectRoute?.(msg.id);
+            break;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    },
+    [pushUpdate],
+  );
+
+  return (
+    <View style={styles.container}>
+      <WebView
+        ref={webViewRef}
+        source={{ html: buildMapHtml(mapType) }}
+        style={{ flex: 1 }}
+        originWhitelist={['*']}
+        javaScriptEnabled
+        domStorageEnabled
+        onMessage={handleMessage}
+        scrollEnabled={false}
+        overScrollMode="never"
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
+        startInLoadingState={false}
+        cacheEnabled
+        // Android: force TextureView instead of SurfaceView to fix z-ordering
+        androidLayerType="hardware"
+        // Android: allow mixed content (http tiles from https page)
+        mixedContentMode="compatibility"
+      />
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f2f4f7', overflow: 'hidden' as const },
