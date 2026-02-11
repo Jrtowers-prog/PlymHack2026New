@@ -20,6 +20,10 @@ const buildHeaders = (): HeadersInit => {
 };
 
 const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
+  // AbortSignal.timeout() is NOT available in React Native — use AbortController + setTimeout
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+
   try {
     const endpoint = url.split('?')[0].replace(NOMINATIM_BASE_URL, 'Nominatim').replace(OSRM_BASE_URL, 'OSRM');
     console.log(`[OSM] 🌐 API call → ${endpoint}`);
@@ -29,8 +33,10 @@ const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
         ...(options?.headers ?? {}),
         ...buildHeaders(),
       },
-      signal: AbortSignal.timeout(30000), // 30 second timeout
+      signal: controller.signal,
     });
+
+    clearTimeout(timer);
 
     if (!response.ok) {
       if (response.status === 504) {
@@ -47,10 +53,11 @@ const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
 
     return (await response.json()) as T;
   } catch (error) {
+    clearTimeout(timer);
     if (error instanceof AppError) {
       throw error;
     }
-    if (error instanceof Error && error.name === 'TimeoutError') {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       throw new AppError('osm_timeout_error', 'Request timed out. Please try again.');
     }
 
