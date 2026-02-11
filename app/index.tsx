@@ -35,7 +35,7 @@ export default function HomeScreen() {
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(h.selectedRoute);
-  const sheetVisible = Platform.OS === 'android' ? true : ((h.routes.length > 0 || h.directionsStatus === 'loading') && !h.isNavActive); // TEMP: always visible on Android
+  const sheetVisible = (h.routes.length > 0 || h.directionsStatus === 'loading') && !h.isNavActive;
 
   return (
     <View style={styles.container}>
