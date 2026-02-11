@@ -1,16 +1,19 @@
-import { Platform } from 'react-native';
-
 /**
- * On web, use the Google Maps JS API renderer directly in the DOM.
- * On native (iOS / Android), use a WebView-based Google Maps renderer
- * that works in Expo Go — no dev build required.
+ * RouteMap — Platform entry point for TypeScript module resolution.
+ *
+ * At build time, Metro resolves to the platform-specific implementation:
+ *   • Android → RouteMap.android.tsx  (WebView + Leaflet / OSM tiles)
+ *   • iOS     → RouteMap.ios.tsx      (WebView + Leaflet / OSM tiles)
+ *   • Web     → RouteMap.web.tsx      (iframe + Leaflet / OSM tiles)
+ *
+ * This file is NEVER bundled by Metro because the platform suffixes
+ * always take priority.  It exists purely so TypeScript (tsc) can
+ * resolve `import RouteMap from '…/RouteMap'`.
  */
-let RouteMap: React.ComponentType<any>;
+import { View } from 'react-native';
 
-if (Platform.OS === 'web') {
-  RouteMap = require('@/src/components/maps/RouteMap.web').default;
-} else {
-  RouteMap = require('@/src/components/maps/RouteMap.native').default;
-}
+import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
+
+const RouteMap = (_props: RouteMapProps) => <View />;
 
 export default RouteMap;
