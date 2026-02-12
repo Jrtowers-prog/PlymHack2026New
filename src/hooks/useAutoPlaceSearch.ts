@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchPlacePredictions } from '@/src/services/osmDirections';
+import { fetchPlaceDetails, fetchPlacePredictions } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
 import type { LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
 
@@ -63,18 +63,32 @@ export const useAutoPlaceSearch = (
   }, []);
 
   const selectPrediction = useCallback((prediction: PlacePrediction) => {
-    if (!prediction.location) return;
     skipAutoRef.current = true;
     selectedQueryRef.current = prediction.primaryText;
     setPredictions([]);
     setQuery(prediction.primaryText);
-    setPlace({
-      placeId: prediction.placeId,
-      name: prediction.fullText,
-      location: prediction.location,
-      source: prediction.source,
-    });
-    setStatus('found');
+
+    if (prediction.location) {
+      setPlace({
+        placeId: prediction.placeId,
+        name: prediction.fullText,
+        location: prediction.location,
+        source: prediction.source,
+      });
+      setStatus('found');
+    } else {
+      // Prediction has no coordinates — fetch details to resolve location
+      setStatus('searching');
+      fetchPlaceDetails(prediction.placeId)
+        .then((details) => {
+          setPlace(details);
+          setStatus('found');
+        })
+        .catch(() => {
+          setError(new AppError('place_details_error', 'Could not resolve location'));
+          setStatus('error');
+        });
+    }
   }, []);
 
   const clear = useCallback(() => {
