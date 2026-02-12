@@ -355,7 +355,7 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     }
 
     // Collect nearby POIs along the route for map markers
-    const routePOIs = collectRoutePOIs(route.path, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimes);
+    const routePOIs = collectRoutePOIs(route.path, route.edges, edges, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimes);
 
     // Compute route stats
     const routeStats = {
@@ -446,11 +446,22 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
  * Collect POI positions along a route for map display.
  * Returns CCTV cameras, transit stops, dead-end nodes, street lights,
  * open places, and crime locations near the route path.
+ *
+ * Uses road-type-aware buffer distances:
+ *  - Main roads (primary/secondary/tertiary/trunk): 20m — a CCTV on the
+ *    opposite side of a wide road doesn't help this side.
+ *  - Narrower/path roads (footway/path/steps/track etc): 30m — on a
+ *    narrow path, nearby items are more relevant.
+ *
+ * Samples EVERY node on the route (no cap) so long routes have no gaps.
  */
-function collectRoutePOIs(routePath, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimeNodes) {
+const MAIN_ROAD_TYPES = new Set(['primary', 'secondary', 'tertiary', 'trunk']);
+const MAIN_ROAD_BUFFER_M = 20;
+const PATH_BUFFER_M = 30;
+
+function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimeNodes) {
   const pois = { cctv: [], transit: [], deadEnds: [], lights: [], places: [], crimes: [] };
   const seen = new Set();
-  const NEARBY_M = 30;
 
   // Collect dead-end nodes on the route
   for (const nid of routePath) {
@@ -467,19 +478,31 @@ function collectRoutePOIs(routePath, osmNodes, cctvNodes, transitNodes, nodeDegr
     }
   }
 
-  // Build route sample points for proximity search
-  const step = Math.max(1, Math.floor(routePath.length / 80));
+  // Build sample points from EVERY node on the route — no gaps.
+  // Each sample point carries the buffer distance for its road segment.
   const samplePoints = [];
-  for (let i = 0; i < routePath.length; i += step) {
+  for (let i = 0; i < routePath.length; i++) {
     const n = osmNodes.get(routePath[i]);
-    if (n) samplePoints.push(n);
+    if (!n) continue;
+
+    // Determine the road type for this node's edge (use the edge leading TO this node)
+    let buffer = PATH_BUFFER_M; // default: narrower-road buffer
+    const edgeIdx = i > 0 ? routeEdges[i - 1] : (routeEdges[0] ?? -1);
+    if (edgeIdx >= 0 && edgeIdx < allEdges.length) {
+      const highway = allEdges[edgeIdx].highway || '';
+      if (MAIN_ROAD_TYPES.has(highway)) {
+        buffer = MAIN_ROAD_BUFFER_M;
+      }
+    }
+    samplePoints.push({ lat: n.lat, lng: n.lng, buffer });
   }
 
-  // Helper: check if a point is near any sample point on the route
+  // Helper: check if a point is near the route, returns true if within
+  // the road-type-specific buffer of any sample point.
   function isNearRoute(lat, lng) {
     for (const sp of samplePoints) {
       const d = Math.sqrt((lat - sp.lat) ** 2 + (lng - sp.lng) ** 2) * 111320;
-      if (d < NEARBY_M) return true;
+      if (d < sp.buffer) return true;
     }
     return false;
   }
