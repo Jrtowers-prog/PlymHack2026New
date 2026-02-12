@@ -2,7 +2,7 @@
  * NavigationOverlay — Turn-by-turn UI during active navigation.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View, Platform } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { NavigationInfo } from '@/src/hooks/useNavigation';
 import { formatDuration, maneuverIcon, stripHtml } from '@/src/utils/format';
