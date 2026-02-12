@@ -70,6 +70,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
     var isNavMode = false;
     var userInteracted = false;
     var lastNavCenter = null;
+    var lastNavHeading = 0;
     var lastData = null;
     var styleReady = false;
     var longPressTimer = null;
@@ -182,10 +183,15 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       sendMsg('longpress',{lat:e.lngLat.lat,lng:e.lngLat.lng});
     });
 
-    // Touch-based long-press (mobile)
+    // Touch-based long-press (single finger only)
     var mapEl = document.getElementById('map');
+    function cancelLongPress(){
+      if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null}
+      longPressPoint=null;
+    }
     mapEl.addEventListener('touchstart',function(e){
       touchMoved=false;
+      // Only start long-press detection on single-finger touch
       if(e.touches.length===1){
         var t=e.touches[0];
         longPressPoint = {x:t.clientX, y:t.clientY};
@@ -197,16 +203,21 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
           }
           longPressTimer=null;
         },600);
+      } else {
+        // Multi-touch (pinch/zoom) — cancel any pending long-press immediately
+        cancelLongPress();
       }
     },{passive:true});
     mapEl.addEventListener('touchmove',function(e){
+      // Cancel long-press if a second finger appears or finger moves too far
+      if(e.touches.length>1){ cancelLongPress(); return; }
       if(longPressPoint&&e.touches.length===1){
         var dx=e.touches[0].clientX-longPressPoint.x, dy=e.touches[0].clientY-longPressPoint.y;
-        if(Math.sqrt(dx*dx+dy*dy)>10){touchMoved=true;if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null}}
+        if(Math.sqrt(dx*dx+dy*dy)>10){touchMoved=true;cancelLongPress()}
       }
     },{passive:true});
-    mapEl.addEventListener('touchend',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null};longPressPoint=null},{passive:true});
-    mapEl.addEventListener('touchcancel',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null};longPressPoint=null},{passive:true});
+    mapEl.addEventListener('touchend',function(){cancelLongPress()},{passive:true});
+    mapEl.addEventListener('touchcancel',function(){cancelLongPress()},{passive:true});
 
     /* ── Drag tracking for recenter ────────────────────────── */
     map.on('dragstart',function(){
@@ -222,7 +233,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       var btn=document.getElementById('recenterBtn');
       if(btn)btn.classList.remove('visible');
       if(lastNavCenter){
-        map.easeTo({center:lastNavCenter, zoom:Math.max(map.getZoom(),17), pitch:60, duration:600});
+        map.easeTo({center:lastNavCenter, zoom:Math.max(map.getZoom(),17), pitch:60, bearing:-lastNavHeading, duration:600});
       }
     }
 
@@ -359,6 +370,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       if(data.navLocation){
         var heading=data.navHeading||0;
         lastNavCenter=[data.navLocation.lng,data.navLocation.lat];
+        lastNavHeading=heading;
 
         // Direction arrow marker
         var ne=document.createElement('div');
