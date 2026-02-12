@@ -64,10 +64,7 @@ export function SafetyPanel({ safetyResult, selectedSafeRoute }: SafetyPanelProp
             <DetailCard icon="👣" value={`${selectedSafeRoute.safety.breakdown.traffic}%`} label="Foot Traffic" />
           </View>
 
-          {/* Road type bar */}
-          {Object.keys(selectedSafeRoute.safety.roadTypes).length > 0 && (
-            <RoadTypeBreakdown roadTypes={selectedSafeRoute.safety.roadTypes} />
-          )}
+          {/* Road type bar rendered externally for full width */}
         </>
       )}
     </View>
@@ -98,7 +95,7 @@ function DetailCard({ icon, value, label, warn }: { icon: string; value: string;
   );
 }
 
-function RoadTypeBreakdown({ roadTypes }: { roadTypes: Record<string, number> }) {
+export function RoadTypeBreakdown({ roadTypes }: { roadTypes: Record<string, number> }) {
   const sorted = Object.entries(roadTypes).sort(([, a], [, b]) => b - a);
   const barColors: Record<string, string> = {
     primary: '#2563eb', secondary: '#3b82f6', tertiary: '#60a5fa',
@@ -139,6 +136,7 @@ function RoadTypeBreakdown({ roadTypes }: { roadTypes: Record<string, number> })
 const styles = StyleSheet.create({
   column: {
     marginTop: 12,
+    width: '100%',
   },
   columnWeb: {
     flex: 1,
@@ -156,6 +154,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#eaecf0',
     marginBottom: 12,
+    overflow: 'hidden',
   },
   heroLabel: {
     fontSize: 14,
@@ -169,7 +168,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   gridCard: {
-    width: '48%' as any,
+    flexBasis: '44%' as any,
+    flexGrow: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
