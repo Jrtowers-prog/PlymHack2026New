@@ -232,19 +232,20 @@ export const useNavigation = (route: DirectionsRoute | null): NavigationInfo => 
       setCurrentStepIndex(idx);
     }
 
-    // Distance to the end of current step
+    // Distance to the end of current step (next turn / action)
     const dToTurn = haversine(userLocation, s[idx].endLocation);
     setDistanceToNextTurn(Math.round(dToTurn));
 
     // Remaining distance = distance to next turn + all subsequent steps
     let remDist = dToTurn;
-    let remTime = (s[idx].durationSeconds * dToTurn) / Math.max(1, s[idx].distanceMeters);
     for (let i = idx + 1; i < s.length; i++) {
       remDist += s[i].distanceMeters;
-      remTime += s[i].durationSeconds;
     }
     setRemainingDistance(Math.round(remDist));
-    setRemainingDuration(Math.round(remTime));
+
+    // Walking ETA: compute from distance at average walking speed (1.4 m/s ≈ 5 km/h)
+    const WALKING_SPEED = 1.4;
+    setRemainingDuration(Math.round(remDist / WALKING_SPEED));
 
     // Update heading toward next step end
     if (!userHeading) {

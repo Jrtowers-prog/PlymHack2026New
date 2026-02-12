@@ -379,7 +379,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
           '<circle cx="28" cy="28" r="24" fill="#1570EF" stroke="white" stroke-width="3" filter="url(#glow)"/>'+
           '<polygon points="28,8 36,32 28,26 20,32" fill="white"/></svg>';
         ne.style.width='56px';ne.style.height='56px';
-        navMarkerObj=new maplibregl.Marker({element:ne,anchor:'center',rotationAlignment:'map',rotation:heading})
+        navMarkerObj=new maplibregl.Marker({element:ne,anchor:'center',rotationAlignment:'viewport',rotation:0})
           .setLngLat(lastNavCenter).addTo(map);
 
         // Camera follow
