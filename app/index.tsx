@@ -14,13 +14,12 @@ import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost';
-import { MapTypeControl } from '@/src/components/maps/MapTypeControl';
 import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
 import { OnboardingModal } from '@/src/components/modals/OnboardingModal';
 import { NavigationOverlay } from '@/src/components/navigation/NavigationOverlay';
 import { RouteList } from '@/src/components/routes/RouteList';
-import { SafetyPanel } from '@/src/components/safety/SafetyPanel';
+import { RoadTypeBreakdown, SafetyPanel } from '@/src/components/safety/SafetyPanel';
 import { SafetyProfileChart } from '@/src/components/safety/SafetyProfileChart';
 import { SearchBar } from '@/src/components/search/SearchBar';
 import { DraggableSheet } from '@/src/components/sheets/DraggableSheet';
@@ -66,16 +65,6 @@ export default function HomeScreen() {
        * On iOS/web it's a no-op passthrough.
        */}
       <AndroidOverlayHost>
-        {/* ── Map type toggle — on phones, sits below search bar as a layer icon ── */}
-        {!h.isNavActive && Platform.OS !== 'web' && (
-          <View style={{ position: 'absolute', top: insets.top + 96, right: 14, zIndex: 11, elevation: 11 }}>
-            <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />
-          </View>
-        )}
-        {!h.isNavActive && Platform.OS === 'web' && (
-          <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />
-        )}
-
         {/* ── Pin-mode banner ── */}
         {h.pinMode && (
           <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
@@ -226,14 +215,32 @@ export default function HomeScreen() {
               routes={h.safeRoutes}
               selectedRouteId={h.selectedRouteId}
               onSelectRoute={h.setSelectedRouteId}
-              navState={h.nav.state}
-              onStartNav={h.nav.start}
             />
 
             {showSafety && h.safetyResult && h.selectedSafeRoute && (
               <SafetyPanel safetyResult={h.safetyResult} selectedSafeRoute={h.selectedSafeRoute} />
             )}
           </View>
+
+          {/* Start navigation — full width */}
+          {h.selectedRouteId && h.nav.state === 'idle' && (
+            <Pressable
+              style={styles.startNavButton}
+              onPress={h.nav.start}
+              accessibilityRole="button"
+              accessibilityLabel="Start navigation"
+            >
+              <Ionicons name="navigate" size={20} color="#ffffff" />
+              <Text style={styles.startNavButtonText}>Start Navigation</Text>
+            </Pressable>
+          )}
+
+          {/* Road type breakdown — full width */}
+          {showSafety &&
+            h.selectedSafeRoute &&
+            Object.keys(h.selectedSafeRoute.safety.roadTypes).length > 0 && (
+              <RoadTypeBreakdown roadTypes={h.selectedSafeRoute.safety.roadTypes} />
+            )}
 
           {/* Safety profile chart */}
           {showSafety &&
@@ -399,7 +406,25 @@ const styles = StyleSheet.create({
     color: '#d92d20',
     paddingVertical: 8,
   },
-  routeSafetyRow: {},
+  startNavButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 12,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#1570ef',
+    width: '100%',
+  } as any,
+  startNavButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  routeSafetyRow: {
+    width: '100%',
+  },
   routeSafetyRowWeb: {
     flexDirection: 'row',
     gap: 16,
