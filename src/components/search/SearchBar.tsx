@@ -373,18 +373,26 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    ...(Platform.OS === 'web' ? { boxShadow: '0 2px 12px rgba(0, 0, 0, 0.10)' } : {}),
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 12px rgba(0, 0, 0, 0.10)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.10,
+          shadowRadius: 8,
+        }),
     elevation: 6,
     overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
     width: '100%',
     maxWidth: 600,
-    paddingVertical: Platform.OS === 'web' ? 8 : 6,
+    paddingTop: Platform.OS === 'web' ? 8 : 10,
+    paddingBottom: Platform.OS === 'web' ? 8 : 10,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Platform.OS === 'web' ? 10 : 8,
-    paddingVertical: 0,
+    paddingVertical: Platform.OS === 'web' ? 0 : 2,
   },
   inputIconWrap: {
     width: 20,
@@ -462,7 +470,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Platform.OS === 'web' ? 10 : 8,
-    marginVertical: 0,
+    marginVertical: Platform.OS === 'web' ? 0 : 2,
   },
   swapButton: {
     width: 22,

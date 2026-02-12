@@ -22,7 +22,7 @@ export const MapTypeControl = ({ mapType, onMapTypeChange }: MapTypeControlProps
   const isPhone = Platform.OS !== 'web';
 
   return (
-    <View style={[styles.container, isPhone && styles.containerPhone]}>      {isExpanded ? (
+    <View style={Platform.OS === 'web' ? styles.container : undefined}>      {isExpanded ? (
         <View style={styles.expandedContainer}>
           {MAP_TYPE_OPTIONS.map((option) => (
             <Pressable
@@ -66,11 +66,6 @@ const styles = StyleSheet.create({
     top: 16,
     right: 16,
     zIndex: 1000,
-  },
-  containerPhone: {
-    position: 'relative' as const,
-    top: undefined as any,
-    right: undefined as any,
   },
   iconButton: {
     width: 36,

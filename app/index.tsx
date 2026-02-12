@@ -66,11 +66,14 @@ export default function HomeScreen() {
        * On iOS/web it's a no-op passthrough.
        */}
       <AndroidOverlayHost>
-        {/* ── Map type toggle — on phones, sits below search bar ── */}
-        {!h.isNavActive && (
-          <View style={Platform.OS === 'web' ? undefined : { position: 'absolute', top: insets.top + 100, right: 12, zIndex: 11 }}>
+        {/* ── Map type toggle — on phones, sits below search bar as a layer icon ── */}
+        {!h.isNavActive && Platform.OS !== 'web' && (
+          <View style={{ position: 'absolute', top: insets.top + 96, right: 14, zIndex: 11, elevation: 11 }}>
             <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />
           </View>
+        )}
+        {!h.isNavActive && Platform.OS === 'web' && (
+          <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />
         )}
 
         {/* ── Pin-mode banner ── */}
