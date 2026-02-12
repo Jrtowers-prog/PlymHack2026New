@@ -266,6 +266,8 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       const amenity = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || '';
       const hoursRaw = el.tags?.opening_hours || '';
       const { open, nextChange } = checkOpenNow(hoursRaw);
+      // Skip places that are confirmed closed right now
+      if (open === false) continue;
       placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw });
     }
   }

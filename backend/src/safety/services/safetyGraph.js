@@ -27,6 +27,7 @@
  */
 
 const { haversine, fastDistance, buildSpatialGrid, findNearby, countNearby } = require('./geo');
+const opening_hours_lib = require('opening_hours');
 
 // ── Road hierarchy scoring ──────────────────────────────────────────────────
 const ROAD_TYPE_SCORES = {
@@ -248,10 +249,18 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
       const lat = el.lat || el.center?.lat;
       const lng = el.lon || el.center?.lon;
       if (lat && lng) {
+        // Skip places that are confirmed closed right now
+        const hoursRaw = el.tags?.opening_hours || '';
+        if (hoursRaw) {
+          try {
+            const oh = new opening_hours_lib(hoursRaw, { address: { country_code: 'gb' } });
+            if (!oh.getState(new Date())) continue;
+          } catch { /* unparseable — keep it */ }
+        }
         placeNodes.push({
           lat, lng,
           amenity: el.tags?.amenity,
-          opening_hours: el.tags?.opening_hours,
+          opening_hours: hoursRaw,
         });
       }
     }
