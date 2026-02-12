@@ -38,7 +38,7 @@ const {
 
 const router = express.Router();
 
-const MAX_DISTANCE_KM = 20;
+const MAX_DISTANCE_KM = 10;
 const WALKING_SPEED_MPS = 1.35;
 
 // ── Route cache (5 min TTL) ─────────────────────────────────────────────────
@@ -172,11 +172,17 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   console.log(`[safe-routes] 🔍 Computing: ${oLatV},${oLngV} → ${dLatV},${dLngV} (${straightLineKm.toFixed(1)} km)`);
 
   // ── 5. Compute bounding box ─────────────────────────────────────────
-  const bufferM = Math.max(500, Math.min(2000, straightLineDist * 0.4));
+  // Smaller buffer for longer routes — A* doesn't need a wide corridor.
+  // Short (<1 km): 500m, Medium (1-3 km): 400m, Long (>3 km): 300m.
+  // Old formula used 0.4× distance (up to 2 km buffer) → 100K+ elements → 140s.
+  const bufferM = straightLineDist < 1000 ? 500
+    : straightLineDist < 3000 ? 400
+    : 300;
   const bbox = bboxFromPoints(
     [{ lat: oLatV, lng: oLngV }, { lat: dLatV, lng: dLngV }],
     bufferM,
   );
+  console.log(`[safe-routes] 📐 Buffer: ${bufferM}m for ${straightLineKm.toFixed(1)} km route`);
 
   // ── 6. Fetch ALL data — single Overpass query + crime (2 requests total, not 5)
   console.log(`[safe-routes] 📡 Fetching data (1 Overpass + 1 Crime API)...`);

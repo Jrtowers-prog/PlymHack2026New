@@ -132,7 +132,7 @@ async function fetchAllSafetyData(bbox) {
 
   console.log('[overpass] 🌐 Fetching ALL safety data in single query...');
   const t0 = Date.now();
-  const raw = await overpassQuery(query, 120);
+  const raw = await overpassQuery(query, 60);
   console.log(`[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`);
 
   const result = splitElements(raw.elements);
