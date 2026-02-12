@@ -8,14 +8,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef } from 'react';
 import {
-    ActivityIndicator,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import type { UseAutoPlaceSearchReturn } from '@/src/hooks/useAutoPlaceSearch';
@@ -159,16 +159,10 @@ export function SearchBar({
       pointerEvents="box-none"
     >
       <View style={styles.card}>
-        {/* Logo */}
-        <View style={styles.logoHeader}>
-          <Text style={styles.logoText}>SAFE NIGHT HOME</Text>
-        </View>
-
         {/* Origin Input */}
         <View style={styles.inputRow}>
           <View style={styles.inputIconWrap}>
             <View style={styles.iconDot} />
-            <View style={styles.iconConnector} />
           </View>
           <Pressable
             style={[styles.inputFieldWrap, focusedField === 'origin' && styles.inputFieldWrapFocused]}
@@ -208,7 +202,7 @@ export function SearchBar({
             <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
               {originSearch.status === 'searching' && <ActivityIndicator size="small" color="#1570ef" />}
               {(originSearch.status === 'found' || manualOrigin) && (
-                <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
               )}
               <Pressable
                 style={styles.mapPinButton}
@@ -216,7 +210,7 @@ export function SearchBar({
                 accessibilityRole="button"
                 accessibilityLabel="Pick on map"
               >
-                <Ionicons name="location-outline" size={20} color={pinMode === 'origin' ? '#1570ef' : '#667085'} />
+                <Ionicons name="location-outline" size={16} color={pinMode === 'origin' ? '#1570ef' : '#98a2b3'} />
               </Pressable>
               {!isUsingCurrentLocation && (
                 <Pressable
@@ -230,7 +224,7 @@ export function SearchBar({
                   accessibilityRole="button"
                   accessibilityLabel="Use current location"
                 >
-                  <Ionicons name="locate-outline" size={20} color="#667085" />
+                  <Ionicons name="locate-outline" size={16} color="#98a2b3" />
                 </Pressable>
               )}
             </View>
@@ -239,18 +233,22 @@ export function SearchBar({
 
         {/* Divider + Swap button */}
         <View style={styles.dividerRow}>
+          <View style={styles.inputIconWrap}>
+            <View style={styles.iconConnector} />
+            <Pressable
+              style={styles.swapButton}
+              onPress={() => {
+                onSwap();
+                onClearRoute();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Swap origin and destination"
+            >
+              <Ionicons name="swap-vertical" size={14} color="#667085" />
+            </Pressable>
+            <View style={styles.iconConnector} />
+          </View>
           <View style={styles.inputDivider} />
-          <Pressable
-            style={styles.swapButton}
-            onPress={() => {
-              onSwap();
-              onClearRoute();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Swap origin and destination"
-          >
-            <Ionicons name="swap-vertical" size={18} color="#667085" />
-          </Pressable>
         </View>
 
         {/* Destination Input */}
@@ -281,7 +279,7 @@ export function SearchBar({
             <View style={[styles.inputActions, { pointerEvents: 'box-none' }]}>
               {destSearch.status === 'searching' && <ActivityIndicator size="small" color="#1570ef" />}
               {(destSearch.status === 'found' || manualDest) && (
-                <Ionicons name="checkmark-circle" size={18} color="#22c55e" />
+                <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
               )}
               <Pressable
                 style={styles.mapPinButton}
@@ -289,7 +287,7 @@ export function SearchBar({
                 accessibilityRole="button"
                 accessibilityLabel="Pick on map"
               >
-                <Ionicons name="location-outline" size={20} color={pinMode === 'destination' ? '#d92d20' : '#667085'} />
+                <Ionicons name="location-outline" size={16} color={pinMode === 'destination' ? '#d92d20' : '#98a2b3'} />
               </Pressable>
               {(destSearch.place || manualDest) && (
                 <Pressable
@@ -302,7 +300,7 @@ export function SearchBar({
                   accessibilityRole="button"
                   accessibilityLabel="Clear destination"
                 >
-                  <Ionicons name="close-circle-outline" size={20} color="#98a2b3" />
+                  <Ionicons name="close-circle-outline" size={16} color="#98a2b3" />
                 </Pressable>
               )}
             </View>
@@ -370,134 +368,121 @@ const styles = StyleSheet.create({
   },
   content: {
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)' } : {}),
-    elevation: 8,
+    borderRadius: 14,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 2px 12px rgba(0, 0, 0, 0.10)' } : {}),
+    elevation: 6,
     overflow: Platform.OS === 'web' ? 'hidden' : 'visible',
     width: '100%',
     maxWidth: 600,
-  },
-  logoHeader: {
-    alignItems: 'center',
-    paddingTop: Platform.OS === 'web' ? 14 : 10,
-    paddingBottom: Platform.OS === 'web' ? 8 : 4,
-    justifyContent: 'center',
-  },
-  logoText: {
-    fontSize: Platform.OS === 'web' ? 22 : 16,
-    fontWeight: '900',
-    letterSpacing: Platform.OS === 'web' ? 3 : 2,
-    color: '#000000',
-    textAlign: 'center',
+    paddingVertical: Platform.OS === 'web' ? 8 : 6,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Platform.OS === 'web' ? 14 : 10,
-    paddingVertical: Platform.OS === 'web' ? 6 : 4,
+    paddingHorizontal: Platform.OS === 'web' ? 10 : 8,
+    paddingVertical: 0,
   },
   inputIconWrap: {
-    width: 24,
+    width: 20,
     alignItems: 'center',
   },
   iconDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: '#1570ef',
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: '#93c5fd',
   },
   iconConnector: {
-    width: 2,
-    height: 20,
+    width: 1.5,
+    height: 6,
     backgroundColor: '#d0d5dd',
-    marginTop: 2,
   },
   iconPin: {
-    width: 12,
-    height: 12,
+    width: 10,
+    height: 10,
     borderRadius: 2,
     backgroundColor: '#d92d20',
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: '#fca5a5',
   },
   inputFieldWrap: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 10,
+    marginLeft: 8,
     backgroundColor: '#f9fafb',
-    borderRadius: 12,
-    borderWidth: 1.5,
+    borderRadius: 10,
+    borderWidth: 1,
     borderColor: '#e5e7eb',
-    paddingHorizontal: Platform.OS === 'web' ? 18 : 12,
-    paddingVertical: Platform.OS === 'web' ? 16 : 10,
+    paddingHorizontal: Platform.OS === 'web' ? 12 : 10,
+    paddingVertical: Platform.OS === 'web' ? 10 : 7,
   },
   inputFieldWrapFocused: {
     borderColor: '#1570ef',
     backgroundColor: '#ffffff',
-    ...(Platform.OS === 'web' ? { boxShadow: '0 0 0 3px rgba(21, 112, 239, 0.2)' } : {}),
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 0 2px rgba(21, 112, 239, 0.15)' } : {}),
   },
   inputField: {
     flex: 1,
     height: '100%',
-    fontSize: Platform.OS === 'web' ? 16 : 14,
+    fontSize: Platform.OS === 'web' ? 14 : 13,
     color: '#101828',
     fontWeight: '400',
     borderWidth: 0,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
   } as any,
   locationDisplayText: {
-    fontSize: Platform.OS === 'web' ? 18 : 14,
+    fontSize: Platform.OS === 'web' ? 14 : 13,
     color: '#1570ef',
     fontWeight: '500',
   },
   inputActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginLeft: 8,
+    gap: 4,
+    marginLeft: 6,
   },
   mapPinButton: {
-    padding: 4,
-    borderRadius: 6,
+    padding: 3,
+    borderRadius: 4,
   },
   inputDivider: {
     flex: 1,
     height: 1,
     backgroundColor: '#f2f4f7',
+    marginLeft: 8,
   },
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 48,
-    marginRight: 14,
+    paddingHorizontal: Platform.OS === 'web' ? 10 : 8,
+    marginVertical: 0,
   },
   swapButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#f2f4f7',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 6,
   },
   predictionsDropdown: {
-    marginTop: 8,
+    marginTop: 6,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 12,
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)' }
+      ? { boxShadow: '0 6px 20px rgba(0, 0, 0, 0.12)' }
       : {
           shadowColor: '#000',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: 0.14,
-          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: 0.12,
+          shadowRadius: 20,
         }),
     elevation: 12,
     zIndex: 20,
@@ -510,8 +495,8 @@ const styles = StyleSheet.create({
   predictionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 13,
-    paddingHorizontal: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f2f4f7',
   },
@@ -523,26 +508,26 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f6ff',
   },
   predictionIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     backgroundColor: '#f2f4f7',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
   },
   predictionText: {
     flex: 1,
   },
   predictionPrimary: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
     color: '#101828',
   },
   predictionSecondary: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#667085',
-    marginTop: 2,
+    marginTop: 1,
   },
   predictionBadge: {
     backgroundColor: '#ecfdf3',
