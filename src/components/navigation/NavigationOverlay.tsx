@@ -5,7 +5,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View, Platform } from 'react-native';
 
 import type { NavigationInfo } from '@/src/hooks/useNavigation';
-import { formatDistance, formatDuration, maneuverIcon, stripHtml } from '@/src/utils/format';
+import { formatDuration, maneuverIcon, stripHtml } from '@/src/utils/format';
+
+/** Always show metres (no km conversion) */
+const formatMetres = (m: number): string => `${Math.round(m)} m`;
 
 interface NavigationOverlayProps {
   nav: NavigationInfo;
@@ -32,9 +35,7 @@ export function NavigationOverlay({ nav, topInset, bottomInset }: NavigationOver
               />
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <Text style={styles.distance}>
-                  {nav.distanceToNextTurn < 1000
-                    ? `${nav.distanceToNextTurn} m`
-                    : `${(nav.distanceToNextTurn / 1000).toFixed(1)} km`}
+                  In {formatMetres(nav.distanceToNextTurn)}
                 </Text>
                 <Text style={styles.instruction} numberOfLines={2}>
                   {stripHtml(nav.currentStep?.instruction ?? 'Continue on route')}
@@ -52,7 +53,10 @@ export function NavigationOverlay({ nav, topInset, bottomInset }: NavigationOver
           <View style={[styles.bottomBar, { marginBottom: bottomInset + 8 }]}>
             <View>
               <Text style={styles.remaining}>
-                {formatDistance(nav.remainingDistance)} · {formatDuration(nav.remainingDuration)}
+                {formatMetres(nav.remainingDistance)} remaining
+              </Text>
+              <Text style={styles.eta}>
+                ETA: {formatDuration(nav.remainingDuration)} walking
               </Text>
               {nav.state === 'off-route' && (
                 <Text style={styles.offRoute}>Off route — rerouting…</Text>
@@ -137,6 +141,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#101828',
+  },
+  eta: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#667085',
+    marginTop: 2,
   },
   offRoute: {
     fontSize: 13,
