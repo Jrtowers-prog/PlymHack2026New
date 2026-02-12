@@ -1,0 +1,82 @@
+# Build Android APK on push to main and upload to GitHub Releases.
+# The latest APK is always at:
+#   https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk
+
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed for creating releases
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Create .env for build
+        run: |
+          cat <<EOF > .env
+          EXPO_PUBLIC_API_BASE_URL=${{ secrets.EXPO_PUBLIC_API_BASE_URL }}
+          EXPO_PUBLIC_SAFETY_API_URL=${{ secrets.EXPO_PUBLIC_SAFETY_API_URL }}
+          EXPO_PUBLIC_OSM_USER_AGENT=SafeNightHome/1.0
+          EXPO_PUBLIC_OSM_EMAIL=${{ secrets.EXPO_PUBLIC_OSM_EMAIL }}
+          EOF
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: |
+          mv android/app/build/outputs/apk/release/app-release.apk SafeNightHome.apk
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest Build (${{ steps.sha.outputs.short }})"
+          body: |
+            Automatically built from commit `${{ github.sha }}`.
+
+            **Download:** [SafeNightHome.apk](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk)
+
+            ⚠️ Android only — iOS coming soon.
+          files: SafeNightHome.apk
+          prerelease: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

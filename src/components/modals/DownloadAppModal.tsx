@@ -3,7 +3,9 @@
  * Prompts them to download the native app (coming soon).
  */
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+
+const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk';
 
 interface DownloadAppModalProps {
   visible: boolean;
@@ -32,14 +34,19 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
           </View>
         </View>
 
-        {/* Android */}
-        <View style={styles.storeButton}>
+        {/* Android — direct APK download from GitHub Releases */}
+        <Pressable
+          style={styles.storeButtonActive}
+          onPress={() => Linking.openURL(APK_URL)}
+          accessibilityRole="link"
+        >
           <Ionicons name="logo-google-playstore" size={24} color="#fff" />
           <View style={styles.storeTextCol}>
-            <Text style={styles.storeLabel}>Google Play</Text>
-            <Text style={styles.comingSoon}>Coming Soon</Text>
+            <Text style={styles.storeLabel}>Download for Android</Text>
+            <Text style={styles.storeSubtext}>APK · Always latest version</Text>
           </View>
-        </View>
+          <Ionicons name="download-outline" size={20} color="#fff" />
+        </Pressable>
 
         <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button">
           <Text style={styles.closeText}>Close</Text>
@@ -92,6 +99,17 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 18,
+    opacity: 0.5,
+  },
+  storeButtonActive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    backgroundColor: '#1570EF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
   },
   storeTextCol: {
     flex: 1,
@@ -105,6 +123,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#98a2b3',
+    marginTop: 1,
+  },
+  storeSubtext: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.7)',
     marginTop: 1,
   },
   closeButton: {
