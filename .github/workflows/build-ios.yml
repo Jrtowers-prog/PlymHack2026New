@@ -38,17 +38,6 @@ jobs:
       - name: Install JS dependencies
         run: npm ci
 
-      - name: Cache CocoaPods
-        uses: actions/cache@v4
-        with:
-          path: ios/Pods
-          key: pods-${{ hashFiles('ios/Podfile.lock') }}
-          restore-keys: pods-
-
-      - name: Install CocoaPods dependencies
-        working-directory: ios
-        run: pod install
-
       - name: Create .env for build
         run: |
           cat <<EOF > .env
@@ -58,6 +47,13 @@ jobs:
           EXPO_PUBLIC_OSM_EMAIL=${{ secrets.EXPO_PUBLIC_OSM_EMAIL }}
           EXPO_PUBLIC_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
 
       - name: Install Apple certificate and provisioning profile
         env:
