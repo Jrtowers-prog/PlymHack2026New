@@ -28,6 +28,7 @@ const { validateLatitude, validateLongitude } = require('../../shared/validation
 const { haversine, bboxFromPoints, encodePolyline } = require('../services/geo');
 const { fetchAllSafetyData } = require('../services/overpassClient');
 const { fetchCrimesInBbox } = require('../services/crimeClient');
+const { fetchPlacesAlongRoute } = require('../services/foursquareClient');
 
 /**
  * Check if a place is open right now using the opening_hours npm library.
@@ -266,9 +267,34 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       const amenity = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || '';
       const hoursRaw = el.tags?.opening_hours || '';
       const { open, nextChange } = checkOpenNow(hoursRaw);
-      // Skip places that are confirmed closed right now
-      if (open === false) continue;
-      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw });
+      // Skip closed and unknown-hours places from OSM — only keep confirmed open
+      if (open !== true) continue;
+      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw, source: 'osm' });
+    }
+  }
+
+  // ── 6c. Fetch additional open places from Foursquare ────────────────
+  const fsqKey = process.env.FOURSQUARE_API_KEY || '';
+  if (fsqKey) {
+    try {
+      // Build route coordinates from the bounding box center points
+      const routeCoords = allData.roads.elements
+        .filter((e) => e.type === 'node' && e.lat && e.lon)
+        .slice(0, 200) // cap to avoid excessive sampling
+        .map((e) => ({ lat: e.lat, lng: e.lon }));
+      const fsqPlaces = await fetchPlacesAlongRoute(routeCoords, fsqKey);
+      // Merge Foursquare places, deduplicating against OSM places (~20m proximity)
+      const osmKeys = new Set(placeNodes.map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`));
+      for (const fp of fsqPlaces) {
+        const k = `${fp.lat.toFixed(4)},${fp.lng.toFixed(4)}`;
+        if (!osmKeys.has(k) && fp.open === true) {
+          placeNodes.push(fp);
+          osmKeys.add(k);
+        }
+      }
+      console.log(`[safe-routes] 📍 Foursquare: +${fsqPlaces.length} places found, ${placeNodes.length} total open places`);
+    } catch (err) {
+      console.warn(`[safe-routes] ⚠️  Foursquare fetch failed: ${err.message}`);
     }
   }
 

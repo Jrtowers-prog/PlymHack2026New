@@ -249,13 +249,15 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
       const lat = el.lat || el.center?.lat;
       const lng = el.lon || el.center?.lon;
       if (lat && lng) {
-        // Skip places that are confirmed closed right now
+        // Only count confirmed-open places in safety scoring
         const hoursRaw = el.tags?.opening_hours || '';
         if (hoursRaw) {
           try {
             const oh = new opening_hours_lib(hoursRaw, { address: { country_code: 'gb' } });
-            if (!oh.getState(new Date())) continue;
-          } catch { /* unparseable — keep it */ }
+            if (!oh.getState(new Date())) continue; // closed → skip
+          } catch { continue; } // unparseable → skip (can't confirm open)
+        } else {
+          continue; // no hours data → skip (can't confirm open)
         }
         placeNodes.push({
           lat, lng,
