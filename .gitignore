@@ -61,3 +61,4 @@ app-example
 # Build artifacts
 android_build_log.txt
 test_map.png
+.env.production
