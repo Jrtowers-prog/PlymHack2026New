@@ -23,10 +23,37 @@
  */
 
 const express = require('express');
+const opening_hours = require('opening_hours');
 const { validateLatitude, validateLongitude } = require('../../shared/validation/validate');
 const { haversine, bboxFromPoints, encodePolyline } = require('../services/geo');
 const { fetchAllSafetyData } = require('../services/overpassClient');
 const { fetchCrimesInBbox } = require('../services/crimeClient');
+
+/**
+ * Check if a place is open right now using the opening_hours npm library.
+ * Returns { open: boolean, nextChange: string|null }.
+ *   - nextChange is a human-readable string like "closes at 22:00" or "opens at 08:00"
+ */
+function checkOpenNow(hoursString) {
+  if (!hoursString) return { open: null, nextChange: null };  // unknown
+  try {
+    const oh = new opening_hours(hoursString, { address: { country_code: 'gb' } });
+    const now = new Date();
+    const isOpen = oh.getState(now);
+    let nextChange = null;
+    try {
+      const next = oh.getNextChange(now);
+      if (next) {
+        const h = next.getHours().toString().padStart(2, '0');
+        const m = next.getMinutes().toString().padStart(2, '0');
+        nextChange = isOpen ? `closes at ${h}:${m}` : `opens at ${h}:${m}`;
+      }
+    } catch { /* some strings don't support getNextChange */ }
+    return { open: isOpen, nextChange };
+  } catch {
+    return { open: null, nextChange: null };  // unparseable
+  }
+}
 const {
   buildGraph,
   findNearestNode,
@@ -234,7 +261,13 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   for (const el of allData.places.elements) {
     const lat = el.lat || el.center?.lat;
     const lng = el.lon || el.center?.lon;
-    if (lat && lng) placeNodes.push({ lat, lng });
+    if (lat && lng) {
+      const name = el.tags?.name || el.tags?.['name:en'] || el.tags?.brand || el.tags?.operator || '';
+      const amenity = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || '';
+      const hoursRaw = el.tags?.opening_hours || '';
+      const { open, nextChange } = checkOpenNow(hoursRaw);
+      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw });
+    }
   }
 
   // ── 7. Build safety-weighted graph (with coverage maps) ─────────────
@@ -516,11 +549,19 @@ function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, 
     }
   }
 
-  // Collect open places near route
+  // Collect places near route (with name, open status, and hours)
   for (const pl of (placeNodes || [])) {
     if (isNearRoute(pl.lat, pl.lng)) {
       const key = `pl:${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}`;
-      if (!seen.has(key)) { seen.add(key); pois.places.push({ lat: pl.lat, lng: pl.lng }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        pois.places.push({
+          lat: pl.lat, lng: pl.lng,
+          name: pl.name, amenity: pl.amenity,
+          open: pl.open, nextChange: pl.nextChange,
+          opening_hours: pl.opening_hours,
+        });
+      }
     }
   }
 

@@ -152,7 +152,13 @@ export function useHomeScreen() {
     pois.transit?.forEach((t, i) => markers.push({ id: `poi-transit-${i}`, kind: 'bus_stop', coordinate: { latitude: t.lat, longitude: t.lng }, label: 'Transit Stop' }));
     pois.deadEnds?.forEach((d, i) => markers.push({ id: `poi-deadend-${i}`, kind: 'dead_end', coordinate: { latitude: d.lat, longitude: d.lng }, label: 'Dead End' }));
     pois.lights?.forEach((l, i) => markers.push({ id: `poi-light-${i}`, kind: 'light', coordinate: { latitude: l.lat, longitude: l.lng }, label: 'Street Light' }));
-    pois.places?.forEach((p, i) => markers.push({ id: `poi-place-${i}`, kind: 'shop', coordinate: { latitude: p.lat, longitude: p.lng }, label: 'Open Place' }));
+    pois.places?.forEach((p: any, i: number) => {
+      const name = p.name || p.amenity || 'Place';
+      let status = '';
+      if (p.open === true) status = p.nextChange ? ` (Open · ${p.nextChange})` : ' (Open)';
+      else if (p.open === false) status = p.nextChange ? ` (Closed · ${p.nextChange})` : ' (Closed)';
+      markers.push({ id: `poi-place-${i}`, kind: 'shop', coordinate: { latitude: p.lat, longitude: p.lng }, label: `${name}${status}` });
+    });
     pois.crimes?.forEach((cr, i) => markers.push({ id: `poi-crime-${i}`, kind: 'crime', coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime' }));
     return markers;
   }, [selectedSafeRoute]);
