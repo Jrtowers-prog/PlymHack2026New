@@ -30,11 +30,6 @@ export function RouteCard({ route, index, isSelected, onSelect }: RouteCardProps
     >
       <View style={styles.header}>
         <View style={styles.labelRow}>
-          {isBest && (
-            <View style={styles.bestBadge}>
-              <Text style={styles.bestBadgeTick}>✓</Text>
-            </View>
-          )}
           <Text
             style={[
               styles.label,
@@ -101,20 +96,6 @@ const styles = StyleSheet.create({
   },
   labelBest: {
     color: '#16a34a',
-  },
-  bestBadge: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#22c55e',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bestBadgeTick: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 16,
   },
   scoreChip: {
     flexDirection: 'row',
