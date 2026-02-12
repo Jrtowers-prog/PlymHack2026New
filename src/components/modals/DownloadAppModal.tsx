@@ -1,12 +1,26 @@
 /**
  * DownloadAppModal — Shown on web when user tries to start navigation.
- * Prompts them to download the native app (coming soon).
+ * Prompts them to download the native app.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk';
 const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa';
+
+/** Trigger a real file download on web by creating a temporary <a download> link */
+const downloadFile = (url: string, filename: string) => {
+  if (Platform.OS === 'web') {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+};
 
 interface DownloadAppModalProps {
   visible: boolean;
@@ -29,7 +43,7 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
         {/* Apple — direct IPA download from GitHub Releases */}
         <Pressable
           style={styles.storeButtonActive}
-          onPress={() => Linking.openURL(IPA_URL)}
+          onPress={() => downloadFile(IPA_URL, 'SafeNightHome.ipa')}
           accessibilityRole="link"
         >
           <Ionicons name="logo-apple" size={24} color="#fff" />
@@ -43,7 +57,7 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
         {/* Android — direct APK download from GitHub Releases */}
         <Pressable
           style={styles.storeButtonActive}
-          onPress={() => Linking.openURL(APK_URL)}
+          onPress={() => downloadFile(APK_URL, 'SafeNightHome.apk')}
           accessibilityRole="link"
         >
           <Ionicons name="logo-google-playstore" size={24} color="#fff" />
