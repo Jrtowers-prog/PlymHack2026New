@@ -245,20 +245,30 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
 
   const placeNodes = [];
   if (placeData) {
+    const hour = new Date().getHours();
     for (const el of placeData.elements) {
       const lat = el.lat || el.center?.lat;
       const lng = el.lon || el.center?.lon;
       if (lat && lng) {
-        // Only count confirmed-open places in safety scoring
         const hoursRaw = el.tags?.opening_hours || '';
+        let isOpen = null;
+        // 1) Try parsing OSM opening_hours
         if (hoursRaw) {
           try {
             const oh = new opening_hours_lib(hoursRaw, { address: { country_code: 'gb' } });
-            if (!oh.getState(new Date())) continue; // closed → skip
-          } catch { continue; } // unparseable → skip (can't confirm open)
-        } else {
-          continue; // no hours data → skip (can't confirm open)
+            isOpen = oh.getState(new Date());
+          } catch { isOpen = null; }
         }
+        // 2) Fall back to time-of-day heuristic
+        if (isOpen === null) {
+          const type = (el.tags?.amenity || el.tags?.shop || '').toLowerCase();
+          const always = ['hospital','clinic','pharmacy','fuel','atm','police','fire_station','hotel','hostel','parking','toilets'];
+          const evening = ['pub','bar','nightclub','biergarten','casino'];
+          if (always.includes(type)) isOpen = true;
+          else if (evening.includes(type)) isOpen = hour >= 11 && hour < 23;
+          else isOpen = hour >= 7 && hour < 22;
+        }
+        if (!isOpen) continue;
         placeNodes.push({
           lat, lng,
           amenity: el.tags?.amenity,

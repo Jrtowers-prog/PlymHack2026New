@@ -28,7 +28,6 @@ const { validateLatitude, validateLongitude } = require('../../shared/validation
 const { haversine, bboxFromPoints, encodePolyline } = require('../services/geo');
 const { fetchAllSafetyData } = require('../services/overpassClient');
 const { fetchCrimesInBbox } = require('../services/crimeClient');
-const { fetchPlacesAlongRoute } = require('../services/foursquareClient');
 
 /**
  * Check if a place is open right now using the opening_hours npm library.
@@ -54,6 +53,38 @@ function checkOpenNow(hoursString) {
   } catch {
     return { open: null, nextChange: null };  // unparseable
   }
+}
+
+/**
+ * Type-based heuristic for places without opening_hours tags.
+ * Uses the amenity/shop type + current hour to estimate if likely open.
+ *   - Hospitals, petrol stations, ATMs → always open
+ *   - Pubs, bars, nightclubs → open evenings/nights
+ *   - Shops, cafes, restaurants → open daytime
+ *   - Unknown → likely open during daytime only
+ */
+const ALWAYS_OPEN = new Set([
+  'hospital', 'clinic', 'pharmacy', 'fuel', 'atm',
+  'police', 'fire_station', 'hotel', 'hostel',
+  'charging_station', 'parking', 'toilets',
+]);
+const EVENING_TYPES = new Set([
+  'pub', 'bar', 'nightclub', 'biergarten', 'casino',
+]);
+
+function heuristicOpen(amenityType) {
+  const hour = new Date().getHours();
+  const type = (amenityType || '').toLowerCase();
+
+  if (ALWAYS_OPEN.has(type)) return { open: true, nextChange: 'open 24/7' };
+  if (EVENING_TYPES.has(type)) {
+    // Pubs/bars: typically 11:00–23:00 or later
+    if (hour >= 11 && hour < 23) return { open: true, nextChange: 'closes at 23:00' };
+    return { open: false, nextChange: 'opens at 11:00' };
+  }
+  // Default shops/restaurants/cafes: 07:00–22:00
+  if (hour >= 7 && hour < 22) return { open: true, nextChange: 'closes at 22:00' };
+  return { open: false, nextChange: 'opens at 07:00' };
 }
 const {
   buildGraph,
@@ -266,35 +297,17 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       const name = el.tags?.name || el.tags?.['name:en'] || el.tags?.brand || el.tags?.operator || '';
       const amenity = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || '';
       const hoursRaw = el.tags?.opening_hours || '';
-      const { open, nextChange } = checkOpenNow(hoursRaw);
-      // Skip closed and unknown-hours places from OSM — only keep confirmed open
-      if (open !== true) continue;
-      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw, source: 'osm' });
-    }
-  }
-
-  // ── 6c. Fetch additional open places from Foursquare ────────────────
-  const fsqKey = process.env.FOURSQUARE_API_KEY || '';
-  if (fsqKey) {
-    try {
-      // Build route coordinates from the bounding box center points
-      const routeCoords = allData.roads.elements
-        .filter((e) => e.type === 'node' && e.lat && e.lon)
-        .slice(0, 200) // cap to avoid excessive sampling
-        .map((e) => ({ lat: e.lat, lng: e.lon }));
-      const fsqPlaces = await fetchPlacesAlongRoute(routeCoords, fsqKey);
-      // Merge Foursquare places, deduplicating against OSM places (~20m proximity)
-      const osmKeys = new Set(placeNodes.map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`));
-      for (const fp of fsqPlaces) {
-        const k = `${fp.lat.toFixed(4)},${fp.lng.toFixed(4)}`;
-        if (!osmKeys.has(k) && fp.open === true) {
-          placeNodes.push(fp);
-          osmKeys.add(k);
-        }
+      // 1) Try OSM opening_hours tag (most accurate)
+      let { open, nextChange } = checkOpenNow(hoursRaw);
+      // 2) Fall back to type-based heuristic if no hours data
+      if (open === null) {
+        const h = heuristicOpen(amenity);
+        open = h.open;
+        nextChange = h.nextChange;
       }
-      console.log(`[safe-routes] 📍 Foursquare: +${fsqPlaces.length} places found, ${placeNodes.length} total open places`);
-    } catch (err) {
-      console.warn(`[safe-routes] ⚠️  Foursquare fetch failed: ${err.message}`);
+      // Only keep confirmed-open places
+      if (open !== true) continue;
+      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw });
     }
   }
 
