@@ -12,7 +12,7 @@ import { AppError } from '@/src/types/errors';
 import type { DirectionsRoute, LatLng, RouteSegment } from '@/src/types/google';
 import { decodePolyline } from '@/src/utils/polyline';
 
-const BACKEND_BASE = env.apiBaseUrl;
+const BACKEND_BASE = env.safetyApiUrl;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
