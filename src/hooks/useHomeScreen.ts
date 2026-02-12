@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, Keyboard } from 'react-native';
 
+import type { MapType } from '@/src/components/maps/RouteMap.types';
 import { SHEET_DEFAULT } from '@/src/components/sheets/DraggableSheet';
 import { useAIExplanation } from '@/src/hooks/useAIExplanation';
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
@@ -17,9 +18,8 @@ import { useNavigation } from '@/src/hooks/useNavigation';
 import { useOnboarding } from '@/src/hooks/useOnboarding';
 import { useSafeRoutes } from '@/src/hooks/useSafeRoutes';
 import { reverseGeocode } from '@/src/services/openStreetMap';
-import type { EnrichedSegment, SafeRoute } from '@/src/services/safeRoutes';
+import type { SafeRoute } from '@/src/services/safeRoutes';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
-import type { MapType } from '@/src/components/maps/RouteMap.types';
 import type { DirectionsRoute, LatLng, PlaceDetails } from '@/src/types/google';
 
 // ── Public interface ────────────────────────────────────────────────────────
