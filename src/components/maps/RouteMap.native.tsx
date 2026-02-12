@@ -1,7 +1,8 @@
 /**
- * RouteMap.native — Leaflet + OSM tiles in a WebView (100 % free, no API key).
+ * RouteMap.native — MapLibre GL JS in a WebView (100% free, no API key).
  *
- * Replaces Google Maps JS API in WebView entirely.
+ * Uses OpenFreeMap vector tiles for true 3D buildings, pitch, and bearing.
+ * Navigation mode: 60° pitch, heading-following camera, 3D building extrusions.
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -10,418 +11,428 @@ import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
 
 // ---------------------------------------------------------------------------
-// Build the HTML page that runs Leaflet + OSM tiles inside the WebView
+// Build the HTML page that runs MapLibre GL JS inside the WebView
 // ---------------------------------------------------------------------------
 
-const buildMapHtml = (mapType: string = 'roadmap') => `
+const buildMapHtml = (_mapType: string = 'roadmap') => `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet"/>
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"><\/script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    html,body{width:100%;height:100%;overflow:hidden;touch-action:none;background:#e8eaed}
-    #viewport{width:100%;height:100%;overflow:hidden;position:relative}
-    #map{width:100%;height:100%;touch-action:none;transition:transform 0.5s ease-out;transform-origin:center 65%}
-    /* In nav mode, over-size the map so 3D tilt doesn't reveal white edges */
-    #map.nav-active{width:140%;height:140%;position:absolute;top:-20%;left:-20%}
-    .map-ctrl{position:absolute;right:12px;bottom:100px;z-index:1000;display:flex;flex-direction:column;gap:4px}
+    html,body{width:100%;height:100%;overflow:hidden;background:#e8eaed}
+    #map{width:100%;height:100%;position:absolute;top:0;left:0}
+    .map-ctrl{position:absolute;right:12px;bottom:100px;z-index:10;display:flex;flex-direction:column;gap:4px}
     .map-btn{width:42px;height:42px;border:none;border-radius:10px;background:rgba(255,255,255,.95);
       box-shadow:0 2px 8px rgba(0,0,0,.2);font-size:22px;font-weight:700;color:#1D2939;
       cursor:pointer;display:flex;align-items:center;justify-content:center;
-      -webkit-tap-highlight-color:transparent;user-select:none;pointer-events:auto;line-height:1;touch-action:auto}
+      -webkit-tap-highlight-color:transparent;user-select:none;pointer-events:auto;line-height:1}
     .map-btn:active{background:#e4e7ec}
-    .recenter-btn{position:absolute;right:12px;bottom:50px;z-index:1000;width:42px;height:42px;
+    .recenter-btn{position:absolute;right:12px;bottom:50px;z-index:10;width:42px;height:42px;
       border:none;border-radius:50%;background:rgba(255,255,255,.95);
       box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;display:none;align-items:center;
-      justify-content:center;pointer-events:auto;touch-action:auto;transition:opacity 0.3s}
+      justify-content:center;pointer-events:auto;transition:opacity 0.3s}
     .recenter-btn:active{background:#e4e7ec}
     .recenter-btn.visible{display:flex}
     .road-label{background:rgba(0,0,0,.7);color:#fff;padding:2px 8px;border-radius:9px;
-      font-size:9px;font-weight:600;white-space:nowrap;border:none;box-shadow:none}
-    /* 3D road labels — perspective-aware, painted on the road */
-    .road-label-3d{background:rgba(30,40,60,.75);color:#fff;padding:3px 10px;border-radius:4px;
-      font-size:11px;font-weight:700;white-space:nowrap;letter-spacing:0.5px;
-      border:1px solid rgba(255,255,255,0.15);box-shadow:0 2px 6px rgba(0,0,0,.3);
-      text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
-    /* Hazard labels */
-    .hazard-label{background:rgba(239,68,68,.85);color:#fff;padding:3px 10px;border-radius:4px;
-      font-size:10px;font-weight:700;white-space:nowrap;letter-spacing:0.3px;
-      border:1px solid rgba(255,255,255,0.2);box-shadow:0 2px 6px rgba(0,0,0,.3);
-      text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
+      font-size:9px;font-weight:600;white-space:nowrap}
+    .road-label-3d{background:rgba(20,30,50,.8);color:#fff;padding:4px 12px;border-radius:5px;
+      font-size:12px;font-weight:700;white-space:nowrap;letter-spacing:0.5px;
+      border:1px solid rgba(255,255,255,0.15);box-shadow:0 2px 8px rgba(0,0,0,.4);
+      text-shadow:0 1px 3px rgba(0,0,0,.6)}
+    .hazard-label{background:rgba(239,68,68,.9);color:#fff;padding:4px 12px;border-radius:5px;
+      font-size:11px;font-weight:700;white-space:nowrap;letter-spacing:0.3px;
+      border:1px solid rgba(255,255,255,0.2);box-shadow:0 2px 8px rgba(0,0,0,.4);
+      text-shadow:0 1px 3px rgba(0,0,0,.5);animation:pulse 2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}
+    .maplibregl-ctrl-attrib{font-size:9px!important}
   </style>
 </head>
 <body>
-  <div id="viewport">
-    <div id="map"></div>
-    <div class="map-ctrl" id="mapCtrl">
-      <button class="map-btn" onclick="map.zoomIn()">+</button>
-      <button class="map-btn" onclick="map.zoomOut()">&minus;</button>
-    </div>
-    <button class="recenter-btn" id="recenterBtn" onclick="recenterMap()">
-      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1D2939" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
-    </button>
+  <div id="map"></div>
+  <div class="map-ctrl" id="mapCtrl">
+    <button class="map-btn" onclick="map.zoomIn()">+</button>
+    <button class="map-btn" onclick="map.zoomOut()">&minus;</button>
   </div>
+  <button class="recenter-btn" id="recenterBtn" onclick="recenterMap()">
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1D2939" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+  </button>
+
   <script>
-    var map, tileLayer;
-    var markers = [];
-    var polylines = [];
-    var navMarker = null;
-    var navLabels = [];
-    var longPressTimer = null;
-    var longPressPos = null;
-    var touchMoved = false;
+    /* ── State ─────────────────────────────────────────────── */
+    var currentMarkers = [];
+    var navMarkerObj = null;
+    var hazardMarkers = [];
     var isNavMode = false;
-    var currentRotation = 0;
     var userInteracted = false;
-    var lastNavLL = null;
+    var lastNavCenter = null;
+    var lastData = null;
+    var styleReady = false;
+    var longPressTimer = null;
+    var longPressPoint = null;
+    var touchMoved = false;
 
-    function clearArray(arr) {
-      for (var i = 0; i < arr.length; i++) map.removeLayer(arr[i]);
-      arr.length = 0;
-    }
+    var emptyFC = { type: 'FeatureCollection', features: [] };
 
-    function sendMsg(type, data) {
-      try {
-        window.ReactNativeWebView.postMessage(JSON.stringify(
-          Object.assign({ type: type }, data || {})
-        ));
-      } catch(e) {}
-    }
+    function clearMarkerArray(arr) { arr.forEach(function(m){m.remove()}); arr.length=0; }
+    function sendMsg(t, d) { try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({type:t},d||{}))); } catch(e){} }
 
-    // ── Init ───────────────────────────────────────────────────
-    map = L.map('map', {
-      center: [50.3755, -4.1427],
+    /* ── Styles (all free, no API key) ─────────────────────── */
+    var mapStyles = {
+      roadmap: 'https://tiles.openfreemap.org/styles/liberty',
+      satellite: { version:8, sources:{ sat:{ type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:18 }}, layers:[{id:'sat',type:'raster',source:'sat'}] },
+      terrain: { version:8, sources:{ topo:{ type:'raster', tiles:['https://tile.opentopomap.org/{z}/{x}/{y}.png'], tileSize:256, maxzoom:17 }}, layers:[{id:'topo',type:'raster',source:'topo'}] },
+      hybrid: { version:8, sources:{ sat:{ type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:18 }}, layers:[{id:'sat',type:'raster',source:'sat'}] }
+    };
+
+    /* ── Init MapLibre ─────────────────────────────────────── */
+    var map = new maplibregl.Map({
+      container: 'map',
+      style: mapStyles.roadmap,
+      center: [-4.1427, 50.3755],
       zoom: 13,
-      zoomControl: false,
+      pitch: 0,
+      bearing: 0,
+      maxPitch: 70,
+      antialias: true,
       attributionControl: true,
     });
 
-    tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
-      maxZoom: 19,
-    }).addTo(map);
+    // Disable rotation in normal mode (enable only in nav mode)
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
 
-    // Normal click / tap
-    map.on('click', function(e) {
-      sendMsg('press', { lat: e.latlng.lat, lng: e.latlng.lng });
-    });
-
-    // Right-click (desktop fallback)
-    map.on('contextmenu', function(e) {
-      sendMsg('longpress', { lat: e.latlng.lat, lng: e.latlng.lng });
-    });
-
-    // ── Touch-based long-press (mobile) ──
-    var mapDiv = document.getElementById('map');
-
-    mapDiv.addEventListener('touchstart', function(e) {
-      touchMoved = false;
-      if (e.touches.length === 1) {
-        var touch = e.touches[0];
-        longPressPos = { x: touch.clientX, y: touch.clientY };
-        longPressTimer = setTimeout(function() {
-          if (!touchMoved && longPressPos) {
-            var pt = map.containerPointToLatLng(L.point(longPressPos.x, longPressPos.y));
-            sendMsg('longpress', { lat: pt.lat, lng: pt.lng });
-          }
-          longPressTimer = null;
-        }, 600);
-      }
-    }, { passive: true });
-
-    mapDiv.addEventListener('touchmove', function(e) {
-      if (longPressPos && e.touches.length === 1) {
-        var dx = e.touches[0].clientX - longPressPos.x;
-        var dy = e.touches[0].clientY - longPressPos.y;
-        if (Math.sqrt(dx*dx + dy*dy) > 10) {
-          touchMoved = true;
-          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        }
-      }
-    }, { passive: true });
-
-    mapDiv.addEventListener('touchend', function() {
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-      longPressPos = null;
-    }, { passive: true });
-
-    mapDiv.addEventListener('touchcancel', function() {
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-      longPressPos = null;
-    }, { passive: true });
-
-    sendMsg('ready', {});
-
-    // Track user drag to pause auto-follow in nav mode
-    map.on('dragstart', function() {
-      if (isNavMode) {
-        userInteracted = true;
-        var btn = document.getElementById('recenterBtn');
-        if (btn) btn.classList.add('visible');
-      }
-    });
-
-    // Recenter on user location
-    function recenterMap() {
-      userInteracted = false;
-      var btn = document.getElementById('recenterBtn');
-      if (btn) btn.classList.remove('visible');
-      if (lastNavLL) {
-        map.panTo(lastNavLL);
-        if (map.getZoom() < 17) map.setZoom(17);
-      }
+    /* ── Sources & Layers ──────────────────────────────────── */
+    function addCustomSources() {
+      if (map.getSource('unselected-routes')) return;
+      map.addSource('unselected-routes', { type:'geojson', data:emptyFC });
+      map.addSource('route-traversed', { type:'geojson', data:emptyFC });
+      map.addSource('route-segments', { type:'geojson', data:emptyFC });
+      map.addSource('route-remaining', { type:'geojson', data:emptyFC });
+      map.addSource('safety-markers', { type:'geojson', data:emptyFC });
     }
 
-    // Navigation view — 3D perspective tilt + heading rotation
-    function setNavView(heading, entering) {
-      var mapEl = document.getElementById('map');
-      var btn = document.getElementById('recenterBtn');
-      var ctrl = document.getElementById('mapCtrl');
-      if (!entering) {
-        isNavMode = false;
-        currentRotation = 0;
-        userInteracted = false;
-        mapEl.style.transform = 'none';
-        mapEl.classList.remove('nav-active');
-        if (btn) btn.classList.remove('visible');
-        if (ctrl) ctrl.style.display = 'flex';
-        // Clear nav labels
-        clearArray(navLabels);
-        // Force map resize after un-tilting
-        setTimeout(function() { map.invalidateSize(); }, 600);
-        return;
-      }
-      isNavMode = true;
-      mapEl.classList.add('nav-active');
-      if (ctrl) ctrl.style.display = 'none';
-      // Show recenter only when user has panned
-      if (userInteracted && btn) btn.classList.add('visible');
-      // Shortest-path rotation to avoid spinning the long way around
-      var target = -(heading || 0);
-      var diff = target - currentRotation;
-      while (diff > 180) diff -= 360;
-      while (diff < -180) diff += 360;
-      currentRotation += diff;
-      mapEl.style.transform = 'perspective(1000px) rotateX(45deg) rotate(' + currentRotation + 'deg) scale(1.3)';
-      // Force map resize for oversized container
-      setTimeout(function() { map.invalidateSize(); }, 100);
-    }
+    function addCustomLayers() {
+      map.addLayer({ id:'unselected-routes-line', type:'line', source:'unselected-routes',
+        layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':'#98a2b3','line-opacity':0.5,'line-width':5} });
+      map.addLayer({ id:'route-traversed-line', type:'line', source:'route-traversed',
+        layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':'#1D2939','line-opacity':0.7,'line-width':7} });
+      map.addLayer({ id:'route-segments-line', type:'line', source:'route-segments',
+        layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':['get','color'],'line-opacity':0.9,'line-width':7} });
+      map.addLayer({ id:'route-remaining-line', type:'line', source:'route-remaining',
+        layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':'#4285F4','line-opacity':0.85,'line-width':6} });
+      map.addLayer({ id:'safety-circles', type:'circle', source:'safety-markers',
+        paint:{'circle-radius':4,'circle-color':['get','color'],'circle-opacity':0.9,
+          'circle-stroke-color':'#fff','circle-stroke-width':1} });
 
-    // ── Update handler (called from RN via injectJavaScript) ──
-    function updateMap(data) {
-      clearArray(markers);
-      clearArray(polylines);
-
-      var bounds = L.latLngBounds([]);
-      var hasBounds = false;
-
-      // Origin – blue dot (hidden during navigation)
-      if (data.origin && !data.navLocation) {
-        var pos = L.latLng(data.origin.lat, data.origin.lng);
-        markers.push(L.circleMarker(pos, {
-          radius: 8, fillColor: '#4285F4', fillOpacity: 1,
-          color: '#fff', weight: 3,
-        }).bindTooltip('Your location').addTo(map));
-        markers.push(L.circleMarker(pos, {
-          radius: 3.5, fillColor: '#fff', fillOpacity: 1,
-          color: '#fff', weight: 0,
-        }).addTo(map));
-        bounds.extend(pos);
-        hasBounds = true;
-      }
-
-      // Destination marker
-      if (data.destination) {
-        var dPos = L.latLng(data.destination.lat, data.destination.lng);
-        markers.push(L.marker(dPos).bindTooltip('Destination').addTo(map));
-        bounds.extend(dPos);
-        hasBounds = true;
-      }
-
-      // Unselected routes – grey
-      (data.routes || []).forEach(function(r) {
-        if (r.selected) return;
-        var path = r.path.map(function(p) { return [p.lat, p.lng]; });
-        var pl = L.polyline(path, { color: '#98a2b3', opacity: 0.5, weight: 5 }).addTo(map);
-        pl.on('click', function() { sendMsg('selectRoute', { id: r.id }); });
-        polylines.push(pl);
-        bounds.extend(pl.getBounds());
-        hasBounds = true;
+      // Click unselected route to select it
+      map.on('click','unselected-routes-line',function(e){
+        if(e.features&&e.features[0]) sendMsg('selectRoute',{id:e.features[0].properties.routeId});
       });
+      map.on('mouseenter','unselected-routes-line',function(){map.getCanvas().style.cursor='pointer'});
+      map.on('mouseleave','unselected-routes-line',function(){map.getCanvas().style.cursor=''});
+    }
 
-      function nearestIdx(path, pt) {
-        var best = 0, bestD = 1e18;
-        for (var i = 0; i < path.length; i++) {
-          var dlat = path[i].lat - pt.lat, dlng = path[i].lng - pt.lng;
-          var d = dlat*dlat + dlng*dlng;
-          if (d < bestD) { bestD = d; best = i; }
+    function add3DBuildings() {
+      try {
+        // Find first symbol layer for insertion point
+        var layers = map.getStyle().layers || [];
+        var labelId;
+        for(var i=0;i<layers.length;i++){
+          if(layers[i].type==='symbol'&&layers[i].layout&&layers[i].layout['text-field']){labelId=layers[i].id;break}
         }
-        return best;
+        map.addLayer({
+          id:'3d-buildings', source:'openmaptiles', 'source-layer':'building',
+          type:'fill-extrusion', minzoom:14,
+          paint:{
+            'fill-extrusion-color':['interpolate',['linear'],['zoom'],14,'#ddd8d0',16.5,'#c8c3bb'],
+            'fill-extrusion-height':['interpolate',['linear'],['zoom'],14,0,14.5,['coalesce',['get','render_height'],8]],
+            'fill-extrusion-base':['interpolate',['linear'],['zoom'],14,0,14.5,['coalesce',['get','render_min_height'],0]],
+            'fill-extrusion-opacity':['interpolate',['linear'],['zoom'],14,0,14.5,0.7,18,0.85],
+          }
+        },labelId);
+      } catch(e){}
+    }
+
+    /* ── Map load ──────────────────────────────────────────── */
+    map.on('load',function(){
+      styleReady = true;
+      addCustomSources();
+      addCustomLayers();
+      add3DBuildings();
+      sendMsg('ready',{});
+    });
+
+    /* ── Click / Long-press events ─────────────────────────── */
+    map.on('click',function(e){
+      // Don't fire on route-click (already handled above)
+      var features = map.queryRenderedFeatures(e.point,{layers:['unselected-routes-line']});
+      if(features.length>0) return;
+      sendMsg('press',{lat:e.lngLat.lat,lng:e.lngLat.lng});
+    });
+    map.on('contextmenu',function(e){
+      sendMsg('longpress',{lat:e.lngLat.lat,lng:e.lngLat.lng});
+    });
+
+    // Touch-based long-press (mobile)
+    var mapEl = document.getElementById('map');
+    mapEl.addEventListener('touchstart',function(e){
+      touchMoved=false;
+      if(e.touches.length===1){
+        var t=e.touches[0];
+        longPressPoint = {x:t.clientX, y:t.clientY};
+        longPressTimer = setTimeout(function(){
+          if(!touchMoved&&longPressPoint){
+            var rect=map.getCanvas().getBoundingClientRect();
+            var pt=map.unproject([longPressPoint.x-rect.left, longPressPoint.y-rect.top]);
+            sendMsg('longpress',{lat:pt.lat,lng:pt.lng});
+          }
+          longPressTimer=null;
+        },600);
+      }
+    },{passive:true});
+    mapEl.addEventListener('touchmove',function(e){
+      if(longPressPoint&&e.touches.length===1){
+        var dx=e.touches[0].clientX-longPressPoint.x, dy=e.touches[0].clientY-longPressPoint.y;
+        if(Math.sqrt(dx*dx+dy*dy)>10){touchMoved=true;if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null}}
+      }
+    },{passive:true});
+    mapEl.addEventListener('touchend',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null};longPressPoint=null},{passive:true});
+    mapEl.addEventListener('touchcancel',function(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null};longPressPoint=null},{passive:true});
+
+    /* ── Drag tracking for recenter ────────────────────────── */
+    map.on('dragstart',function(){
+      if(isNavMode){
+        userInteracted=true;
+        var btn=document.getElementById('recenterBtn');
+        if(btn)btn.classList.add('visible');
+      }
+    });
+
+    function recenterMap(){
+      userInteracted=false;
+      var btn=document.getElementById('recenterBtn');
+      if(btn)btn.classList.remove('visible');
+      if(lastNavCenter){
+        map.easeTo({center:lastNavCenter, zoom:Math.max(map.getZoom(),17), pitch:60, duration:600});
+      }
+    }
+
+    /* ── Helpers ────────────────────────────────────────────── */
+    function nearestIdx(path,pt){
+      var best=0,bestD=1e18;
+      for(var i=0;i<path.length;i++){
+        var dl=path[i].lat-pt.lat,dn=path[i].lng-pt.lng,d=dl*dl+dn*dn;
+        if(d<bestD){bestD=d;best=i}
+      }
+      return best;
+    }
+    function extBounds(b,c){
+      if(!b) return [[c[0],c[1]],[c[0],c[1]]];
+      return [[Math.min(b[0][0],c[0]),Math.min(b[0][1],c[1])],[Math.max(b[1][0],c[0]),Math.max(b[1][1],c[1])]];
+    }
+
+    /* ── Main update (called from RN) ──────────────────────── */
+    function updateMap(data){
+      if(!styleReady) return;
+      lastData = data;
+
+      clearMarkerArray(currentMarkers);
+      var bounds = null;
+
+      /* — Origin marker (blue dot) — hidden during nav — */
+      if(data.origin && !data.navLocation){
+        var oe=document.createElement('div');
+        oe.innerHTML='<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#4285F4" stroke="white" stroke-width="3"/><circle cx="12" cy="12" r="3" fill="white"/></svg>';
+        currentMarkers.push(new maplibregl.Marker({element:oe,anchor:'center'}).setLngLat([data.origin.lng,data.origin.lat]).addTo(map));
+        bounds=extBounds(bounds,[data.origin.lng,data.origin.lat]);
       }
 
-      // Selected route
-      var sel = (data.routes || []).find(function(r) { return r.selected; });
-      if (sel) {
-        if (data.navLocation && sel.path.length > 1) {
-          var navPt = { lat: data.navLocation.lat, lng: data.navLocation.lng };
-          var splitIdx = nearestIdx(sel.path, navPt);
+      /* — Destination marker (red pin) — */
+      if(data.destination){
+        var de=document.createElement('div');
+        de.innerHTML='<svg width="28" height="40" viewBox="0 0 28 40"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="#ef4444" stroke="white" stroke-width="1.5"/><circle cx="14" cy="14" r="5" fill="white"/></svg>';
+        currentMarkers.push(new maplibregl.Marker({element:de,anchor:'bottom'}).setLngLat([data.destination.lng,data.destination.lat]).addTo(map));
+        bounds=extBounds(bounds,[data.destination.lng,data.destination.lat]);
+      }
 
-          if (splitIdx > 0) {
-            var tp = [];
-            for (var ti = 0; ti <= splitIdx; ti++) tp.push([sel.path[ti].lat, sel.path[ti].lng]);
-            tp.push([navPt.lat, navPt.lng]);
-            polylines.push(L.polyline(tp, { color: '#1D2939', opacity: 0.7, weight: 7 }).addTo(map));
+      /* — Unselected routes (grey, clickable) — */
+      var unselF=[];
+      (data.routes||[]).forEach(function(r){
+        if(r.selected) return;
+        var coords=r.path.map(function(p){return[p.lng,p.lat]});
+        unselF.push({type:'Feature',properties:{routeId:r.id},geometry:{type:'LineString',coordinates:coords}});
+        coords.forEach(function(c){bounds=extBounds(bounds,c)});
+      });
+      map.getSource('unselected-routes').setData({type:'FeatureCollection',features:unselF});
+
+      /* — Selected route — */
+      var sel=(data.routes||[]).find(function(r){return r.selected});
+      var travF=[], segF=[], remF=[];
+
+      if(sel){
+        if(data.navLocation && sel.path.length>1){
+          var navPt=[data.navLocation.lng,data.navLocation.lat];
+          var splitIdx=nearestIdx(sel.path,data.navLocation);
+
+          // Traversed portion
+          if(splitIdx>0){
+            var tp=[];
+            for(var ti=0;ti<=splitIdx;ti++) tp.push([sel.path[ti].lng,sel.path[ti].lat]);
+            tp.push(navPt);
+            travF.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:tp}});
           }
-
-          if (data.segments && data.segments.length > 0) {
-            data.segments.forEach(function(seg) {
-              var fp = []; var started = false;
-              for (var si = 0; si < seg.path.length; si++) {
-                var sp = seg.path[si];
-                if (!started) {
-                  var spIdx = nearestIdx(sel.path, sp);
-                  if (spIdx >= splitIdx) started = true;
-                }
-                if (started) fp.push([sp.lat, sp.lng]);
+          // Remaining: segments or plain
+          if(data.segments&&data.segments.length>0){
+            data.segments.forEach(function(seg){
+              var fp=[],started=false;
+              for(var si=0;si<seg.path.length;si++){
+                var sp=seg.path[si];
+                if(!started){var spIdx=nearestIdx(sel.path,sp);if(spIdx>=splitIdx)started=true}
+                if(started) fp.push([sp.lng,sp.lat]);
               }
-              if (fp.length >= 2) {
-                polylines.push(L.polyline(fp, { color: seg.color, opacity: 0.9, weight: 7 }).addTo(map));
-              }
+              if(fp.length>=2) segF.push({type:'Feature',properties:{color:seg.color},geometry:{type:'LineString',coordinates:fp}});
             });
           } else {
-            var remPath = [[navPt.lat, navPt.lng]];
-            for (var ri = splitIdx; ri < sel.path.length; ri++) {
-              remPath.push([sel.path[ri].lat, sel.path[ri].lng]);
-            }
-            polylines.push(L.polyline(remPath, { color: '#4285F4', opacity: 0.85, weight: 6 }).addTo(map));
+            var rc=[navPt];
+            for(var ri=splitIdx;ri<sel.path.length;ri++) rc.push([sel.path[ri].lng,sel.path[ri].lat]);
+            remF.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:rc}});
           }
         } else {
-          if (data.segments && data.segments.length > 0) {
-            data.segments.forEach(function(seg) {
-              var segPath = seg.path.map(function(p) { return [p.lat, p.lng]; });
-              polylines.push(L.polyline(segPath, { color: seg.color, opacity: 0.9, weight: 7 }).addTo(map));
+          // Not navigating
+          if(data.segments&&data.segments.length>0){
+            data.segments.forEach(function(seg){
+              var sc=seg.path.map(function(p){return[p.lng,p.lat]});
+              segF.push({type:'Feature',properties:{color:seg.color},geometry:{type:'LineString',coordinates:sc}});
             });
           } else {
-            var selPath = sel.path.map(function(p) { return [p.lat, p.lng]; });
-            polylines.push(L.polyline(selPath, { color: '#4285F4', opacity: 0.85, weight: 6 }).addTo(map));
+            var sc2=sel.path.map(function(p){return[p.lng,p.lat]});
+            remF.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:sc2}});
           }
         }
-        sel.path.forEach(function(p) { bounds.extend(L.latLng(p.lat, p.lng)); });
-        hasBounds = true;
+        sel.path.forEach(function(p){bounds=extBounds(bounds,[p.lng,p.lat])});
       }
 
-      // Safety markers
-      var markerColors = { crime: '#ef4444', shop: '#22c55e', light: '#facc15', bus_stop: '#3b82f6' };
-      (data.safetyMarkers || []).forEach(function(m) {
-        markers.push(L.circleMarker([m.lat, m.lng], {
-          radius: 4,
-          fillColor: markerColors[m.kind] || '#94a3b8',
-          fillOpacity: 0.9, color: '#fff', weight: 1,
-        }).bindTooltip(m.label || m.kind).addTo(map));
+      map.getSource('route-traversed').setData({type:'FeatureCollection',features:travF});
+      map.getSource('route-segments').setData({type:'FeatureCollection',features:segF});
+      map.getSource('route-remaining').setData({type:'FeatureCollection',features:remF});
+
+      /* — Safety markers — */
+      var mColors={crime:'#ef4444',shop:'#22c55e',light:'#facc15',bus_stop:'#3b82f6',cctv:'#8b5cf6',dead_end:'#f97316'};
+      var smF=(data.safetyMarkers||[]).map(function(m){
+        return{type:'Feature',properties:{kind:m.kind,label:m.label||m.kind,color:mColors[m.kind]||'#94a3b8'},
+          geometry:{type:'Point',coordinates:[m.lng,m.lat]}};
+      });
+      map.getSource('safety-markers').setData({type:'FeatureCollection',features:smF});
+
+      /* — Road labels — */
+      (data.roadLabels||[]).forEach(function(lbl){
+        var el=document.createElement('div');
+        el.className=isNavMode?'road-label-3d':'road-label';
+        if(!isNavMode) el.style.background=lbl.color;
+        el.textContent=lbl.name.slice(0,16);
+        currentMarkers.push(new maplibregl.Marker({element:el,anchor:'center'}).setLngLat([lbl.lng,lbl.lat]).addTo(map));
       });
 
-      // Road labels — use 3D style in nav mode
-      (data.roadLabels || []).forEach(function(lbl) {
-        var text = lbl.name.slice(0, 16);
-        var cls = isNavMode ? 'road-label-3d' : 'road-label';
-        var icon = L.divIcon({
-          className: '',
-          html: '<div class="' + cls + '" style="background:' + (isNavMode ? 'rgba(30,40,60,.75)' : lbl.color) + '">' + text + '</div>',
-          iconSize: null,
-        });
-        var m = L.marker([lbl.lat, lbl.lng], { icon: icon, interactive: false }).addTo(map);
-        markers.push(m);
-      });
+      /* — Fit bounds — */
+      if(data.fitBounds && bounds && !data.navLocation){
+        map.fitBounds(bounds,{padding:40,maxZoom:16,duration:600});
+      }
 
-      // Hazard labels along route in nav mode (crimes, dead-ends near path)
-      if (data.navLocation && data.safetyMarkers) {
-        clearArray(navLabels);
-        var navLat = data.navLocation.lat, navLng = data.navLocation.lng;
-        data.safetyMarkers.forEach(function(m) {
-          // Only show hazards within ~200m of user
-          var dlat = m.lat - navLat, dlng = m.lng - navLng;
-          var approxDist = Math.sqrt(dlat*dlat + dlng*dlng) * 111320;
-          if (approxDist > 200) return;
-          var hazardTypes = { crime: '⚠ Crime area', dead_end: '⛔ Dead end' };
-          var label = hazardTypes[m.kind];
-          if (!label) return;
-          var hIcon = L.divIcon({
-            className: '',
-            html: '<div class="hazard-label">' + label + '</div>',
-            iconSize: null,
+      /* — Pan to — */
+      if(data.panTo){
+        map.easeTo({center:[data.panTo.lng,data.panTo.lat],zoom:Math.max(map.getZoom(),14),duration:500});
+      }
+
+      /* — Navigation marker + 3D camera — */
+      if(navMarkerObj){navMarkerObj.remove();navMarkerObj=null}
+      clearMarkerArray(hazardMarkers);
+
+      if(data.navLocation){
+        var heading=data.navHeading||0;
+        lastNavCenter=[data.navLocation.lng,data.navLocation.lat];
+
+        // Direction arrow marker
+        var ne=document.createElement('div');
+        ne.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 56 56">'+
+          '<defs><filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#1570EF" flood-opacity="0.5"/></filter></defs>'+
+          '<circle cx="28" cy="28" r="24" fill="#1570EF" stroke="white" stroke-width="3" filter="url(#glow)"/>'+
+          '<polygon points="28,8 36,32 28,26 20,32" fill="white"/></svg>';
+        ne.style.width='56px';ne.style.height='56px';
+        navMarkerObj=new maplibregl.Marker({element:ne,anchor:'center',rotationAlignment:'map',rotation:heading})
+          .setLngLat(lastNavCenter).addTo(map);
+
+        // Camera follow
+        if(!userInteracted){
+          map.easeTo({
+            center:lastNavCenter,
+            zoom:Math.max(map.getZoom(),17),
+            pitch:60,
+            bearing:-heading,
+            duration:1000,
           });
-          navLabels.push(L.marker([m.lat, m.lng], { icon: hIcon, interactive: false, zIndexOffset: 900 }).addTo(map));
-        });
-      }
-
-      // Fit bounds
-      if (data.fitBounds && hasBounds && !data.navLocation) {
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
-      }
-
-      // Pan-to
-      if (data.panTo) {
-        map.panTo([data.panTo.lat, data.panTo.lng]);
-        if (map.getZoom() < 14) map.setZoom(14);
-      }
-
-      // Navigation marker + 3D nav view
-      if (navMarker) { map.removeLayer(navMarker); navMarker = null; }
-      if (data.navLocation) {
-        var heading = data.navHeading || 0;
-        lastNavLL = [data.navLocation.lat, data.navLocation.lng];
-        // Larger, bolder navigation arrow with glow
-        var arrowSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 52 52">' +
-          '<circle cx="26" cy="26" r="24" fill="#1570EF" stroke="white" stroke-width="3" filter="url(#glow)"/>' +
-          '<defs><filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#1570EF" flood-opacity="0.6"/></filter></defs>' +
-          '<polygon points="26,6 34,30 26,24 18,30" fill="white" transform="rotate(' + heading + ', 26, 26)"/></svg>';
-        var navIcon = L.divIcon({
-          className: '',
-          html: '<img src="data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg) + '" width="52" height="52"/>',
-          iconSize: [52, 52],
-          iconAnchor: [26, 26],
-        });
-        navMarker = L.marker(lastNavLL, { icon: navIcon, interactive: false, zIndexOffset: 1000 }).addTo(map);
-        if (!userInteracted) {
-          map.panTo(lastNavLL);
-          if (map.getZoom() < 17) map.setZoom(17);
-          // Hide recenter when auto-following
-          var btn = document.getElementById('recenterBtn');
-          if (btn) btn.classList.remove('visible');
+          var btn=document.getElementById('recenterBtn');
+          if(btn) btn.classList.remove('visible');
         }
-        setNavView(heading, true);
+
+        // Enter nav mode
+        if(!isNavMode){
+          isNavMode=true;
+          var ctrl=document.getElementById('mapCtrl');
+          if(ctrl) ctrl.style.display='none';
+          map.dragRotate.enable();
+          map.touchZoomRotate.enableRotation();
+        }
+
+        // Hazard labels near user
+        var nlat=data.navLocation.lat, nlng=data.navLocation.lng;
+        (data.safetyMarkers||[]).forEach(function(m){
+          var dlat=m.lat-nlat,dlng=m.lng-nlng;
+          if(Math.sqrt(dlat*dlat+dlng*dlng)*111320>200) return;
+          var ht={crime:'⚠ Crime area',dead_end:'⛔ Dead end'};
+          var txt=ht[m.kind]; if(!txt) return;
+          var he=document.createElement('div'); he.className='hazard-label'; he.textContent=txt;
+          hazardMarkers.push(new maplibregl.Marker({element:he,anchor:'center'}).setLngLat([m.lng,m.lat]).addTo(map));
+        });
+
       } else {
-        setNavView(0, false);
-        // Clear hazard labels when exiting nav
-        clearArray(navLabels);
+        // Exit nav mode
+        if(isNavMode){
+          isNavMode=false;
+          userInteracted=false;
+          var ctrl=document.getElementById('mapCtrl');
+          if(ctrl) ctrl.style.display='flex';
+          var btn=document.getElementById('recenterBtn');
+          if(btn) btn.classList.remove('visible');
+          map.easeTo({pitch:0,bearing:0,duration:600});
+          map.dragRotate.disable();
+          map.touchZoomRotate.disableRotation();
+        }
       }
     }
 
-    // ── Set tile layer dynamically ──
-    function setMapType(type) {
-      var urls = {
-        roadmap: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-        satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        hybrid: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        terrain: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
-      };
-      var attrs = {
-        roadmap: '&copy; OpenStreetMap',
-        satellite: '&copy; Esri',
-        hybrid: '&copy; Esri | &copy; OSM',
-        terrain: '&copy; OpenTopoMap',
-      };
-      if (tileLayer) map.removeLayer(tileLayer);
-      tileLayer = L.tileLayer(urls[type] || urls.roadmap, {
-        attribution: attrs[type] || attrs.roadmap,
-        maxZoom: 19,
-      }).addTo(map);
+    /* ── Map type switching — */
+    function setMapType(type){
+      var s=mapStyles[type]||mapStyles.roadmap;
+      styleReady=false;
+      map.setStyle(s);
+      map.once('idle',function(){
+        styleReady=true;
+        addCustomSources();
+        addCustomLayers();
+        if(type==='roadmap') add3DBuildings();
+        if(lastData) updateMap(lastData);
+      });
     }
-  </script>
+  <\/script>
 </body>
 </html>
 `;
