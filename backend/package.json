@@ -3,12 +3,12 @@
   "version": "2.0.0",
   "description": "Safe Night Home — 2-service backend (API Gateway + Safety Compute)",
   "scripts": {
-    "start:gateway": "node src/gateway/server.js",
-    "start:safety": "node src/safety/server.js",
-    "dev:gateway": "node --watch src/gateway/server.js",
-    "dev:safety": "node --watch src/safety/server.js",
-    "dev": "node --watch src/gateway/server.js & node --watch src/safety/server.js",
-    "start": "node src/gateway/server.js"
+    "start:gateway": "PORT=3001 node src/gateway/server.js",
+    "start:safety": "PORT=3002 node src/safety/server.js",
+    "dev:gateway": "PORT=3001 node --watch src/gateway/server.js",
+    "dev:safety": "PORT=3002 node --watch src/safety/server.js",
+    "dev": "PORT=3001 node --watch src/gateway/server.js & PORT=3002 node --watch src/safety/server.js",
+    "start": "PORT=3001 node src/gateway/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
