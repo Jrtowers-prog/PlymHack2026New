@@ -9,8 +9,8 @@
  * on Android when a WebView (SurfaceView) is involved — no nesting
  * inside the map container.
  */
-import { useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useCallback } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -133,22 +133,19 @@ export default function HomeScreen() {
 
         {/* ── Category highlight banner — shows when user tapped a stat card ── */}
         {h.highlightCategory && (
-          <Animated.View
-            style={[styles.highlightBanner, { bottom: Animated.add(h.sheetHeight, 12) }]}
-          >
+          <View style={[styles.highlightBanner, { top: insets.top + 120 }]}>
             <Pressable
               style={styles.highlightBannerInner}
               onPress={handleClearHighlight}
               accessibilityRole="button"
-              accessibilityLabel="Back to routes"
+              accessibilityLabel="Show all markers"
             >
-              <Ionicons name="arrow-back" size={18} color="#ffffff" />
               <Text style={styles.highlightBannerText}>
-                Showing {categoryLabels[h.highlightCategory] || h.highlightCategory}
+                Showing {(categoryLabels[h.highlightCategory] || h.highlightCategory).toLowerCase()} only · tap to view all
               </Text>
-              <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.7)" />
+              <Ionicons name="close-circle" size={16} color="rgba(255,255,255,0.8)" />
             </Pressable>
-          </Animated.View>
+          </View>
         )}
 
         {/* ── AI floating button ── */}
@@ -486,25 +483,26 @@ const styles = StyleSheet.create({
   } as any,
   highlightBanner: {
     position: 'absolute',
-    left: 16,
-    right: 16,
+    left: 0,
+    right: 0,
     zIndex: 13,
+    alignItems: 'center',
   },
   highlightBannerInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: '#1570ef',
-    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)' } : {}),
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: 'rgba(21, 112, 239, 0.9)',
+    maxWidth: 360,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 2px 8px rgba(0,0,0,0.18)' } : {}),
     elevation: 14,
   } as any,
   highlightBannerText: {
-    flex: 1,
     color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
