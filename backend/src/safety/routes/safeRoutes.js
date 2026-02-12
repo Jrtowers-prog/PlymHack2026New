@@ -455,9 +455,7 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
  *
  * Samples EVERY node on the route (no cap) so long routes have no gaps.
  */
-const MAIN_ROAD_TYPES = new Set(['primary', 'secondary', 'tertiary', 'trunk']);
-const MAIN_ROAD_BUFFER_M = 20;
-const PATH_BUFFER_M = 30;
+const NEARBY_M = 30;
 
 function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimeNodes) {
   const pois = { cctv: [], transit: [], deadEnds: [], lights: [], places: [], crimes: [] };
@@ -478,31 +476,18 @@ function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, 
     }
   }
 
-  // Build sample points from EVERY node on the route — no gaps.
-  // Each sample point carries the buffer distance for its road segment.
+  // Build sample points from EVERY node on the route — full coverage, no gaps.
   const samplePoints = [];
   for (let i = 0; i < routePath.length; i++) {
     const n = osmNodes.get(routePath[i]);
-    if (!n) continue;
-
-    // Determine the road type for this node's edge (use the edge leading TO this node)
-    let buffer = PATH_BUFFER_M; // default: narrower-road buffer
-    const edgeIdx = i > 0 ? routeEdges[i - 1] : (routeEdges[0] ?? -1);
-    if (edgeIdx >= 0 && edgeIdx < allEdges.length) {
-      const highway = allEdges[edgeIdx].highway || '';
-      if (MAIN_ROAD_TYPES.has(highway)) {
-        buffer = MAIN_ROAD_BUFFER_M;
-      }
-    }
-    samplePoints.push({ lat: n.lat, lng: n.lng, buffer });
+    if (n) samplePoints.push({ lat: n.lat, lng: n.lng });
   }
 
-  // Helper: check if a point is near the route, returns true if within
-  // the road-type-specific buffer of any sample point.
+  // Helper: check if a point is within 30m of any point on the route
   function isNearRoute(lat, lng) {
     for (const sp of samplePoints) {
       const d = Math.sqrt((lat - sp.lat) ** 2 + (lng - sp.lng) ** 2) * 111320;
-      if (d < sp.buffer) return true;
+      if (d < NEARBY_M) return true;
     }
     return false;
   }
