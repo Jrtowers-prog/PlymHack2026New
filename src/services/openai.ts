@@ -8,7 +8,24 @@
 
 import { env } from '@/src/config/env';
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
+import type { SafetyBreakdown, RouteStats, RoutePOIs } from '@/src/services/safeRoutes';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
+
+/** Summarised per-segment stats for the AI */
+export interface SegmentSummary {
+  highway: string;
+  roadName: string;
+  distance: number;
+  safetyScore: number;
+  lightScore: number;
+  crimeScore: number;
+  cctvScore: number;
+  placeScore: number;
+  trafficScore: number;
+  isDeadEnd: boolean;
+  hasSidewalk: boolean;
+  surfaceType: string;
+}
 
 /** Per-route info bundle passed to the AI */
 export interface RouteInfo {
@@ -17,6 +34,25 @@ export interface RouteInfo {
   durationSeconds: number;
   summary?: string;
   score: RouteScore | undefined;
+  /** Full safety breakdown (roadType, lighting, crime, cctv, openPlaces, traffic) */
+  safetyBreakdown?: SafetyBreakdown;
+  /** Road type distribution e.g. { primary: 40, residential: 35 } */
+  roadTypes?: Record<string, number>;
+  /** Main road ratio 0-100 */
+  mainRoadRatio?: number;
+  /** Route statistics: dead ends, sidewalk %, transit stops, CCTV, etc. */
+  routeStats?: RouteStats;
+  /** POI counts along the route */
+  poiCounts?: {
+    cctv: number;
+    transit: number;
+    deadEnds: number;
+    lights: number;
+    places: number;
+    crimes: number;
+  };
+  /** Per-segment safety data (summarised) */
+  segments?: SegmentSummary[];
 }
 
 export interface AIExplanationInput {

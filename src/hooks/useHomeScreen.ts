@@ -239,7 +239,7 @@ export function useHomeScreen() {
   const isNavActive = nav.state === 'navigating' || nav.state === 'off-route';
 
   // ── AI Explanation ──
-  const ai = useAIExplanation(safetyResult, routes, routeScores, bestRouteId);
+  const ai = useAIExplanation(safetyResult, routes, routeScores, bestRouteId, safeRoutes as SafeRoute[]);
 
   // ── Map interaction handlers ──
   const resolvePin = useCallback(async (coordinate: LatLng): Promise<PlaceDetails> => {

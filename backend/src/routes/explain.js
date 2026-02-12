@@ -48,40 +48,95 @@ router.post('/explain-route', async (req, res) => {
       });
     }
 
-    // Build route blocks for the AI
+    // Build detailed per-route blocks with EVERY safety parameter
     const routeBlocks = routes
       .map((r, i) => {
         const isBest = r.routeId === bestRouteId;
         const tag = isBest ? ' ← RECOMMENDED' : '';
         const s = r.score;
-        return [
-          `Route ${i + 1}${tag}:`,
-          `  Distance: ${fmtDist(r.distanceMeters)}, Walking time: ${fmtTime(r.durationSeconds)}`,
-          s?.status === 'done'
-            ? `  Safety score: ${s.score}/100 (${s.label}), Pathfinding score: ${s.pathfindingScore}, Main-road ratio: ${(s.mainRoadRatio * 100).toFixed(0)}%`
-            : '  Safety score: not available',
-          r.summary ? `  Summary: ${r.summary}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
+        const bd = r.safetyBreakdown;
+        const stats = r.routeStats;
+        const pois = r.poiCounts;
+        const segs = r.segments || [];
+
+        const lines = [`Route ${i + 1}${tag}:`];
+        lines.push(`  Distance: ${fmtDist(r.distanceMeters)}, Walking time: ${fmtTime(r.durationSeconds)}`);
+        if (r.summary) lines.push(`  Summary: ${r.summary}`);
+
+        // Overall scores
+        if (s?.status === 'done') {
+          lines.push(`  Overall safety score: ${s.score}/100 (${s.label})`);
+          lines.push(`  Pathfinding score: ${s.pathfindingScore}/100`);
+          lines.push(`  Main-road ratio: ${(s.mainRoadRatio * 100).toFixed(0)}%`);
+          lines.push(`  Data confidence: ${(s.dataConfidence * 100).toFixed(0)}%`);
+        }
+
+        // Safety breakdown (per-factor scores)
+        if (bd) {
+          lines.push(`  Safety breakdown:`);
+          lines.push(`    Road type score: ${bd.roadType}/100`);
+          lines.push(`    Lighting score: ${bd.lighting}/100`);
+          lines.push(`    Crime score: ${bd.crime}/100 (higher=safer)`);
+          lines.push(`    CCTV coverage score: ${bd.cctv}/100`);
+          lines.push(`    Open places score: ${bd.openPlaces}/100`);
+          lines.push(`    Traffic/activity score: ${bd.traffic}/100`);
+        }
+
+        // Road type distribution
+        if (r.roadTypes && Object.keys(r.roadTypes).length > 0) {
+          const roadStr = Object.entries(r.roadTypes)
+            .map(([type, pct]) => `${type}: ${pct}%`)
+            .join(', ');
+          lines.push(`  Road types: ${roadStr}`);
+        }
+        if (r.mainRoadRatio != null) {
+          lines.push(`  Main road ratio: ${r.mainRoadRatio}%`);
+        }
+
+        // Route stats
+        if (stats) {
+          lines.push(`  Route stats:`);
+          lines.push(`    Dead ends: ${stats.deadEnds}`);
+          lines.push(`    Sidewalk coverage: ${stats.sidewalkPct}%`);
+          lines.push(`    Unpaved sections: ${stats.unpavedPct}%`);
+          lines.push(`    Transit stops nearby: ${stats.transitStopsNearby}`);
+          lines.push(`    CCTV cameras nearby: ${stats.cctvCamerasNearby}`);
+        }
+
+        // POI counts
+        if (pois) {
+          lines.push(`  Points of interest along route:`);
+          lines.push(`    CCTV cameras: ${pois.cctv}, Transit stops: ${pois.transit}, Street lights: ${pois.lights}`);
+          lines.push(`    Open places: ${pois.places}, Dead ends: ${pois.deadEnds}, Crime reports: ${pois.crimes}`);
+        }
+
+        // Segment summary (aggregate stats)
+        if (segs.length > 0) {
+          const avgLight = (segs.reduce((a, s) => a + s.lightScore, 0) / segs.length).toFixed(2);
+          const avgCrime = (segs.reduce((a, s) => a + s.crimeScore, 0) / segs.length).toFixed(2);
+          const avgCctv = (segs.reduce((a, s) => a + s.cctvScore, 0) / segs.length).toFixed(2);
+          const avgPlace = (segs.reduce((a, s) => a + s.placeScore, 0) / segs.length).toFixed(2);
+          const avgTraffic = (segs.reduce((a, s) => a + s.trafficScore, 0) / segs.length).toFixed(2);
+          const deadEndSegs = segs.filter(s => s.isDeadEnd).length;
+          const sidewalkSegs = segs.filter(s => s.hasSidewalk).length;
+          lines.push(`  Segment analysis (${segs.length} segments):`);
+          lines.push(`    Avg lighting: ${avgLight}, Avg crime safety: ${avgCrime}, Avg CCTV: ${avgCctv}`);
+          lines.push(`    Avg place activity: ${avgPlace}, Avg traffic: ${avgTraffic}`);
+          lines.push(`    Dead-end segments: ${deadEndSegs}, Segments with sidewalks: ${sidewalkSegs}`);
+        }
+
+        return lines.join('\n');
       })
       .join('\n\n');
 
-    const prompt = `You are a concise walking-safety assistant. We analysed ${routes.length} walking routes. Based ONLY on the data below, explain in 1–2 short paragraphs (max 150 words total) why the recommended route is the safest choice compared to the others. Reference specific numbers. Do NOT give general safety tips.
+    const prompt = `You are a concise walking-safety assistant. We analysed ${routes.length} walking routes using our safety algorithm. Based ONLY on the data below, write exactly ONE paragraph (max 150 words) that: (1) explains how the safety score was calculated from the factors shown, (2) explains why the recommended route is the safest compared to the alternatives using specific numbers, and (3) gives one brief practical suggestion for the walker. Do NOT use bullet points. Do NOT give general safety tips. Reference specific data points.
 
-RECOMMENDED ROUTE DETAILED DATA:
-- Safety score: ${safetyResult.safetyScore}/100 (${safetyResult.safetyLabel})
-- Crime reports nearby: ${safetyResult.crimeCount}
-- Street lights: ${safetyResult.streetLights}
-- Lit roads: ${safetyResult.litRoads}, Unlit roads: ${safetyResult.unlitRoads}
-- Open places (shops/cafés): ${safetyResult.openPlaces}
-- Bus stops nearby: ${safetyResult.busStops}
-- Main-road ratio: ${(safetyResult.mainRoadRatio * 100).toFixed(0)}%
-
-ALL ${routes.length} ROUTES:
+ALL ${routes.length} ROUTES WITH FULL SAFETY DATA:
 ${routeBlocks}
 
-Respond with 1–2 paragraphs, max 150 words. Explain why the recommended route is safer.`;
+THE RECOMMENDED ROUTE IS: Route ${routes.findIndex(r => r.routeId === bestRouteId) + 1}
+
+Respond with exactly ONE paragraph, max 150 words.`;
 
     console.log(`[OpenAI] 🌐 API call from backend → gpt-4o-mini`);
 
