@@ -53,7 +53,7 @@ router.get('/', async (req, res) => {
     // Build OSRM URL: /route/v1/{profile}/{lon1},{lat1};{lon2},{lat2}
     // Note: OSRM uses longitude,latitude (opposite of typical lat,lng)
     let url = `${OSRM_BASE}/${profile}/${oLng.value},${oLat.value};${dLng.value},${dLat.value}?` +
-      `alternatives=true&overview=full&geometries=polyline&steps=false`;
+      `alternatives=true&overview=full&geometries=polyline&steps=true`;
 
     // Optional waypoints — validate and add if provided
     if (req.query.waypoints) {
@@ -74,7 +74,7 @@ router.get('/', async (req, res) => {
         const coords = url.split('?')[0];
         const base = coords.substring(0, coords.lastIndexOf(';'));
         const dest = coords.substring(coords.lastIndexOf(';'));
-        url = `${base};${waypointsFormatted}${dest}?alternatives=true&overview=full&geometries=polyline&steps=false`;
+        url = `${base};${waypointsFormatted}${dest}?alternatives=true&overview=full&geometries=polyline&steps=true`;
       }
     }
 
@@ -93,17 +93,77 @@ router.get('/', async (req, res) => {
     }
 
     // Transform OSRM response to match expected format (Google Directions style)
-    const routes = (data.routes || []).slice(0, 5).map((route, idx) => ({
-      legs: [{
-        distance: { text: `${(route.distance / 1000).toFixed(1)} km`, value: route.distance },
-        duration: { text: `${Math.round(route.duration / 60)} mins`, value: Math.round(route.duration) },
-        end_location: { lat: dLat.value, lng: dLng.value },
-        start_location: { lat: oLat.value, lng: oLng.value },
-        steps: [],
-      }],
-      overview_polyline: { points: route.geometry },
-      summary: `Route ${idx + 1}`,
-    }));
+    const routes = (data.routes || []).slice(0, 5).map((route, idx) => {
+      // Flatten steps from all legs
+      const allLegs = route.legs || [];
+      const transformedSteps = allLegs.flatMap((leg) =>
+        (leg.steps || [])
+          .filter((s) => s.maneuver) // skip depart/arrive without geometry
+          .map((s) => {
+            // Build a human-readable instruction from OSRM maneuver data
+            const m = s.maneuver;
+            let instruction = s.name ? s.name : '';
+            const mod = m.modifier || '';
+            const type = m.type || '';
+
+            if (type === 'depart') {
+              instruction = `Head ${mod || 'north'}${s.name ? ' on ' + s.name : ''}`;
+            } else if (type === 'arrive') {
+              instruction = 'Arrive at your destination';
+            } else if (type === 'turn') {
+              instruction = `Turn ${mod}${s.name ? ' onto ' + s.name : ''}`;
+            } else if (type === 'new name' || type === 'continue') {
+              instruction = `Continue${s.name ? ' on ' + s.name : ''}`;
+            } else if (type === 'merge') {
+              instruction = `Merge${s.name ? ' onto ' + s.name : ''}`;
+            } else if (type === 'roundabout' || type === 'rotary') {
+              const exit = m.exit ? ` and take exit ${m.exit}` : '';
+              instruction = `Enter the roundabout${exit}${s.name ? ' onto ' + s.name : ''}`;
+            } else if (type === 'fork') {
+              instruction = `Take the ${mod || 'right'} fork${s.name ? ' onto ' + s.name : ''}`;
+            } else if (type === 'end of road') {
+              instruction = `At the end of the road, turn ${mod || 'right'}${s.name ? ' onto ' + s.name : ''}`;
+            } else {
+              instruction = `${type}${mod ? ' ' + mod : ''}${s.name ? ' — ' + s.name : ''}`;
+            }
+
+            // Map OSRM maneuver type+modifier to Google-style maneuver strings
+            let maneuver;
+            if (mod.includes('left') && type === 'turn') maneuver = mod.includes('slight') ? 'turn-slight-left' : mod.includes('sharp') ? 'turn-sharp-left' : 'turn-left';
+            else if (mod.includes('right') && type === 'turn') maneuver = mod.includes('slight') ? 'turn-slight-right' : mod.includes('sharp') ? 'turn-sharp-right' : 'turn-right';
+            else if (type === 'roundabout') maneuver = 'roundabout-right';
+            else if (mod === 'uturn') maneuver = 'uturn-left';
+            else maneuver = 'straight';
+
+            // OSRM intersection locations: start = first, end = last
+            const startLoc = m.location; // [lng, lat]
+            const intersections = s.intersections || [];
+            const endIntersection = intersections.length > 0 ? intersections[intersections.length - 1] : null;
+            const endLoc = endIntersection ? endIntersection.location : startLoc;
+
+            return {
+              html_instructions: instruction,
+              distance: { value: Math.round(s.distance || 0) },
+              duration: { value: Math.round(s.duration || 0) },
+              start_location: { lat: startLoc[1], lng: startLoc[0] },
+              end_location: { lat: endLoc[1], lng: endLoc[0] },
+              maneuver,
+            };
+          })
+      );
+
+      return {
+        legs: [{
+          distance: { text: `${(route.distance / 1000).toFixed(1)} km`, value: route.distance },
+          duration: { text: `${Math.round(route.duration / 60)} mins`, value: Math.round(route.duration) },
+          end_location: { lat: dLat.value, lng: dLng.value },
+          start_location: { lat: oLat.value, lng: oLng.value },
+          steps: transformedSteps,
+        }],
+        overview_polyline: { points: route.geometry },
+        summary: `Route ${idx + 1}`,
+      };
+    });
 
     console.log(`[directions] 📦 Response: ${routes.length} routes, primary: ${(routes[0]?.legs[0]?.distance?.text || 'N/A')}`);
 
