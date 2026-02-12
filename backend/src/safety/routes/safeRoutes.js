@@ -135,7 +135,10 @@ router.get('/', async (req, res) => {
       resolveInflight(result);
       res.json(result);
     } catch (err) {
-      rejectInflight(err);
+      // Resolve (not reject) the inflight promise with the error to avoid
+      // unhandled rejection crashes when concurrent requests are waiting.
+      resolveInflight(null);
+
       if (err.statusCode && err.code) {
         return res.status(err.statusCode).json({
           error: err.code,
@@ -248,7 +251,10 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   console.log(`[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`);
 
   if (rawRoutes.length === 0) {
-    throw Object.assign(new Error('No route found'), { statusCode: 404, code: 'NO_ROUTE_FOUND' });
+    throw Object.assign(
+      new Error('No walking route found between these points. The origin and destination may be in disconnected road networks (e.g. separated by a motorway, river, or railway with no crossing). Try a closer destination.'),
+      { statusCode: 404, code: 'NO_ROUTE_FOUND' },
+    );
   }
 
   // ── 10. Build response ────────────────────────────────────────────────
