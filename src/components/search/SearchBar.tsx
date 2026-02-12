@@ -48,6 +48,8 @@ export interface SearchBarProps {
   onPanTo: (location: LatLng) => void;
   /** Clear selected route */
   onClearRoute: () => void;
+  /** Swap origin and destination */
+  onSwap: () => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -67,6 +69,7 @@ export function SearchBar({
   setPinMode,
   onPanTo,
   onClearRoute,
+  onSwap,
 }: SearchBarProps) {
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
@@ -234,8 +237,21 @@ export function SearchBar({
           </Pressable>
         </View>
 
-        {/* Divider */}
-        <View style={styles.inputDivider} />
+        {/* Divider + Swap button */}
+        <View style={styles.dividerRow}>
+          <View style={styles.inputDivider} />
+          <Pressable
+            style={styles.swapButton}
+            onPress={() => {
+              onSwap();
+              onClearRoute();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Swap origin and destination"
+          >
+            <Ionicons name="swap-vertical" size={18} color="#667085" />
+          </Pressable>
+        </View>
 
         {/* Destination Input */}
         <View style={styles.inputRow}>
@@ -452,10 +468,24 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   inputDivider: {
+    flex: 1,
     height: 1,
     backgroundColor: '#f2f4f7',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginLeft: 48,
     marginRight: 14,
+  },
+  swapButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f2f4f7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
   },
   predictionsDropdown: {
     marginTop: 8,

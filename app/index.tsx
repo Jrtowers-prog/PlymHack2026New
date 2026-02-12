@@ -101,6 +101,7 @@ export default function HomeScreen() {
             setPinMode={h.setPinMode}
             onPanTo={h.handlePanTo}
             onClearRoute={h.clearSelectedRoute}
+            onSwap={h.swapOriginAndDest}
           />
         )}
 
@@ -134,7 +135,7 @@ export default function HomeScreen() {
         >
           {/* Header — hide distance/duration when there's only an error */}
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>{hasError && h.routes.length === 0 ? 'Error' : 'Routes'}</Text>
+            <Text style={styles.sheetTitle}>{hasError && h.routes.length === 0 ? 'Oops!!' : 'Routes'}</Text>
             {!hasError && <Text style={styles.sheetMeta}>{distanceLabel} · {durationLabel}</Text>}
           </View>
 

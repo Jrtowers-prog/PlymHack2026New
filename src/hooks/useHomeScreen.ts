@@ -260,6 +260,9 @@ export function useHomeScreen() {
       if (pinMode === 'origin') {
         setIsUsingCurrentLocation(false);
         originSearch.clear();
+        // Reset destination so the user picks fresh start → end
+        destSearch.clear();
+        setManualDest(null);
         const pin = await resolvePin(coordinate);
         setManualOrigin(pin);
         setPinMode(null);
@@ -300,6 +303,61 @@ export function useHomeScreen() {
   const clearSelectedRoute = useCallback(() => {
     setSelectedRouteId(null);
   }, []);
+
+  /** Swap origin and destination (like Google Maps). */
+  const swapOriginAndDest = useCallback(() => {
+    // Snapshot current effective values
+    const prevOriginIsGPS = isUsingCurrentLocation;
+    const prevOriginPlace = originSearch.place;
+    const prevManualOrigin = manualOrigin;
+    const prevDestPlace = destSearch.place;
+    const prevManualDest = manualDest;
+
+    // Destination → new origin
+    if (prevManualDest) {
+      setManualOrigin(prevManualDest);
+      setIsUsingCurrentLocation(false);
+      originSearch.clear();
+    } else if (prevDestPlace) {
+      setManualOrigin({
+        placeId: prevDestPlace.placeId ?? `swap-${Date.now()}`,
+        name: prevDestPlace.name,
+        location: prevDestPlace.location,
+      });
+      setIsUsingCurrentLocation(false);
+      originSearch.clear();
+    } else {
+      // No destination was set — nothing to swap into origin
+      return;
+    }
+
+    // Origin → new destination
+    if (prevManualOrigin) {
+      setManualDest(prevManualOrigin);
+      destSearch.clear();
+    } else if (!prevOriginIsGPS && prevOriginPlace) {
+      setManualDest({
+        placeId: prevOriginPlace.placeId ?? `swap-${Date.now()}`,
+        name: prevOriginPlace.name,
+        location: prevOriginPlace.location,
+      });
+      destSearch.clear();
+    } else if (prevOriginIsGPS && location) {
+      // GPS was origin — create a pin from current coords
+      setManualDest({
+        placeId: `gps-${Date.now()}`,
+        name: 'Your location',
+        location,
+      });
+      destSearch.clear();
+      setIsUsingCurrentLocation(false);
+    } else {
+      setManualDest(null);
+      destSearch.clear();
+    }
+
+    setSelectedRouteId(null);
+  }, [isUsingCurrentLocation, originSearch, manualOrigin, destSearch, manualDest, location]);
 
   return {
     // Onboarding
@@ -347,6 +405,7 @@ export function useHomeScreen() {
     handleMapLongPress,
     handlePanTo,
     clearSelectedRoute,
+    swapOriginAndDest,
 
     // Safety
     safetyResult,
