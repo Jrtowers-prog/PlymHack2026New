@@ -2,7 +2,7 @@
 
 A cross-platform mobile app that helps pedestrians find **safer walking routes at night** by building a custom OSM walking graph, running **A\* pathfinding with a multi-factor safety cost function**, and visualising risk per segment on an interactive map — with **AI-powered route explanations** via GPT-4o-mini.
 
-Built with **React Native (Expo SDK 54)**, **TypeScript**, and an **Express.js** backend deployed on **Render.com**.
+Built with **React Native (Expo SDK 54)**, **TypeScript**, and a **2-service Express.js backend** (API Gateway + Safety Compute) deployed on **Render.com** free tier.
 
 ---
 
@@ -55,20 +55,30 @@ Built with **React Native (Expo SDK 54)**, **TypeScript**, and an **Express.js**
 └─────────────┬────────────────────────────────────────────────┘
               │  HTTPS
               ▼
-┌──────────────────────────────────────────────────────────────┐
-│              Express.js Backend (Render.com)                  │
+┌─────────────────────────────────────────────────────────────┐
+│       API Gateway Service (Render.com free tier)             │
 │                                                              │
-│  Security: Helmet · CORS whitelist · Rate limiting           │
-│            Input validation · Server-side API keys           │
+│  Lightweight I/O proxy — proxies external APIs               │
+│  Security: Helmet · CORS · Rate limiting · Validation        │
 │                                                              │
 │  Endpoints:                                                  │
-│    GET  /api/safe-routes       A* pathfinding + safety scores│
 │    GET  /api/directions        OSRM walking directions       │
 │    GET  /api/places/autocomplete  Nominatim place search     │
 │    GET  /api/places/details    Place details                 │
 │    GET  /api/places/nearby     Nearby amenities (Overpass)   │
 │    POST /api/explain-route     AI explanation (OpenAI proxy) │
 │    GET  /api/staticmap         Static map images             │
+│    GET  /api/health            Health check                  │
+└──────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│     Safety Compute Service (Render.com free tier)            │
+│                                                              │
+│  CPU-heavy A* pathfinding + safety scoring                   │
+│  Security: Helmet · CORS · Rate limiting (60/15min)          │
+│                                                              │
+│  Endpoints:                                                  │
+│    GET  /api/safe-routes       A* pathfinding + safety scores│
 │    GET  /api/health            Health check                  │
 │                                                              │
 │  Services:                                                   │
@@ -118,7 +128,8 @@ cd backend && npm install && cd ..
 
 ```env
 # ─── Required ───────────────────────────────────────
-EXPO_PUBLIC_API_BASE_URL=http://localhost:3001   # Backend URL
+EXPO_PUBLIC_API_BASE_URL=http://localhost:3001      # API Gateway URL
+EXPO_PUBLIC_SAFETY_API_URL=http://localhost:3002    # Safety Compute Service URL
 
 # ─── Recommended ────────────────────────────────────
 EXPO_PUBLIC_OSM_USER_AGENT=        # Descriptive user-agent for Nominatim (required in prod)
@@ -239,22 +250,37 @@ PlymHack2026New/
 │       └── segmentRoute.ts         Route → 50 m segment splitter
 │
 ├── backend/
-│   ├── package.json                 Backend dependencies
+│   ├── package.json                 Backend dependencies & scripts
 │   └── src/
-│       ├── index.js                 Express server entry point
-│       ├── validate.js              Input validation middleware
-│       ├── routes/
-│       │   ├── directions.js        OSRM walking directions proxy
-│       │   ├── explain.js           OpenAI AI explanation endpoint
-│       │   ├── nearby.js            Nearby amenities (Overpass)
-│       │   ├── places.js            Place search (Nominatim)
-│       │   ├── safeRoutes.js        A* safe routing + request coalescing
-│       │   └── staticmap.js         Static map image proxy
-│       └── services/
-│           ├── crimeClient.js       UK Police API client
-│           ├── geo.js               Haversine, bounding boxes, polyline
-│           ├── overpassClient.js    Overpass with 3-server rotation
-│           └── safetyGraph.js       A* pathfinding + MinHeap + K-routes
+│       ├── shared/                  Code shared between services
+│       │   ├── types/               JSDoc type definitions
+│       │   │   ├── coordinates.js   LatLng, BBox types
+│       │   │   ├── safety.js        SafetyBreakdown, CrimeRecord types
+│       │   │   └── routes.js        RouteSegment, RoutePOIs types
+│       │   ├── middleware/          Express middleware factories
+│       │   │   ├── cors.js          CORS middleware factory
+│       │   │   ├── rateLimiter.js   Rate limiter factory
+│       │   │   ├── errorHandler.js  Global error handler
+│       │   │   └── healthCheck.js   Service-aware health check
+│       │   └── validation/
+│       │       └── validate.js      Input validation (lat/lng/string)
+│       ├── gateway/                 API Gateway Service (I/O proxy)
+│       │   ├── server.js            Gateway entry point (port 3001)
+│       │   └── routes/
+│       │       ├── places.js        Place search (Nominatim)
+│       │       ├── directions.js    OSRM walking directions proxy
+│       │       ├── staticmap.js     Static map image proxy
+│       │       ├── nearby.js        Nearby amenities (Overpass)
+│       │       └── explain.js       OpenAI AI explanation endpoint
+│       └── safety/                  Safety Compute Service (CPU-heavy)
+│           ├── server.js            Safety entry point (port 3002)
+│           ├── routes/
+│           │   └── safeRoutes.js     A* safe routing + coalescing
+│           └── services/
+│               ├── crimeClient.js   UK Police API client
+│               ├── geo.js           Haversine, bounding boxes, polyline
+│               ├── overpassClient.js Overpass with 3-server rotation
+│               └── safetyGraph.js   A* pathfinding + MinHeap + K-routes
 │
 ├── android/                         Android native project
 ├── ios/                             iOS native project
@@ -384,12 +410,16 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 
 ## 🚢 Deployment
 
-### Backend → Render.com
+### Backend → Render.com (2-service split)
 
-- **Service**: `safenighthome-api`, Node.js runtime
+| Service | Name | Entry point | Purpose |
+|---|---|---|---|
+| **API Gateway** | `safenighthome-gateway` | `src/gateway/server.js` | Lightweight I/O proxy (places, directions, map, AI) |
+| **Safety Service** | `safenighthome-safety` | `src/safety/server.js` | CPU-heavy A\* pathfinding + safety scoring |
+
 - **Region**: `eu-west` (close to UK users)
-- **Plan**: Free tier
-- **Health check**: `/api/health`
+- **Plan**: Free tier (both services — 512 MB RAM, 0.1 CPU each)
+- **Health check**: `/api/health` on both
 - **Config**: See `render.yaml`
 
 ### Web Frontend → Netlify
@@ -423,8 +453,11 @@ npx expo run:ios        # iOS (macOS only)
 
 | Command | Description |
 |---|---|
-| `npm start` | Start Express server |
-| `npm run dev` | Start with `--watch` (auto-restart on changes) |
+| `npm run start:gateway` | Start API Gateway service |
+| `npm run start:safety` | Start Safety Compute service |
+| `npm run dev:gateway` | Gateway with `--watch` (auto-restart) |
+| `npm run dev:safety` | Safety with `--watch` (auto-restart) |
+| `npm run dev` | Start both services concurrently |
 
 ---
 
