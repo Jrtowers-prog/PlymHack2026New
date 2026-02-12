@@ -50,6 +50,7 @@ jobs:
           EXPO_PUBLIC_SAFETY_API_URL=https://plymhack2026-fork-safety.onrender.com
           EXPO_PUBLIC_OSM_USER_AGENT=SafeNightHome/1.0
           EXPO_PUBLIC_OSM_EMAIL=mzst.26.x@gmail.com
+          EXPO_PUBLIC_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
 
       - name: Build release APK
