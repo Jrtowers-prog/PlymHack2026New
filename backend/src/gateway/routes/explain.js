@@ -109,11 +109,15 @@ router.post('/explain-route', async (req, res) => {
       })
       .join('\n');
 
-    const prompt = `Walking safety assistant. ${routes.length} routes analysed. Score = weighted mix of crime safety, street lighting, CCTV, road type, open places, foot traffic (0-100, higher=safer).
+    const prompt = `You are a pedestrian safety analyst. ${routes.length} routes have been scored. The safety score (0-100) is a weighted composite of police-reported crime density, street lighting coverage, CCTV presence, road classification, nearby open premises, and estimated foot traffic.
 
 ${routeBlocks}
 
-In 2-3 short sentences using simple everyday English: (1) Why is the safest route the best choice using the numbers above. (2) One quick note about each alternative. Keep it under 100 words. No bullet points, no generic tips.`;
+Write 2-3 concise sentences in clear, plain English with a professional tone:
+(1) Explain why the safest route scores highest, referencing specific data differences (e.g. "X fewer recorded crimes", "Y% more lighting coverage").
+(2) Briefly note the key trade-off for each alternative.
+Keep it under 100 words. No bullet points, no generic safety tips.
+End with: "Note: scores are estimates based on open data and may not reflect real-time conditions. Always stay aware of your surroundings."`;
 
     console.log(`[OpenAI] 🌐 API call → gpt-4o-mini (prompt ~${prompt.length} chars)`);
 
@@ -126,7 +130,7 @@ In 2-3 short sentences using simple everyday English: (1) Why is the safest rout
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 150,
+        max_tokens: 200,
         temperature: 0.3,
       }),
     });
