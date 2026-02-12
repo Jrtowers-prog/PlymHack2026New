@@ -89,11 +89,27 @@ router.get('/', async (req, res) => {
     const straightLineKm = straightLineDist / 1000;
 
     if (straightLineKm > MAX_DISTANCE_KM) {
+      // Estimate how many data points the system would need to fetch.
+      // The safety engine queries every street, lamp, CCTV camera, bus stop,
+      // open venue, and recent crime record inside the bounding box.
+      const latDiff = Math.abs(dLat.value - oLat.value);
+      const lngDiff = Math.abs(dLng.value - oLng.value);
+      const bufferDeg = 0.003; // ~300 m buffer on each side
+      const heightKm = (latDiff + 2 * bufferDeg) * 111.32;
+      const midLatRad = ((oLat.value + dLat.value) / 2) * Math.PI / 180;
+      const widthKm  = (lngDiff + 2 * bufferDeg) * 111.32 * Math.cos(midLatRad);
+      const areaKm2  = heightKm * widthKm;
+      // ~4 000 elements/km² (roads, nodes, lights, CCTV, places, transit, crimes)
+      const estimatedDataPoints = Math.round(areaKm2 * 4000);
+
       return res.status(400).json({
         error: 'DESTINATION_OUT_OF_RANGE',
-        message: `Sorry, the destination is out of range. Maximum distance is ${MAX_DISTANCE_KM} km (straight line), but the destination is ${straightLineKm.toFixed(1)} km away.`,
+        message: `That destination is ${straightLineKm.toFixed(1)} km away — our limit is ${MAX_DISTANCE_KM} km.`,
         maxDistanceKm: MAX_DISTANCE_KM,
         actualDistanceKm: Math.round(straightLineKm * 10) / 10,
+        estimatedDataPoints,
+        areaKm2: Math.round(areaKm2 * 10) / 10,
+        detail: `To score this route for safety, we'd need to analyse roughly ${estimatedDataPoints.toLocaleString()} data points — every street, street light, CCTV camera, bus stop, open venue, and police-reported crime in a ${areaKm2.toFixed(1)} km² area. To keep SafeNight free and fast, we cap routes at ${MAX_DISTANCE_KM} km.`,
       });
     }
 
@@ -143,6 +159,9 @@ router.get('/', async (req, res) => {
         return res.status(err.statusCode).json({
           error: err.code,
           message: err.message,
+          ...(err.graphNodes != null && { graphNodes: err.graphNodes, graphEdges: err.graphEdges }),
+          ...(err.roadCount != null && { roadCount: err.roadCount }),
+          ...(err.which != null && { which: err.which }),
         });
       }
       throw err;
@@ -162,7 +181,8 @@ router.get('/', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).json({
         error: 'INTERNAL_ERROR',
-        message: 'An error occurred while computing safe routes. Please try again.',
+        message: 'Something went wrong on our end while computing your route.',
+        detail: 'This is usually a temporary issue with one of our data sources (OpenStreetMap or the Police crime API). Please wait a moment and try again.',
       });
     }
   }
@@ -228,7 +248,10 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   console.log(`[safe-routes] 📊 Graph: ${osmNodes.size} nodes, ${edges.length} edges (built in ${graphTime}ms)`);
 
   if (edges.length === 0) {
-    throw Object.assign(new Error('No walking routes found'), { statusCode: 404, code: 'NO_WALKING_NETWORK' });
+    throw Object.assign(
+      new Error('We found roads in this area but none of them are walkable (they may all be motorways or private roads). Try a destination in a more pedestrian-friendly area.'),
+      { statusCode: 404, code: 'NO_WALKING_NETWORK', roadCount },
+    );
   }
 
   // ── 8. Find nearest graph nodes (O(1) via spatial grid) ─────────────
@@ -237,7 +260,14 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
 
   if (!startNode || !endNode) {
     const which = !startNode ? 'origin' : 'destination';
-    throw Object.assign(new Error(`No walkable road near ${which}`), { statusCode: 404, code: 'NO_NEARBY_ROAD' });
+    throw Object.assign(
+      new Error(
+        `We couldn't find a walkable road within 200 m of your ${which}. ` +
+        `This can happen if the point is in the middle of a park, body of water, or private land. ` +
+        `Try tapping a spot closer to a street or footpath.`
+      ),
+      { statusCode: 404, code: 'NO_NEARBY_ROAD', which },
+    );
   }
 
   // ── 9. Find 3–5 safest routes (A* — much faster than Dijkstra) ─────
@@ -252,8 +282,12 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
 
   if (rawRoutes.length === 0) {
     throw Object.assign(
-      new Error('No walking route found between these points. The origin and destination may be in disconnected road networks (e.g. separated by a motorway, river, or railway with no crossing). Try a closer destination.'),
-      { statusCode: 404, code: 'NO_ROUTE_FOUND' },
+      new Error(
+        `We analysed ${osmNodes.size.toLocaleString()} intersections and ${edges.length.toLocaleString()} road segments ` +
+        `but couldn't connect your origin to the destination. ` +
+        `They're likely separated by a barrier with no pedestrian crossing — a motorway, river, railway, or restricted area.`
+      ),
+      { statusCode: 404, code: 'NO_ROUTE_FOUND', graphNodes: osmNodes.size, graphEdges: edges.length },
     );
   }
 

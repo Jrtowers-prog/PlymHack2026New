@@ -173,6 +173,16 @@ interface RawResponse {
   meta?: SafeRoutesResponse['meta'];
   error?: string;
   message?: string;
+  detail?: string;
+  // Extra fields from specific error responses
+  estimatedDataPoints?: number;
+  areaKm2?: number;
+  maxDistanceKm?: number;
+  actualDistanceKm?: number;
+  graphNodes?: number;
+  graphEdges?: number;
+  roadCount?: number;
+  which?: string;
 }
 
 // ── Cache ────────────────────────────────────────────────────────────────────
@@ -226,27 +236,47 @@ export async function fetchSafeRoutes(
     console.log(`[safeRoutes] ✅ Parsed JSON - routes: ${raw.routes?.length || 0}`);
 
     if (!resp.ok) {
+      // Collect all extra fields from the backend into a details object
+      const details: Record<string, unknown> = {};
+      if (raw.detail) details.detail = raw.detail;
+      if (raw.estimatedDataPoints) details.estimatedDataPoints = raw.estimatedDataPoints;
+      if (raw.areaKm2) details.areaKm2 = raw.areaKm2;
+      if (raw.maxDistanceKm) details.maxDistanceKm = raw.maxDistanceKm;
+      if (raw.actualDistanceKm) details.actualDistanceKm = raw.actualDistanceKm;
+      if (raw.graphNodes) details.graphNodes = raw.graphNodes;
+      if (raw.graphEdges) details.graphEdges = raw.graphEdges;
+      if (raw.roadCount != null) details.roadCount = raw.roadCount;
+      if (raw.which) details.which = raw.which;
+
       if (raw.error === 'DESTINATION_OUT_OF_RANGE') {
         throw new AppError(
           'DESTINATION_OUT_OF_RANGE',
           raw.message || 'Destination is too far away. Maximum walking distance is 10 km.',
+          undefined,
+          details,
         );
       }
       if (raw.error === 'NO_ROUTE_FOUND') {
         throw new AppError(
           'NO_ROUTE_FOUND',
           raw.message || 'No walking route found between these points.',
+          undefined,
+          details,
         );
       }
       if (raw.error === 'NO_NEARBY_ROAD') {
         throw new AppError(
           'NO_NEARBY_ROAD',
           raw.message || 'No walkable road found near one of your locations.',
+          undefined,
+          details,
         );
       }
       throw new AppError(
         raw.error || 'safe_routes_error',
         raw.message || `Server returned ${resp.status}`,
+        undefined,
+        details,
       );
     }
 

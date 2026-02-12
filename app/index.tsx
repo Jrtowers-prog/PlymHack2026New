@@ -144,33 +144,69 @@ export default function HomeScreen() {
           {/* Out-of-range warning */}
           {h.outOfRange && (
             <View style={styles.warningBanner}>
-              <Ionicons name="alert-circle" size={18} color="#dc2626" />
+              <Ionicons name="ban-outline" size={20} color="#dc2626" />
               <View style={{ flex: 1 }}>
+                <Text style={styles.warningTitle}>Destination out of range</Text>
                 <Text style={styles.warningText}>
                   {h.outOfRangeMessage || 'Destination is too far away (max 10 km walking distance).'}
                 </Text>
-                <Text style={styles.warningHint}>💡 Try selecting a closer destination.</Text>
+                {h.directionsError?.details?.detail ? (
+                  <Text style={styles.warningDetail}>
+                    {String(h.directionsError.details.detail)}
+                  </Text>
+                ) : null}
+                <Text style={styles.warningHint}>💡 Try selecting a closer destination, or split your journey into shorter legs.</Text>
               </View>
             </View>
           )}
 
           {h.directionsError && !h.outOfRange && (
-            <View style={styles.warningBanner}>
+            <View style={[
+              styles.warningBanner,
+              h.directionsError.code === 'INTERNAL_ERROR' && { backgroundColor: '#fffbeb' },
+            ]}>
               <Ionicons
-                name={h.directionsError.code === 'NO_ROUTE_FOUND' ? 'trail-sign-outline' : 'alert-circle'}
-                size={18}
-                color={h.directionsError.code === 'safe_routes_timeout' ? '#d97706' : '#dc2626'}
+                name={
+                  h.directionsError.code === 'NO_ROUTE_FOUND' ? 'git-branch-outline'
+                  : h.directionsError.code === 'NO_NEARBY_ROAD' ? 'location-outline'
+                  : h.directionsError.code === 'NO_WALKING_NETWORK' ? 'walk-outline'
+                  : h.directionsError.code === 'safe_routes_timeout' ? 'time-outline'
+                  : h.directionsError.code === 'INTERNAL_ERROR' ? 'cloud-offline-outline'
+                  : 'alert-circle'
+                }
+                size={20}
+                color={
+                  h.directionsError.code === 'safe_routes_timeout' || h.directionsError.code === 'INTERNAL_ERROR'
+                    ? '#d97706' : '#dc2626'
+                }
               />
               <View style={{ flex: 1 }}>
+                <Text style={styles.warningTitle}>
+                  {h.directionsError.code === 'NO_ROUTE_FOUND' ? 'No route found'
+                  : h.directionsError.code === 'NO_NEARBY_ROAD' ? 'No road nearby'
+                  : h.directionsError.code === 'NO_WALKING_NETWORK' ? 'No walkable roads'
+                  : h.directionsError.code === 'safe_routes_timeout' ? 'Request timed out'
+                  : h.directionsError.code === 'INTERNAL_ERROR' ? 'Something went wrong'
+                  : 'Route error'}
+                </Text>
                 <Text style={styles.warningText}>{h.directionsError.message}</Text>
+                {h.directionsError.details?.detail ? (
+                  <Text style={styles.warningDetail}>
+                    {String(h.directionsError.details.detail)}
+                  </Text>
+                ) : null}
                 <Text style={styles.warningHint}>
                   {h.directionsError.code === 'NO_ROUTE_FOUND'
-                    ? '💡 The locations may be separated by a motorway, river, or railway. Try a different destination.'
+                    ? '💡 The two points are probably on separate road networks — try a destination on the same side of any rivers, motorways, or railways.'
                     : h.directionsError.code === 'NO_NEARBY_ROAD'
-                      ? '💡 Try tapping a location closer to a road or path.'
-                      : h.directionsError.code === 'safe_routes_timeout'
-                        ? '💡 Try a shorter route — long distances take more time to compute.'
-                        : '💡 Try again, or pick a different destination.'}
+                      ? '💡 Move the pin closer to a visible street or footpath on the map.'
+                      : h.directionsError.code === 'NO_WALKING_NETWORK'
+                        ? '💡 This area only has motorways or private roads. Pick a more residential destination.'
+                        : h.directionsError.code === 'safe_routes_timeout'
+                          ? '💡 Shorter routes compute faster. Try somewhere within 5 km.'
+                          : h.directionsError.code === 'INTERNAL_ERROR'
+                            ? '💡 This is usually temporary — wait a moment and try again.'
+                            : '💡 Try again, or pick a different destination.'}
                 </Text>
               </View>
             </View>
@@ -319,23 +355,36 @@ const styles = StyleSheet.create({
   },
   warningBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 8,
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 10,
     paddingHorizontal: 12,
     marginBottom: 8,
     borderRadius: 10,
     backgroundColor: '#fef2f2',
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 2,
   },
   warningText: {
     fontSize: 13,
     fontWeight: '500',
     color: '#dc2626',
   },
+  warningDetail: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#374151',
+    marginTop: 4,
+    lineHeight: 17,
+  },
   warningHint: {
     fontSize: 12,
     color: '#6b7280',
-    marginTop: 2,
+    marginTop: 4,
   },
   error: {
     fontSize: 14,
