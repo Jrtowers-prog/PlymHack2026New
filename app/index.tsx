@@ -35,7 +35,8 @@ export default function HomeScreen() {
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
   const showSafety = Boolean(h.selectedRoute);
-  const sheetVisible = (h.routes.length > 0 || h.directionsStatus === 'loading') && !h.isNavActive;
+  const hasError = h.directionsStatus === 'error';
+  const sheetVisible = (h.routes.length > 0 || h.directionsStatus === 'loading' || hasError) && !h.isNavActive;
 
   return (
     <View style={styles.container}>
@@ -131,10 +132,10 @@ export default function HomeScreen() {
           sheetHeight={h.sheetHeight}
           sheetHeightRef={h.sheetHeightRef}
         >
-          {/* Header */}
+          {/* Header — hide distance/duration when there's only an error */}
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Routes</Text>
-            <Text style={styles.sheetMeta}>{distanceLabel} · {durationLabel}</Text>
+            <Text style={styles.sheetTitle}>{hasError && h.routes.length === 0 ? 'Error' : 'Routes'}</Text>
+            {!hasError && <Text style={styles.sheetMeta}>{distanceLabel} · {durationLabel}</Text>}
           </View>
 
           {/* Loading state */}
