@@ -154,9 +154,9 @@ export function useHomeScreen() {
     pois.lights?.forEach((l, i) => markers.push({ id: `poi-light-${i}`, kind: 'light', coordinate: { latitude: l.lat, longitude: l.lng }, label: 'Street Light' }));
     pois.places?.forEach((p: any, i: number) => {
       const name = p.name || p.amenity || 'Place';
-      let status = '';
-      if (p.open === true) status = p.nextChange ? ` (Open · ${p.nextChange})` : ' (Open)';
-      else if (p.open === false) status = p.nextChange ? ` (Closed · ${p.nextChange})` : ' (Closed)';
+      let status = ' · hours unknown';
+      if (p.open === true) status = p.nextChange ? ` · Open, ${p.nextChange}` : ' · Open';
+      else if (p.open === false) status = p.nextChange ? ` · Closed, ${p.nextChange}` : ' · Closed';
       markers.push({ id: `poi-place-${i}`, kind: 'shop', coordinate: { latitude: p.lat, longitude: p.lng }, label: `${name}${status}` });
     });
     pois.crimes?.forEach((cr, i) => markers.push({ id: `poi-crime-${i}`, kind: 'crime', coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime' }));
