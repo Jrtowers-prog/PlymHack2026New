@@ -34,7 +34,7 @@ export function SafetyPanel({ safetyResult, selectedSafeRoute }: SafetyPanelProp
       <View style={styles.grid}>
         <GridCard emoji="🔴" value={safetyResult.crimeCount} label="Crimes" color="#ef4444" />
         <GridCard emoji="💡" value={safetyResult.streetLights} label="Lights" color="#eab308" />
-        <GridCard emoji="📷" value={stats?.cctvCamerasNearby ?? 0} label="CCTV" color="#6366f1" />
+        <GridCard emoji="📷" value={safetyResult.cctvCount} label="CCTV" color="#6366f1" />
         <GridCard emoji="🏪" value={safetyResult.openPlaces} label="Open" color="#22c55e" />
       </View>
 

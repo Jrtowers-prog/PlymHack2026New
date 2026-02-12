@@ -78,6 +78,7 @@ export interface SafetyMapResult {
   routeSegments: RouteSegment[];
   crimeCount: number;
   streetLights: number;
+  cctvCount: number;
   litRoads: number;
   unlitRoads: number;
   openPlaces: number;
@@ -934,7 +935,7 @@ export const fetchSafetyMapData = async (
   routeDistanceMeters?: number,
 ): Promise<SafetyMapResult> => {
   if (path.length < 2) {
-    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, busStops: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
+    return { markers: [], roadOverlays: [], roadLabels: [], routeSegments: [], crimeCount: 0, streetLights: 0, cctvCount: 0, litRoads: 0, unlitRoads: 0, openPlaces: 0, busStops: 0, safetyScore: 50, safetyLabel: 'Insufficient Data', safetyColor: '#94a3b8', mainRoadRatio: 0.5, pathfindingScore: 50, dataConfidence: 0 };
   }
 
   // Return cached result if we already analysed this exact route
@@ -1014,6 +1015,7 @@ export const fetchSafetyMapData = async (
     routeSegments,
     crimeCount: crimes.length,
     streetLights: roadsData.lights.length,
+    cctvCount: 0, // CCTV is only fetched in the backend pipeline
     litRoads: roadsData.litCount,
     unlitRoads: roadsData.unlitCount,
     openPlaces: shops.length,

@@ -161,34 +161,35 @@ export function useHomeScreen() {
     if (!selectedSafeRoute) return null;
     const s = selectedSafeRoute.safety;
     const stats = selectedSafeRoute.routeStats;
+    const pois = selectedSafeRoute.routePOIs;
     const segs = selectedSafeRoute.enrichedSegments ?? [];
 
+    // Count lit vs unlit segments for the lighting ratio
     let litSegments = 0;
     let unlitSegments = 0;
     for (const seg of segs) {
       if (seg.lightScore > 0.5) litSegments++;
       else unlitSegments++;
     }
-    let crimeHotspots = 0;
-    for (const seg of segs) {
-      if (seg.crimeScore < 0.4) crimeHotspots++;
-    }
-    let openPlaceCount = 0;
-    for (const seg of segs) {
-      if (seg.placeScore > 0.1) openPlaceCount++;
-    }
+
+    // Use actual POI counts so every number matches what's on the map
+    const crimeCount = pois?.crimes?.length ?? 0;
+    const lightCount = pois?.lights?.length ?? 0;
+    const openPlaceCount = pois?.places?.length ?? 0;
+    const cctvCount = pois?.cctv?.length ?? 0;
 
     return {
       markers: [],
       roadOverlays: [],
       roadLabels: [],
       routeSegments: [],
-      crimeCount: crimeHotspots,
-      streetLights: litSegments,
+      crimeCount,
+      streetLights: lightCount,
+      cctvCount,
       litRoads: litSegments,
       unlitRoads: unlitSegments,
       openPlaces: openPlaceCount,
-      busStops: stats?.transitStopsNearby ?? 0,
+      busStops: pois?.transit?.length ?? 0,
       safetyScore: s.score,
       safetyLabel: s.label,
       safetyColor: s.color,
