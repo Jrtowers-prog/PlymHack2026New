@@ -82,8 +82,8 @@ function heuristicOpen(amenityType) {
     if (hour >= 11 && hour < 23) return { open: true, nextChange: 'closes at 23:00' };
     return { open: false, nextChange: 'opens at 11:00' };
   }
-  // Default shops/restaurants/cafes: 07:00–22:00
-  if (hour >= 7 && hour < 22) return { open: true, nextChange: 'closes at 22:00' };
+  // Default shops/restaurants/cafes: 07:00–20:00
+  if (hour >= 7 && hour < 20) return { open: true, nextChange: 'closes at 20:00' };
   return { open: false, nextChange: 'opens at 07:00' };
 }
 const {

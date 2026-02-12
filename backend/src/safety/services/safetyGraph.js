@@ -266,7 +266,7 @@ function buildGraph(roadData, lightData, cctvData, placeData, transitData, crime
           const evening = ['pub','bar','nightclub','biergarten','casino'];
           if (always.includes(type)) isOpen = true;
           else if (evening.includes(type)) isOpen = hour >= 11 && hour < 23;
-          else isOpen = hour >= 7 && hour < 22;
+          else isOpen = hour >= 7 && hour < 20;
         }
         if (!isOpen) continue;
         placeNodes.push({
