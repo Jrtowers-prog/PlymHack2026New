@@ -1,11 +1,14 @@
 {
   "name": "safe-night-home-backend",
-  "version": "1.0.0",
-  "description": "Backend proxy for Google Maps API — keeps API keys server-side",
-  "main": "src/index.js",
+  "version": "2.0.0",
+  "description": "Safe Night Home — 2-service backend (API Gateway + Safety Compute)",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "start:gateway": "node src/gateway/server.js",
+    "start:safety": "node src/safety/server.js",
+    "dev:gateway": "node --watch src/gateway/server.js",
+    "dev:safety": "node --watch src/safety/server.js",
+    "dev": "node --watch src/gateway/server.js & node --watch src/safety/server.js",
+    "start": "node src/gateway/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
