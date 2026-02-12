@@ -76,6 +76,8 @@ router.get('/autocomplete', async (req, res) => {
         main_text: r.name || r.display_name.split(',')[0],
         secondary_text: r.display_name.split(',').slice(1).join(',').trim(),
       },
+      lat: parseFloat(r.lat),
+      lng: parseFloat(r.lon),
     }));
 
     console.log(`[places/autocomplete] 📦 Response: ${predictions.length} results`);

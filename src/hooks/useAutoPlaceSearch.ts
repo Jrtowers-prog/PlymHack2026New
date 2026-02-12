@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchPlacePredictions } from '@/src/services/openStreetMap';
+import { fetchPlacePredictions } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
 import type { LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
 

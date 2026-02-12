@@ -37,6 +37,8 @@ type GooglePlacesAutocompleteResponse = {
       main_text?: string;
       secondary_text?: string;
     };
+    lat?: number;
+    lng?: number;
   }>;
 };
 
@@ -141,6 +143,10 @@ export const fetchPlacePredictions = async (
     primaryText: prediction.structured_formatting?.main_text ?? prediction.description,
     secondaryText: prediction.structured_formatting?.secondary_text,
     fullText: prediction.description,
+    location: prediction.lat != null && prediction.lng != null
+      ? { latitude: prediction.lat, longitude: prediction.lng }
+      : undefined,
+    source: 'osm' as const,
   }));
   }); // end rate limiter
 };

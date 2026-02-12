@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { fetchPlacePredictions } from '@/src/services/openStreetMap';
+import { fetchPlacePredictions } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
 import type { LatLng, PlacePrediction } from '@/src/types/google';
 
