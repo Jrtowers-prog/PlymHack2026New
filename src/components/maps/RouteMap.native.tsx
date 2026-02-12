@@ -23,9 +23,11 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    html,body{width:100%;height:100%;overflow:hidden;touch-action:none}
+    html,body{width:100%;height:100%;overflow:hidden;touch-action:none;background:#e8eaed}
     #viewport{width:100%;height:100%;overflow:hidden;position:relative}
     #map{width:100%;height:100%;touch-action:none;transition:transform 0.5s ease-out;transform-origin:center 65%}
+    /* In nav mode, over-size the map so 3D tilt doesn't reveal white edges */
+    #map.nav-active{width:140%;height:140%;position:absolute;top:-20%;left:-20%}
     .map-ctrl{position:absolute;right:12px;bottom:100px;z-index:1000;display:flex;flex-direction:column;gap:4px}
     .map-btn{width:42px;height:42px;border:none;border-radius:10px;background:rgba(255,255,255,.95);
       box-shadow:0 2px 8px rgba(0,0,0,.2);font-size:22px;font-weight:700;color:#1D2939;
@@ -35,16 +37,27 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
     .recenter-btn{position:absolute;right:12px;bottom:50px;z-index:1000;width:42px;height:42px;
       border:none;border-radius:50%;background:rgba(255,255,255,.95);
       box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;display:none;align-items:center;
-      justify-content:center;pointer-events:auto;touch-action:auto}
+      justify-content:center;pointer-events:auto;touch-action:auto;transition:opacity 0.3s}
     .recenter-btn:active{background:#e4e7ec}
+    .recenter-btn.visible{display:flex}
     .road-label{background:rgba(0,0,0,.7);color:#fff;padding:2px 8px;border-radius:9px;
       font-size:9px;font-weight:600;white-space:nowrap;border:none;box-shadow:none}
+    /* 3D road labels — perspective-aware, painted on the road */
+    .road-label-3d{background:rgba(30,40,60,.75);color:#fff;padding:3px 10px;border-radius:4px;
+      font-size:11px;font-weight:700;white-space:nowrap;letter-spacing:0.5px;
+      border:1px solid rgba(255,255,255,0.15);box-shadow:0 2px 6px rgba(0,0,0,.3);
+      text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
+    /* Hazard labels */
+    .hazard-label{background:rgba(239,68,68,.85);color:#fff;padding:3px 10px;border-radius:4px;
+      font-size:10px;font-weight:700;white-space:nowrap;letter-spacing:0.3px;
+      border:1px solid rgba(255,255,255,0.2);box-shadow:0 2px 6px rgba(0,0,0,.3);
+      text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
   </style>
 </head>
 <body>
   <div id="viewport">
     <div id="map"></div>
-    <div class="map-ctrl">
+    <div class="map-ctrl" id="mapCtrl">
       <button class="map-btn" onclick="map.zoomIn()">+</button>
       <button class="map-btn" onclick="map.zoomOut()">&minus;</button>
     </div>
@@ -57,6 +70,7 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
     var markers = [];
     var polylines = [];
     var navMarker = null;
+    var navLabels = [];
     var longPressTimer = null;
     var longPressPos = null;
     var touchMoved = false;
@@ -143,11 +157,19 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
     sendMsg('ready', {});
 
     // Track user drag to pause auto-follow in nav mode
-    map.on('dragstart', function() { if (isNavMode) userInteracted = true; });
+    map.on('dragstart', function() {
+      if (isNavMode) {
+        userInteracted = true;
+        var btn = document.getElementById('recenterBtn');
+        if (btn) btn.classList.add('visible');
+      }
+    });
 
     // Recenter on user location
     function recenterMap() {
       userInteracted = false;
+      var btn = document.getElementById('recenterBtn');
+      if (btn) btn.classList.remove('visible');
       if (lastNavLL) {
         map.panTo(lastNavLL);
         if (map.getZoom() < 17) map.setZoom(17);
@@ -158,23 +180,35 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
     function setNavView(heading, entering) {
       var mapEl = document.getElementById('map');
       var btn = document.getElementById('recenterBtn');
+      var ctrl = document.getElementById('mapCtrl');
       if (!entering) {
         isNavMode = false;
         currentRotation = 0;
         userInteracted = false;
         mapEl.style.transform = 'none';
-        if (btn) btn.style.display = 'none';
+        mapEl.classList.remove('nav-active');
+        if (btn) btn.classList.remove('visible');
+        if (ctrl) ctrl.style.display = 'flex';
+        // Clear nav labels
+        clearArray(navLabels);
+        // Force map resize after un-tilting
+        setTimeout(function() { map.invalidateSize(); }, 600);
         return;
       }
       isNavMode = true;
-      if (btn) btn.style.display = 'flex';
+      mapEl.classList.add('nav-active');
+      if (ctrl) ctrl.style.display = 'none';
+      // Show recenter only when user has panned
+      if (userInteracted && btn) btn.classList.add('visible');
       // Shortest-path rotation to avoid spinning the long way around
       var target = -(heading || 0);
       var diff = target - currentRotation;
       while (diff > 180) diff -= 360;
       while (diff < -180) diff += 360;
       currentRotation += diff;
-      mapEl.style.transform = 'perspective(800px) rotateX(40deg) rotate(' + currentRotation + 'deg) scale(1.5)';
+      mapEl.style.transform = 'perspective(1000px) rotateX(45deg) rotate(' + currentRotation + 'deg) scale(1.3)';
+      // Force map resize for oversized container
+      setTimeout(function() { map.invalidateSize(); }, 100);
     }
 
     // ── Update handler (called from RN via injectJavaScript) ──
@@ -290,16 +324,39 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
         }).bindTooltip(m.label || m.kind).addTo(map));
       });
 
-      // Road labels
+      // Road labels — use 3D style in nav mode
       (data.roadLabels || []).forEach(function(lbl) {
-        var text = lbl.name.slice(0, 12);
+        var text = lbl.name.slice(0, 16);
+        var cls = isNavMode ? 'road-label-3d' : 'road-label';
         var icon = L.divIcon({
           className: '',
-          html: '<div class="road-label" style="background:' + lbl.color + '">' + text + '</div>',
+          html: '<div class="' + cls + '" style="background:' + (isNavMode ? 'rgba(30,40,60,.75)' : lbl.color) + '">' + text + '</div>',
           iconSize: null,
         });
-        markers.push(L.marker([lbl.lat, lbl.lng], { icon: icon, interactive: false }).addTo(map));
+        var m = L.marker([lbl.lat, lbl.lng], { icon: icon, interactive: false }).addTo(map);
+        markers.push(m);
       });
+
+      // Hazard labels along route in nav mode (crimes, dead-ends near path)
+      if (data.navLocation && data.safetyMarkers) {
+        clearArray(navLabels);
+        var navLat = data.navLocation.lat, navLng = data.navLocation.lng;
+        data.safetyMarkers.forEach(function(m) {
+          // Only show hazards within ~200m of user
+          var dlat = m.lat - navLat, dlng = m.lng - navLng;
+          var approxDist = Math.sqrt(dlat*dlat + dlng*dlng) * 111320;
+          if (approxDist > 200) return;
+          var hazardTypes = { crime: '⚠ Crime area', dead_end: '⛔ Dead end' };
+          var label = hazardTypes[m.kind];
+          if (!label) return;
+          var hIcon = L.divIcon({
+            className: '',
+            html: '<div class="hazard-label">' + label + '</div>',
+            iconSize: null,
+          });
+          navLabels.push(L.marker([m.lat, m.lng], { icon: hIcon, interactive: false, zIndexOffset: 900 }).addTo(map));
+        });
+      }
 
       // Fit bounds
       if (data.fitBounds && hasBounds && !data.navLocation) {
@@ -317,23 +374,30 @@ const buildMapHtml = (mapType: string = 'roadmap') => `
       if (data.navLocation) {
         var heading = data.navHeading || 0;
         lastNavLL = [data.navLocation.lat, data.navLocation.lng];
-        var arrowSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">' +
-          '<circle cx="22" cy="22" r="19" fill="#1570EF" stroke="white" stroke-width="3"/>' +
-          '<polygon points="22,7 29,27 22,22 15,27" fill="white" transform="rotate(' + heading + ', 22, 22)"/></svg>';
+        // Larger, bolder navigation arrow with glow
+        var arrowSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 52 52">' +
+          '<circle cx="26" cy="26" r="24" fill="#1570EF" stroke="white" stroke-width="3" filter="url(#glow)"/>' +
+          '<defs><filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#1570EF" flood-opacity="0.6"/></filter></defs>' +
+          '<polygon points="26,6 34,30 26,24 18,30" fill="white" transform="rotate(' + heading + ', 26, 26)"/></svg>';
         var navIcon = L.divIcon({
           className: '',
-          html: '<img src="data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg) + '" width="44" height="44"/>',
-          iconSize: [44, 44],
-          iconAnchor: [22, 22],
+          html: '<img src="data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(arrowSvg) + '" width="52" height="52"/>',
+          iconSize: [52, 52],
+          iconAnchor: [26, 26],
         });
         navMarker = L.marker(lastNavLL, { icon: navIcon, interactive: false, zIndexOffset: 1000 }).addTo(map);
         if (!userInteracted) {
           map.panTo(lastNavLL);
           if (map.getZoom() < 17) map.setZoom(17);
+          // Hide recenter when auto-following
+          var btn = document.getElementById('recenterBtn');
+          if (btn) btn.classList.remove('visible');
         }
         setNavView(heading, true);
       } else {
         setNavView(0, false);
+        // Clear hazard labels when exiting nav
+        clearArray(navLabels);
       }
     }
 
@@ -561,7 +625,7 @@ export const RouteMap = ({
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f4f7', overflow: 'hidden' as const },
+  container: { flex: 1, backgroundColor: '#e8eaed', overflow: 'hidden' as const },
 });
 
 export default RouteMap;
