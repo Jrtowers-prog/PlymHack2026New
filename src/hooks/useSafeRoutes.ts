@@ -73,6 +73,9 @@ export function useSafeRoutes(
 
     const batchId = ++cancelRef.current;
     setStatus('loading');
+    setRoutes([]);           // clear old routes so the sheet resets
+    setSelectedIndex(0);
+    setMeta(null);
     setError(null);
     setOutOfRange(false);
     setOutOfRangeMessage('');
