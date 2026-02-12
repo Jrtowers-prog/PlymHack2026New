@@ -21,6 +21,8 @@ export type RouteMapProps = {
   navigationHeading?: number | null;
   /** Map display type (roadmap, satellite, hybrid, terrain) */
   mapType?: MapType;
+  /** When set, only markers of this kind are shown and they're rendered larger */
+  highlightCategory?: string | null;
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;

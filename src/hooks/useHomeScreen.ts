@@ -54,6 +54,7 @@ export function useHomeScreen() {
   const [mapPanTo, setMapPanTo] = useState<{ location: LatLng; key: number } | null>(null);
   const [mapType, setMapType] = useState<MapType>('roadmap');
   const [pinMode, setPinMode] = useState<'origin' | 'destination' | null>(null);
+  const [highlightCategory, setHighlightCategory] = useState<string | null>(null);
 
   // ── AI ──
   const [showAIModal, setShowAIModal] = useState(false);
@@ -155,6 +156,12 @@ export function useHomeScreen() {
     pois.crimes?.forEach((cr, i) => markers.push({ id: `poi-crime-${i}`, kind: 'crime', coordinate: { latitude: cr.lat, longitude: cr.lng }, label: cr.category || 'Crime' }));
     return markers;
   }, [selectedSafeRoute]);
+
+  // ── Filtered markers when a category is highlighted ──
+  const displayMarkers = useMemo(() => {
+    if (!highlightCategory) return poiMarkers;
+    return poiMarkers.filter((m) => m.kind === highlightCategory);
+  }, [poiMarkers, highlightCategory]);
 
   // ── Safety result derived from SafeRoute ──
   const safetyResult = useMemo<SafetyMapResult | null>(() => {
@@ -410,9 +417,11 @@ export function useHomeScreen() {
 
     // Safety
     safetyResult,
-    poiMarkers,
+    poiMarkers: displayMarkers,
     routeSegments,
     roadLabels,
+    highlightCategory,
+    setHighlightCategory,
 
     // Sheet
     sheetHeight,

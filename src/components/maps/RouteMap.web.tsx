@@ -167,11 +167,17 @@ function updateMap(d){
 
   /* Safety markers */
   var mc={crime:'#ef4444',shop:'#22c55e',light:'#facc15',bus_stop:'#3b82f6',cctv:'#8b5cf6',dead_end:'#f97316'};
+  var hl=d.highlightCategory||null;
   (d.safetyMarkers||[]).forEach(function(m){
     var k=m.kind||'crime';
-    var r=(k==='light'||k==='crime')?3:4;
+    var isHl=hl&&hl===k;
+    var isDim=hl&&hl!==k;
+    if(isDim)return;
+    var r=isHl?8:((k==='light'||k==='crime')?3:4);
+    var op=isHl?1:0.85;
+    var w=isHl?2:1;
     markers.push(L.circleMarker([m.lat,m.lng],{radius:r,fillColor:mc[k]||'#94a3b8',
-      fillOpacity:0.85,color:'#fff',weight:1}).bindTooltip(m.label||k).addTo(map));
+      fillOpacity:op,color:'#fff',weight:w}).bindTooltip(m.label||k).addTo(map));
   });
 
   /* Road labels */
@@ -218,6 +224,7 @@ export const RouteMap = ({
   navigationLocation,
   navigationHeading,
   mapType = 'roadmap',
+  highlightCategory,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -307,6 +314,7 @@ export const RouteMap = ({
       panTo: panToData,
       navLocation: isNavigating && navigationLocation ? toLL(navigationLocation) : null,
       navHeading: navigationHeading,
+      highlightCategory: highlightCategory || null,
     };
 
     try {
@@ -320,6 +328,7 @@ export const RouteMap = ({
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
     isNavigating, navigationLocation, navigationHeading,
+    highlightCategory,
   ]);
 
   // Switch tile layer on mapType change

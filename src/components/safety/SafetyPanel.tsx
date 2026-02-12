@@ -1,7 +1,7 @@
 /**
  * SafetyPanel — Hero score + 2×2 grid + detailed breakdown cards.
  */
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CircleProgress } from '@/src/components/ui/CircleProgress';
 import type { SafeRoute } from '@/src/services/safeRoutes';
@@ -10,9 +10,11 @@ import type { SafetyMapResult } from '@/src/services/safetyMapData';
 interface SafetyPanelProps {
   safetyResult: SafetyMapResult;
   selectedSafeRoute: SafeRoute;
+  /** Called when user taps a grid card — category is the marker kind */
+  onCategoryPress?: (category: string) => void;
 }
 
-export function SafetyPanel({ safetyResult, selectedSafeRoute }: SafetyPanelProps) {
+export function SafetyPanel({ safetyResult, selectedSafeRoute, onCategoryPress }: SafetyPanelProps) {
   const stats = selectedSafeRoute.routeStats;
 
   return (
@@ -32,10 +34,10 @@ export function SafetyPanel({ safetyResult, selectedSafeRoute }: SafetyPanelProp
 
       {/* 2×2 grid */}
       <View style={styles.grid}>
-        <GridCard emoji="🔴" value={safetyResult.crimeCount} label="Crimes" color="#ef4444" />
-        <GridCard emoji="💡" value={safetyResult.streetLights} label="Lights" color="#eab308" />
-        <GridCard emoji="📷" value={safetyResult.cctvCount} label="CCTV" color="#6366f1" />
-        <GridCard emoji="🏪" value={safetyResult.openPlaces} label="Open" color="#22c55e" />
+        <GridCard emoji="🔴" value={safetyResult.crimeCount} label="Crimes" color="#ef4444" onPress={() => onCategoryPress?.('crime')} />
+        <GridCard emoji="💡" value={safetyResult.streetLights} label="Lights" color="#eab308" onPress={() => onCategoryPress?.('light')} />
+        <GridCard emoji="📷" value={safetyResult.cctvCount} label="CCTV" color="#6366f1" onPress={() => onCategoryPress?.('cctv')} />
+        <GridCard emoji="🏪" value={safetyResult.openPlaces} label="Open" color="#22c55e" onPress={() => onCategoryPress?.('shop')} />
       </View>
 
       {/* Detailed route stats */}
@@ -73,15 +75,20 @@ export function SafetyPanel({ safetyResult, selectedSafeRoute }: SafetyPanelProp
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
-function GridCard({ emoji, value, label, color }: { emoji: string; value: number; label: string; color: string }) {
+function GridCard({ emoji, value, label, color, onPress }: { emoji: string; value: number; label: string; color: string; onPress?: () => void }) {
   return (
-    <View style={[styles.gridCard, { borderColor: color + '44' }]}>
+    <Pressable
+      style={[styles.gridCard, { borderColor: color + '44' }]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Show ${label} on map`}
+    >
       <Text style={[styles.gridIcon, { color }]}>{emoji}</Text>
       <View>
         <Text style={[styles.gridValue, { color }]}>{value}</Text>
         <Text style={styles.gridLabel}>{label}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 

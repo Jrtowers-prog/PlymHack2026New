@@ -9,6 +9,7 @@
  * on Android when a WebView (SurfaceView) is involved — no nesting
  * inside the map container.
  */
+import { useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,7 +23,7 @@ import { RouteList } from '@/src/components/routes/RouteList';
 import { RoadTypeBreakdown, SafetyPanel } from '@/src/components/safety/SafetyPanel';
 import { SafetyProfileChart } from '@/src/components/safety/SafetyProfileChart';
 import { SearchBar } from '@/src/components/search/SearchBar';
-import { DraggableSheet } from '@/src/components/sheets/DraggableSheet';
+import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheets/DraggableSheet';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
 import { useHomeScreen } from '@/src/hooks/useHomeScreen';
 import { formatDistance, formatDuration } from '@/src/utils/format';
@@ -36,6 +37,34 @@ export default function HomeScreen() {
   const showSafety = Boolean(h.selectedRoute);
   const hasError = h.directionsStatus === 'error';
   const sheetVisible = (h.routes.length > 0 || h.directionsStatus === 'loading' || hasError) && !h.isNavActive;
+
+  // Category label map for the highlight banner
+  const categoryLabels: Record<string, string> = {
+    crime: 'Crimes', light: 'Street Lights', cctv: 'CCTV Cameras', shop: 'Open Places',
+    bus_stop: 'Transit Stops', dead_end: 'Dead Ends',
+  };
+
+  const handleCategoryPress = useCallback((category: string) => {
+    h.setHighlightCategory(category);
+    // Collapse the sheet so the map markers are fully visible
+    h.sheetHeightRef.current = SHEET_MIN;
+    Animated.spring(h.sheetHeight, {
+      toValue: SHEET_MIN,
+      useNativeDriver: false,
+      bounciness: 4,
+    }).start();
+  }, [h.sheetHeight, h.sheetHeightRef, h.setHighlightCategory]);
+
+  const handleClearHighlight = useCallback(() => {
+    h.setHighlightCategory(null);
+    // Re-expand the sheet
+    h.sheetHeightRef.current = SHEET_DEFAULT;
+    Animated.spring(h.sheetHeight, {
+      toValue: SHEET_DEFAULT,
+      useNativeDriver: false,
+      bounciness: 4,
+    }).start();
+  }, [h.sheetHeight, h.sheetHeightRef, h.setHighlightCategory]);
 
   return (
     <View style={styles.container}>
@@ -53,6 +82,7 @@ export default function HomeScreen() {
         navigationLocation={h.nav.userLocation}
         navigationHeading={h.nav.userHeading}
         mapType={h.mapType}
+        highlightCategory={h.highlightCategory}
         onSelectRoute={h.setSelectedRouteId}
         onLongPress={h.handleMapLongPress}
         onMapPress={h.handleMapPress}
@@ -99,6 +129,26 @@ export default function HomeScreen() {
             onClearRoute={h.clearSelectedRoute}
             onSwap={h.swapOriginAndDest}
           />
+        )}
+
+        {/* ── Category highlight banner — shows when user tapped a stat card ── */}
+        {h.highlightCategory && (
+          <Animated.View
+            style={[styles.highlightBanner, { bottom: Animated.add(h.sheetHeight, 12) }]}
+          >
+            <Pressable
+              style={styles.highlightBannerInner}
+              onPress={handleClearHighlight}
+              accessibilityRole="button"
+              accessibilityLabel="Back to routes"
+            >
+              <Ionicons name="arrow-back" size={18} color="#ffffff" />
+              <Text style={styles.highlightBannerText}>
+                Showing {categoryLabels[h.highlightCategory] || h.highlightCategory}
+              </Text>
+              <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.7)" />
+            </Pressable>
+          </Animated.View>
         )}
 
         {/* ── AI floating button ── */}
@@ -218,7 +268,11 @@ export default function HomeScreen() {
             />
 
             {showSafety && h.safetyResult && h.selectedSafeRoute && (
-              <SafetyPanel safetyResult={h.safetyResult} selectedSafeRoute={h.selectedSafeRoute} />
+              <SafetyPanel
+                safetyResult={h.safetyResult}
+                selectedSafeRoute={h.selectedSafeRoute}
+                onCategoryPress={handleCategoryPress}
+              />
             )}
           </View>
 
@@ -430,4 +484,27 @@ const styles = StyleSheet.create({
     gap: 16,
     alignItems: 'flex-start',
   } as any,
+  highlightBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 13,
+  },
+  highlightBannerInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#1570ef',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(21, 112, 239, 0.35)' } : {}),
+    elevation: 14,
+  } as any,
+  highlightBannerText: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
 });
