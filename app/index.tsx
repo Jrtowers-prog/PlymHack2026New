@@ -144,14 +144,35 @@ export default function HomeScreen() {
           {h.outOfRange && (
             <View style={styles.warningBanner}>
               <Ionicons name="alert-circle" size={18} color="#dc2626" />
-              <Text style={styles.warningText}>
-                {h.outOfRangeMessage || 'Destination is out of range (max 20 km).'}
-              </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.warningText}>
+                  {h.outOfRangeMessage || 'Destination is too far away (max 10 km walking distance).'}
+                </Text>
+                <Text style={styles.warningHint}>💡 Try selecting a closer destination.</Text>
+              </View>
             </View>
           )}
 
           {h.directionsError && !h.outOfRange && (
-            <Text style={styles.error}>{h.directionsError.message}</Text>
+            <View style={styles.warningBanner}>
+              <Ionicons
+                name={h.directionsError.code === 'NO_ROUTE_FOUND' ? 'trail-sign-outline' : 'alert-circle'}
+                size={18}
+                color={h.directionsError.code === 'safe_routes_timeout' ? '#d97706' : '#dc2626'}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.warningText}>{h.directionsError.message}</Text>
+                <Text style={styles.warningHint}>
+                  {h.directionsError.code === 'NO_ROUTE_FOUND'
+                    ? '💡 The locations may be separated by a motorway, river, or railway. Try a different destination.'
+                    : h.directionsError.code === 'NO_NEARBY_ROAD'
+                      ? '💡 Try tapping a location closer to a road or path.'
+                      : h.directionsError.code === 'safe_routes_timeout'
+                        ? '💡 Try a shorter route — long distances take more time to compute.'
+                        : '💡 Try again, or pick a different destination.'}
+                </Text>
+              </View>
+            </View>
           )}
 
           {/* Route cards + safety panel side-by-side on web */}
@@ -309,6 +330,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     color: '#dc2626',
+  },
+  warningHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
   },
   error: {
     fontSize: 14,

@@ -212,27 +212,41 @@ export async function fetchSafeRoutes(
     `origin_lat=${origin.latitude}&origin_lng=${origin.longitude}` +
     `&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}`;
 
-  console.log(`[safeRoutes] 🔍 Fetching safe routes...`);
+  console.log(`[safeRoutes] 🔍 Fetching safe routes from ${BACKEND_BASE}...`);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout
 
   try {
     const resp = await fetch(url, { signal: controller.signal });
+    console.log(`[safeRoutes] ✅ Got response: ${resp.status} ${resp.statusText}`);
     clearTimeout(timer);
 
     const raw: RawResponse = await resp.json();
+    console.log(`[safeRoutes] ✅ Parsed JSON - routes: ${raw.routes?.length || 0}`);
 
     if (!resp.ok) {
       if (raw.error === 'DESTINATION_OUT_OF_RANGE') {
         throw new AppError(
           'DESTINATION_OUT_OF_RANGE',
-          raw.message || 'Destination is too far away. Maximum distance is 20 km.',
+          raw.message || 'Destination is too far away. Maximum walking distance is 10 km.',
+        );
+      }
+      if (raw.error === 'NO_ROUTE_FOUND') {
+        throw new AppError(
+          'NO_ROUTE_FOUND',
+          raw.message || 'No walking route found between these points.',
+        );
+      }
+      if (raw.error === 'NO_NEARBY_ROAD') {
+        throw new AppError(
+          'NO_NEARBY_ROAD',
+          raw.message || 'No walkable road found near one of your locations.',
         );
       }
       throw new AppError(
-        'safe_routes_error',
-        raw.message || raw.error || `Server returned ${resp.status}`,
+        raw.error || 'safe_routes_error',
+        raw.message || `Server returned ${resp.status}`,
       );
     }
 

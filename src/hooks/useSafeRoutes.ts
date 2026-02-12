@@ -109,6 +109,12 @@ export function useSafeRoutes(
       if (appError.code === 'DESTINATION_OUT_OF_RANGE') {
         setOutOfRange(true);
         setOutOfRangeMessage(appError.message);
+      } else if (appError.code === 'NO_ROUTE_FOUND') {
+        setOutOfRange(false);
+        setOutOfRangeMessage('');
+      } else if (appError.code === 'NO_NEARBY_ROAD') {
+        setOutOfRange(false);
+        setOutOfRangeMessage('');
       }
 
       setError(appError);
