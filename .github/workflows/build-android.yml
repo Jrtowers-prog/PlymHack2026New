@@ -73,9 +73,9 @@ jobs:
           body: |
             Automatically built from commit `${{ github.sha }}`.
 
-            **Download:** [SafeNightHome.apk](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk)
-
-            ⚠️ Android only — iOS coming soon.
+            **Download:**
+            - [SafeNightHome.apk](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk) (Android)
+            - [SafeNightHome.ipa](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa) (iOS)
           files: SafeNightHome.apk
           prerelease: true
           make_latest: true

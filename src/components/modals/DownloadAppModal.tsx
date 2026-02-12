@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk';
+const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa';
 
 interface DownloadAppModalProps {
   visible: boolean;
@@ -25,14 +26,19 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
           Download it to navigate safely.
         </Text>
 
-        {/* Apple */}
-        <View style={styles.storeButton}>
+        {/* Apple — direct IPA download from GitHub Releases */}
+        <Pressable
+          style={styles.storeButtonActive}
+          onPress={() => Linking.openURL(IPA_URL)}
+          accessibilityRole="link"
+        >
           <Ionicons name="logo-apple" size={24} color="#fff" />
           <View style={styles.storeTextCol}>
-            <Text style={styles.storeLabel}>App Store</Text>
-            <Text style={styles.comingSoon}>Coming Soon</Text>
+            <Text style={styles.storeLabel}>Download for iOS</Text>
+            <Text style={styles.storeSubtext}>IPA · Always latest version</Text>
           </View>
-        </View>
+          <Ionicons name="download-outline" size={20} color="#fff" />
+        </Pressable>
 
         {/* Android — direct APK download from GitHub Releases */}
         <Pressable
@@ -90,17 +96,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 4,
   },
-  storeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    width: '100%',
-    backgroundColor: '#1D2939',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    opacity: 0.5,
-  },
   storeButtonActive: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -118,12 +113,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#fff',
-  },
-  comingSoon: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#98a2b3',
-    marginTop: 1,
   },
   storeSubtext: {
     fontSize: 11,

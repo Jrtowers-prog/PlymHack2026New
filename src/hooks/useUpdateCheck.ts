@@ -13,6 +13,7 @@ import { Linking, Platform } from 'react-native';
 const REPO = 'Jrtowers-prog/PlymHack2026New';
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases/tags/latest`;
 const APK_URL = `https://github.com/${REPO}/releases/latest/download/SafeNightHome.apk`;
+const IPA_URL = `https://github.com/${REPO}/releases/latest/download/SafeNightHome.ipa`;
 
 // Injected at build time by CI; falls back to empty string in dev
 const BUILD_TIMESTAMP = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? '';
@@ -31,8 +32,8 @@ export function useUpdateCheck(): UpdateInfo {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    // Only check on Android native (sideloaded APK)
-    if (Platform.OS !== 'android') return;
+    // Only check on native (sideloaded APK / IPA)
+    if (Platform.OS === 'web') return;
     if (!BUILD_TIMESTAMP) return; // dev build — no timestamp, skip
 
     const check = async () => {
@@ -65,6 +66,6 @@ export function useUpdateCheck(): UpdateInfo {
   return {
     available: available && !dismissed,
     dismiss: () => setDismissed(true),
-    download: () => Linking.openURL(APK_URL),
+    download: () => Linking.openURL(Platform.OS === 'ios' ? IPA_URL : APK_URL),
   };
 }
