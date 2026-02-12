@@ -2,28 +2,49 @@
  * explain.js
  *
  * Backend endpoint for AI route explanation.
- * Receives route data from frontend and calls OpenAI server-side.
- * This keeps the OPENAI_API_KEY secret and never exposes it to clients.
+ * Receives AGGREGATED route data (no per-segment data) and calls OpenAI.
+ * Caches explanations for 1 hour to minimise API costs.
+ * Limits to top 3 routes and uses a compact prompt (~500-800 tokens).
  */
 
 const express = require('express');
 const router = express.Router();
 
+// ─── 1-hour explanation cache ────────────────────────────────────────────────
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const explanationCache = new Map(); // key → { explanation, timestamp }
+
+/** Evict expired entries (runs on each request, lightweight) */
+const evictExpired = () => {
+  const now = Date.now();
+  for (const [key, entry] of explanationCache) {
+    if (now - entry.timestamp > CACHE_TTL) explanationCache.delete(key);
+  }
+};
+
+/** Build a stable cache key from route data */
+const buildCacheKey = (routes, bestRouteId) => {
+  const routePart = routes
+    .map((r) => `${r.routeId}:${r.distanceMeters}:${r.score}`)
+    .sort()
+    .join('|');
+  return `${routePart}__best=${bestRouteId}`;
+};
+
 const fmtDist = (m) =>
-  m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
-const fmtTime = (s) => `${Math.max(1, Math.round(s / 60))} min`;
+  m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m)}m`;
+const fmtTime = (s) => `${Math.max(1, Math.round(s / 60))}min`;
 
 /**
  * POST /api/explain-route
  *
- * Body:
+ * Body (compact — no segments):
  * {
- *   safetyResult: SafetyMapResult,
- *   routes: RouteInfo[],
+ *   routes: CompactRouteInfo[] (max 3),
  *   bestRouteId: string
  * }
  *
- * Returns: { explanation: string }
+ * Returns: { explanation: string, cached: boolean }
  */
 router.post('/explain-route', async (req, res) => {
   try {
@@ -34,111 +55,67 @@ router.post('/explain-route', async (req, res) => {
         .json({ error: 'Missing OPENAI_API_KEY on server' });
     }
 
-    const { safetyResult, routes, bestRouteId } = req.body;
+    let { routes, bestRouteId } = req.body;
 
     // Validate input
-    if (
-      !safetyResult ||
-      !routes ||
-      !Array.isArray(routes) ||
-      !bestRouteId
-    ) {
+    if (!routes || !Array.isArray(routes) || !bestRouteId) {
       return res.status(400).json({
-        error: 'Missing required fields: safetyResult, routes, bestRouteId',
+        error: 'Missing required fields: routes, bestRouteId',
       });
     }
 
-    // Build detailed per-route blocks with EVERY safety parameter
+    // Limit to top 3 routes
+    routes = routes.slice(0, 3);
+
+    // ── Check cache ──
+    evictExpired();
+    const cacheKey = buildCacheKey(routes, bestRouteId);
+    const cached = explanationCache.get(cacheKey);
+    if (cached) {
+      console.log('[OpenAI] ✅ Cache hit — skipping API call');
+      return res.json({ explanation: cached.explanation, cached: true });
+    }
+
+    // ── Build compact prompt (~500-800 tokens) ──
     const routeBlocks = routes
       .map((r, i) => {
         const isBest = r.routeId === bestRouteId;
-        const tag = isBest ? ' ← RECOMMENDED' : '';
-        const s = r.score;
-        const bd = r.safetyBreakdown;
-        const stats = r.routeStats;
-        const pois = r.poiCounts;
-        const segs = r.segments || [];
+        const tag = isBest ? ' [SAFEST]' : '';
+        const lines = [`Route ${i + 1}${tag}: ${fmtDist(r.distanceMeters)}, ${fmtTime(r.durationSeconds)}, safety ${r.score}/100`];
 
-        const lines = [`Route ${i + 1}${tag}:`];
-        lines.push(`  Distance: ${fmtDist(r.distanceMeters)}, Walking time: ${fmtTime(r.durationSeconds)}`);
-        if (r.summary) lines.push(`  Summary: ${r.summary}`);
-
-        // Overall scores
-        if (s?.status === 'done') {
-          lines.push(`  Overall safety score: ${s.score}/100 (${s.label})`);
-          lines.push(`  Pathfinding score: ${s.pathfindingScore}/100`);
-          lines.push(`  Main-road ratio: ${(s.mainRoadRatio * 100).toFixed(0)}%`);
-          lines.push(`  Data confidence: ${(s.dataConfidence * 100).toFixed(0)}%`);
+        // Safety factor scores
+        if (r.breakdown) {
+          lines.push(`  Scores: road=${r.breakdown.roadType} light=${r.breakdown.lighting} crime=${r.breakdown.crime} cctv=${r.breakdown.cctv} places=${r.breakdown.openPlaces} traffic=${r.breakdown.traffic}`);
         }
 
-        // Safety breakdown (per-factor scores)
-        if (bd) {
-          lines.push(`  Safety breakdown:`);
-          lines.push(`    Road type score: ${bd.roadType}/100`);
-          lines.push(`    Lighting score: ${bd.lighting}/100`);
-          lines.push(`    Crime score: ${bd.crime}/100 (higher=safer)`);
-          lines.push(`    CCTV coverage score: ${bd.cctv}/100`);
-          lines.push(`    Open places score: ${bd.openPlaces}/100`);
-          lines.push(`    Traffic/activity score: ${bd.traffic}/100`);
+        // Totals
+        if (r.totals) {
+          const t = r.totals;
+          lines.push(`  Totals: ${t.crimes} crimes, ${t.lights} lights, ${t.cctv} CCTV, ${t.places} open places, ${t.busStops} bus stops, ${t.deadEnds} dead ends`);
         }
 
-        // Road type distribution
-        if (r.roadTypes && Object.keys(r.roadTypes).length > 0) {
-          const roadStr = Object.entries(r.roadTypes)
-            .map(([type, pct]) => `${type}: ${pct}%`)
-            .join(', ');
-          lines.push(`  Road types: ${roadStr}`);
-        }
-        if (r.mainRoadRatio != null) {
-          lines.push(`  Main road ratio: ${r.mainRoadRatio}%`);
-        }
-
-        // Route stats
-        if (stats) {
-          lines.push(`  Route stats:`);
-          lines.push(`    Dead ends: ${stats.deadEnds}`);
-          lines.push(`    Sidewalk coverage: ${stats.sidewalkPct}%`);
-          lines.push(`    Unpaved sections: ${stats.unpavedPct}%`);
-          lines.push(`    Transit stops nearby: ${stats.transitStopsNearby}`);
-          lines.push(`    CCTV cameras nearby: ${stats.cctvCamerasNearby}`);
-        }
-
-        // POI counts
-        if (pois) {
-          lines.push(`  Points of interest along route:`);
-          lines.push(`    CCTV cameras: ${pois.cctv}, Transit stops: ${pois.transit}, Street lights: ${pois.lights}`);
-          lines.push(`    Open places: ${pois.places}, Dead ends: ${pois.deadEnds}, Crime reports: ${pois.crimes}`);
-        }
-
-        // Segment summary (aggregate stats)
-        if (segs.length > 0) {
-          const avgLight = (segs.reduce((a, s) => a + s.lightScore, 0) / segs.length).toFixed(2);
-          const avgCrime = (segs.reduce((a, s) => a + s.crimeScore, 0) / segs.length).toFixed(2);
-          const avgCctv = (segs.reduce((a, s) => a + s.cctvScore, 0) / segs.length).toFixed(2);
-          const avgPlace = (segs.reduce((a, s) => a + s.placeScore, 0) / segs.length).toFixed(2);
-          const avgTraffic = (segs.reduce((a, s) => a + s.trafficScore, 0) / segs.length).toFixed(2);
-          const deadEndSegs = segs.filter(s => s.isDeadEnd).length;
-          const sidewalkSegs = segs.filter(s => s.hasSidewalk).length;
-          lines.push(`  Segment analysis (${segs.length} segments):`);
-          lines.push(`    Avg lighting: ${avgLight}, Avg crime safety: ${avgCrime}, Avg CCTV: ${avgCctv}`);
-          lines.push(`    Avg place activity: ${avgPlace}, Avg traffic: ${avgTraffic}`);
-          lines.push(`    Dead-end segments: ${deadEndSegs}, Segments with sidewalks: ${sidewalkSegs}`);
+        // Road data
+        if (r.roadData) {
+          const rd = r.roadData;
+          const types = rd.roadTypes
+            ? Object.entries(rd.roadTypes)
+                .map(([k, v]) => `${k}:${v}%`)
+                .join(' ')
+            : '';
+          lines.push(`  Roads: ${rd.mainRoadPct}% main, ${rd.pavedPct}% paved, ${rd.sidewalkPct}% sidewalk${types ? ` | ${types}` : ''}`);
         }
 
         return lines.join('\n');
       })
-      .join('\n\n');
+      .join('\n');
 
-    const prompt = `You are a concise walking-safety assistant. We analysed ${routes.length} walking routes using our safety algorithm. Based ONLY on the data below, write exactly ONE paragraph (max 150 words) that: (1) explains how the safety score was calculated from the factors shown, (2) explains why the recommended route is the safest compared to the alternatives using specific numbers, and (3) gives one brief practical suggestion for the walker. Do NOT use bullet points. Do NOT give general safety tips. Reference specific data points.
+    const prompt = `Walking safety assistant. ${routes.length} routes analysed. Score = weighted mix of crime safety, street lighting, CCTV, road type, open places, foot traffic (0-100, higher=safer).
 
-ALL ${routes.length} ROUTES WITH FULL SAFETY DATA:
 ${routeBlocks}
 
-THE RECOMMENDED ROUTE IS: Route ${routes.findIndex(r => r.routeId === bestRouteId) + 1}
+In 2-3 short sentences using simple everyday English: (1) Why is the safest route the best choice using the numbers above. (2) One quick note about each alternative. Keep it under 100 words. No bullet points, no generic tips.`;
 
-Respond with exactly ONE paragraph, max 150 words.`;
-
-    console.log(`[OpenAI] 🌐 API call from backend → gpt-4o-mini`);
+    console.log(`[OpenAI] 🌐 API call → gpt-4o-mini (prompt ~${prompt.length} chars)`);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -149,13 +126,13 @@ Respond with exactly ONE paragraph, max 150 words.`;
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 200,
+        max_tokens: 150,
         temperature: 0.3,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       console.error(
         '[OpenAI] ❌ Error:',
         errorData?.error?.message || 'Unknown error'
@@ -170,9 +147,15 @@ Respond with exactly ONE paragraph, max 150 words.`;
       data?.choices?.[0]?.message?.content?.trim() ||
       'Unable to generate explanation';
 
-    console.log('[OpenAI] ✅ Success:', explanation.substring(0, 50) + '...');
+    // Cache for 1 hour
+    explanationCache.set(cacheKey, {
+      explanation,
+      timestamp: Date.now(),
+    });
 
-    res.json({ explanation });
+    console.log(`[OpenAI] ✅ Success (${explanation.length} chars), cached for 1hr`);
+
+    res.json({ explanation, cached: false });
   } catch (error) {
     console.error('[Explain Route] Error:', error.message);
     res.status(500).json({ error: error.message });

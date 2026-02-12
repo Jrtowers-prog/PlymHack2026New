@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
-import { fetchAIExplanation, type RouteInfo, type SegmentSummary } from '@/src/services/openai';
+import { fetchAIExplanation, type CompactRouteInfo } from '@/src/services/openai';
 import type { SafeRoute } from '@/src/services/safeRoutes';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
 import type { DirectionsRoute } from '@/src/types/google';
@@ -33,7 +33,7 @@ export const useAIExplanation = (
   routes: DirectionsRoute[],
   scores: Record<string, RouteScore>,
   bestRouteId: string | null,
-  /** Pass the full SafeRoute[] so we can extract every safety parameter */
+  /** Pass the full SafeRoute[] so we can extract aggregated safety data */
   safeRoutes?: SafeRoute[],
 ): UseAIExplanationState => {
   const [status, setStatus] = useState<AIStatus>('idle');
@@ -54,7 +54,7 @@ export const useAIExplanation = (
       return;
     }
 
-    // ── Check cache first — one generation per search ──
+    // ── Check client-side cache first ──
     const cacheKey = buildCacheKey(routes, bestRouteId);
     const cached = explanationCache.get(cacheKey);
     if (cached) {
@@ -69,57 +69,54 @@ export const useAIExplanation = (
     setError(null);
     setExplanation(null);
 
-    // ── Build enriched per-route info with ALL safety parameters ──
-    const routeInfos: RouteInfo[] = routes.map((r) => {
+    // ── Build compact per-route data: aggregated totals only, top 3 ──
+    const compactRoutes: CompactRouteInfo[] = routes.slice(0, 3).map((r) => {
       const safeRoute = safeRoutes?.find((sr) => sr.id === r.id);
-      const segments: SegmentSummary[] = (safeRoute?.enrichedSegments ?? []).map((seg) => ({
-        highway: seg.highway,
-        roadName: seg.roadName,
-        distance: seg.distance,
-        safetyScore: seg.safetyScore,
-        lightScore: seg.lightScore,
-        crimeScore: seg.crimeScore,
-        cctvScore: seg.cctvScore,
-        placeScore: seg.placeScore,
-        trafficScore: seg.trafficScore,
-        isDeadEnd: seg.isDeadEnd,
-        hasSidewalk: seg.hasSidewalk,
-        surfaceType: seg.surfaceType,
-      }));
-
+      const score = scores[r.id];
       const pois = safeRoute?.routePOIs;
+      const stats = safeRoute?.routeStats;
+      const safety = safeRoute?.safety;
 
       return {
         routeId: r.id,
         distanceMeters: r.distanceMeters,
         durationSeconds: r.durationSeconds,
-        summary: r.summary,
-        score: scores[r.id],
-        safetyBreakdown: safeRoute?.safety?.breakdown,
-        roadTypes: safeRoute?.safety?.roadTypes,
-        mainRoadRatio: safeRoute?.safety?.mainRoadRatio,
-        routeStats: safeRoute?.routeStats,
-        poiCounts: pois
+        score: score?.score ?? 0,
+        breakdown: safety?.breakdown
           ? {
-              cctv: pois.cctv?.length ?? 0,
-              transit: pois.transit?.length ?? 0,
-              deadEnds: pois.deadEnds?.length ?? 0,
-              lights: pois.lights?.length ?? 0,
-              places: pois.places?.length ?? 0,
-              crimes: pois.crimes?.length ?? 0,
+              roadType: safety.breakdown.roadType,
+              lighting: safety.breakdown.lighting,
+              crime: safety.breakdown.crime,
+              cctv: safety.breakdown.cctv,
+              openPlaces: safety.breakdown.openPlaces,
+              traffic: safety.breakdown.traffic,
             }
           : undefined,
-        segments,
+        totals: pois
+          ? {
+              crimes: pois.crimes?.length ?? 0,
+              lights: pois.lights?.length ?? 0,
+              cctv: pois.cctv?.length ?? 0,
+              places: pois.places?.length ?? 0,
+              busStops: pois.transit?.length ?? 0,
+              deadEnds: pois.deadEnds?.length ?? 0,
+            }
+          : undefined,
+        roadData: {
+          mainRoadPct: safety?.mainRoadRatio ?? 0,
+          pavedPct: 100 - (stats?.unpavedPct ?? 0),
+          sidewalkPct: stats?.sidewalkPct ?? 0,
+          roadTypes: safety?.roadTypes,
+        },
       };
     });
 
     fetchAIExplanation({
-      safetyResult,
-      routes: routeInfos,
+      routes: compactRoutes,
       bestRouteId,
     })
       .then((text) => {
-        // Store in cache so repeat asks return instantly
+        // Store in client cache so repeat asks return instantly
         explanationCache.set(cacheKey, text);
         activeCacheKeyRef.current = cacheKey;
         setExplanation(text);

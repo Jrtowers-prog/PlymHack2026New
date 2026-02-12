@@ -47,7 +47,7 @@ app.use(
         callback(new Error(`CORS: origin ${origin} not allowed`));
       }
     },
-    methods: ['GET'],
+    methods: ['GET', 'POST'],
     optionsSuccessStatus: 200,
   })
 );
@@ -62,8 +62,8 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// ─── 4. Body parser (not strictly needed for GET-only, but good practice) ───
-app.use(express.json({ limit: '10kb' }));
+// ─── 4. Body parser ─────────────────────────────────────────────────────────
+app.use(express.json({ limit: '50kb' }));
 
 // ─── 5. Routes ──────────────────────────────────────────────────────────────
 app.use('/api/places', placesRouter);

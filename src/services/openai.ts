@@ -2,75 +2,64 @@
  * openai.ts
  *
  * Lightweight OpenAI chat-completion wrapper.
- * Sends ALL route safety data and gets a ≤150-word explanation
- * of why the safest route was chosen.
+ * Sends COMPACT aggregated route data (no per-segment data) to the backend,
+ * which handles the OpenAI call securely and caches results for 1 hour.
  */
 
 import { env } from '@/src/config/env';
-import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
-import type { SafetyBreakdown, RouteStats, RoutePOIs } from '@/src/services/safeRoutes';
-import type { SafetyMapResult } from '@/src/services/safetyMapData';
 
-/** Summarised per-segment stats for the AI */
-export interface SegmentSummary {
-  highway: string;
-  roadName: string;
-  distance: number;
-  safetyScore: number;
-  lightScore: number;
-  crimeScore: number;
-  cctvScore: number;
-  placeScore: number;
-  trafficScore: number;
-  isDeadEnd: boolean;
-  hasSidewalk: boolean;
-  surfaceType: string;
+/** Safety factor breakdown scores (0-100 each) */
+export interface SafetyBreakdownCompact {
+  roadType: number;
+  lighting: number;
+  crime: number;
+  cctv: number;
+  openPlaces: number;
+  traffic: number;
 }
 
-/** Per-route info bundle passed to the AI */
-export interface RouteInfo {
+/** Aggregated totals for the whole route (not per-segment) */
+export interface RouteTotals {
+  crimes: number;
+  lights: number;
+  cctv: number;
+  places: number;
+  busStops: number;
+  deadEnds: number;
+}
+
+/** Road data summary for the whole route */
+export interface RouteRoadData {
+  mainRoadPct: number;
+  pavedPct: number;
+  sidewalkPct: number;
+  roadTypes?: Record<string, number>;
+}
+
+/** Compact per-route info — aggregated totals only, no segments */
+export interface CompactRouteInfo {
   routeId: string;
   distanceMeters: number;
   durationSeconds: number;
-  summary?: string;
-  score: RouteScore | undefined;
-  /** Full safety breakdown (roadType, lighting, crime, cctv, openPlaces, traffic) */
-  safetyBreakdown?: SafetyBreakdown;
-  /** Road type distribution e.g. { primary: 40, residential: 35 } */
-  roadTypes?: Record<string, number>;
-  /** Main road ratio 0-100 */
-  mainRoadRatio?: number;
-  /** Route statistics: dead ends, sidewalk %, transit stops, CCTV, etc. */
-  routeStats?: RouteStats;
-  /** POI counts along the route */
-  poiCounts?: {
-    cctv: number;
-    transit: number;
-    deadEnds: number;
-    lights: number;
-    places: number;
-    crimes: number;
-  };
-  /** Per-segment safety data (summarised) */
-  segments?: SegmentSummary[];
+  score: number;
+  breakdown?: SafetyBreakdownCompact;
+  totals?: RouteTotals;
+  roadData?: RouteRoadData;
 }
 
 export interface AIExplanationInput {
-  /** Full safety analysis of the recommended (safest) route */
-  safetyResult: SafetyMapResult;
-  /** Every route with distance, duration, summary & score */
-  routes: RouteInfo[];
+  /** Top 3 routes with aggregated data only */
+  routes: CompactRouteInfo[];
   /** Which route id is the recommended safest one */
   bestRouteId: string;
 }
 
 /**
- * Ask backend for a concise (≤150 word) explanation of why the
+ * Ask backend for a concise (~100 word) explanation of why the
  * safest route is safer than the alternatives.
  *
  * NOTE: The OpenAI API key is kept SECRET on the backend.
- * This frontend function now only sends the route data to the backend,
- * which handles the OpenAI call securely.
+ * The backend also caches explanations for 1 hour.
  */
 export const fetchAIExplanation = async (input: AIExplanationInput): Promise<string> => {
   const apiBaseUrl = env.apiBaseUrl;
@@ -96,7 +85,8 @@ export const fetchAIExplanation = async (input: AIExplanationInput): Promise<str
 
   const data = await response.json();
   const explanation: string | undefined = data?.explanation;
-  console.log(`[OpenAI] 📦 Response: ${explanation ? explanation.length + ' chars' : 'empty'}`);
+  const wasCached: boolean = data?.cached ?? false;
+  console.log(`[OpenAI] 📦 Response: ${explanation ? explanation.length + ' chars' : 'empty'}${wasCached ? ' (cached)' : ''}`);
 
   if (!explanation) {
     throw new Error('No explanation from backend');
