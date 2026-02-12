@@ -10,13 +10,14 @@
  * inside the map container.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost';
 import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
+import { DownloadAppModal } from '@/src/components/modals/DownloadAppModal';
 import { OnboardingModal } from '@/src/components/modals/OnboardingModal';
 import { NavigationOverlay } from '@/src/components/navigation/NavigationOverlay';
 import { RouteList } from '@/src/components/routes/RouteList';
@@ -31,6 +32,7 @@ import { formatDistance, formatDuration } from '@/src/utils/format';
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const h = useHomeScreen();
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
 
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
@@ -277,7 +279,7 @@ export default function HomeScreen() {
           {h.selectedRouteId && h.nav.state === 'idle' && (
             <Pressable
               style={styles.startNavButton}
-              onPress={h.nav.start}
+              onPress={Platform.OS === 'web' ? () => setShowDownloadModal(true) : h.nav.start}
               accessibilityRole="button"
               accessibilityLabel="Start navigation"
             >
@@ -323,10 +325,17 @@ export default function HomeScreen() {
           onDismiss={() => h.setShowOnboarding(false)}
         />
 
-        <NavigationOverlay
-          nav={h.nav}
-          topInset={insets.top}
-          bottomInset={insets.bottom}
+        {Platform.OS !== 'web' && (
+          <NavigationOverlay
+            nav={h.nav}
+            topInset={insets.top}
+            bottomInset={insets.bottom}
+          />
+        )}
+
+        <DownloadAppModal
+          visible={showDownloadModal}
+          onClose={() => setShowDownloadModal(false)}
         />
       </AndroidOverlayHost>
     </View>
