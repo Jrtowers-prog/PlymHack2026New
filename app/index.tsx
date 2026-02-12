@@ -10,7 +10,7 @@
  * inside the map container.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Dimensions, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost';
@@ -66,8 +66,12 @@ export default function HomeScreen() {
        * On iOS/web it's a no-op passthrough.
        */}
       <AndroidOverlayHost>
-        {/* ── Map type toggle ── */}
-        {!h.isNavActive && <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />}
+        {/* ── Map type toggle — on phones, sits below search bar ── */}
+        {!h.isNavActive && (
+          <View style={Platform.OS === 'web' ? undefined : { position: 'absolute', top: insets.top + 100, right: 12, zIndex: 11 }}>
+            <MapTypeControl mapType={h.mapType} onMapTypeChange={h.setMapType} />
+          </View>
+        )}
 
         {/* ── Pin-mode banner ── */}
         {h.pinMode && (

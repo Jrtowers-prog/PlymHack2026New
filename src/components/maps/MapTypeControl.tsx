@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { MapType } from './RouteMap.types';
 
@@ -18,9 +19,10 @@ const MAP_TYPE_OPTIONS: { value: MapType; label: string }[] = [
 export const MapTypeControl = ({ mapType, onMapTypeChange }: MapTypeControlProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  const isPhone = Platform.OS !== 'web';
+
   return (
-    <View style={styles.container}>
-      {isExpanded ? (
+    <View style={[styles.container, isPhone && styles.containerPhone]}>      {isExpanded ? (
         <View style={styles.expandedContainer}>
           {MAP_TYPE_OPTIONS.map((option) => (
             <Pressable
@@ -43,6 +45,10 @@ export const MapTypeControl = ({ mapType, onMapTypeChange }: MapTypeControlProps
             </Pressable>
           ))}
         </View>
+      ) : isPhone ? (
+        <Pressable style={styles.iconButton} onPress={() => setIsExpanded(true)}>
+          <Ionicons name="layers-outline" size={18} color="#1D2939" />
+        </Pressable>
       ) : (
         <Pressable style={styles.compactButton} onPress={() => setIsExpanded(true)}>
           <Text style={styles.compactText}>
@@ -60,6 +66,24 @@ const styles = StyleSheet.create({
     top: 16,
     right: 16,
     zIndex: 1000,
+  },
+  containerPhone: {
+    position: 'relative' as const,
+    top: undefined as any,
+    right: undefined as any,
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
   },
   compactButton: {
     backgroundColor: '#ffffff',
