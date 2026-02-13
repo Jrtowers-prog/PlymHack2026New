@@ -15,9 +15,9 @@
 name: Build iOS IPA
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  workflow_dispatch: # manual trigger only until Apple signing secrets are added
 
 jobs:
   build:
