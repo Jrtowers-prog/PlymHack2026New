@@ -256,52 +256,58 @@ export function useHomeScreen() {
   const ai = useAIExplanation(safetyResult, routes, routeScores, bestRouteId, safeRoutes as SafeRoute[]);
 
   // ── Map interaction handlers ──
-  const resolvePin = useCallback(async (coordinate: LatLng): Promise<PlaceDetails> => {
-    const fallback: PlaceDetails = {
-      placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
-      name: 'Dropped pin',
-      location: coordinate,
-    };
-    const resolved = await reverseGeocode(coordinate);
-    return resolved ?? fallback;
-  }, []);
+
+  /** Create an immediate pin, then resolve name in the background. */
+  const makePinAndResolve = useCallback(
+    (coordinate: LatLng, setter: (pin: PlaceDetails) => void) => {
+      const pin: PlaceDetails = {
+        placeId: `pin:${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
+        name: 'Dropped pin',
+        location: coordinate,
+      };
+      setter(pin);
+      // Resolve name in background
+      reverseGeocode(coordinate)
+        .then((resolved) => {
+          if (resolved) setter({ ...resolved, location: coordinate });
+        })
+        .catch(() => {/* keep fallback */});
+    },
+    [],
+  );
 
   const handleMapPress = useCallback(
-    async (coordinate: LatLng) => {
+    (coordinate: LatLng) => {
       Keyboard.dismiss();
       if (isNavActive) return;
 
       if (pinMode === 'origin') {
         setIsUsingCurrentLocation(false);
         originSearch.clear();
-        // Reset destination so the user picks fresh start → end
         destSearch.clear();
         setManualDest(null);
-        const pin = await resolvePin(coordinate);
-        setManualOrigin(pin);
+        makePinAndResolve(coordinate, setManualOrigin);
         setPinMode(null);
         setSelectedRouteId(null);
       } else if (pinMode === 'destination') {
         destSearch.clear();
-        const pin = await resolvePin(coordinate);
-        setManualDest(pin);
+        makePinAndResolve(coordinate, setManualDest);
         setPinMode(null);
         setSelectedRouteId(null);
       }
     },
-    [isNavActive, pinMode, originSearch, destSearch, resolvePin],
+    [isNavActive, pinMode, originSearch, destSearch, makePinAndResolve],
   );
 
   const handleMapLongPress = useCallback(
-    async (coordinate: LatLng) => {
+    (coordinate: LatLng) => {
       Keyboard.dismiss();
       if (isNavActive) return;
-      const pin = await resolvePin(coordinate);
-      setManualDest(pin);
       destSearch.clear();
       setSelectedRouteId(null);
+      makePinAndResolve(coordinate, setManualDest);
     },
-    [isNavActive, destSearch, resolvePin],
+    [isNavActive, destSearch, makePinAndResolve],
   );
 
   const handleAcceptOnboarding = useCallback(async () => {
