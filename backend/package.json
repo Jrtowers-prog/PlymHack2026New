@@ -1,7 +1,7 @@
 {
   "name": "safe-night-home-backend",
   "version": "2.0.0",
-  "description": "Safe Night Home — 2-service backend (API Gateway + Safety Compute)",
+  "description": "SafeNight — 2-service backend (API Gateway + Safety Compute)",
   "scripts": {
     "start:gateway": "PORT=3001 node src/gateway/server.js",
     "start:safety": "PORT=3002 node src/safety/server.js",

@@ -70,7 +70,7 @@ export const requireOsmUserAgent = (): string => {
       );
     }
 
-    return 'Safe Night Home (dev)';
+    return 'SafeNight (dev)';
   }
 
   return env.osmUserAgent;

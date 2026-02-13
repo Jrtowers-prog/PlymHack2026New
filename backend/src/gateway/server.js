@@ -1,5 +1,5 @@
 /**
- * Safe Night Home — API Gateway Service
+ * SafeNight — API Gateway Service
  *
  * Lightweight proxy service that handles:
  * - Place search (Nominatim geocoding)

@@ -1,4 +1,4 @@
-# 🌙 Safe Night Home
+# 🌙 SafeNight
 
 A cross-platform mobile app that helps pedestrians find **safer walking routes at night** by building a custom OSM walking graph, running **A\* pathfinding with a multi-factor safety cost function**, and visualising risk per segment on an interactive map — with **AI-powered route explanations** via GPT-4o-mini.
 

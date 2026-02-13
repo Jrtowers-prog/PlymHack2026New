@@ -1,5 +1,5 @@
 /**
- * Safe Night Home — Safety Compute Service
+ * SafeNight — Safety Compute Service
  *
  * CPU-intensive service that handles:
  * - A* pathfinding with safety-weighted cost function

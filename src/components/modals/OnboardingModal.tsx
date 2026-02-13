@@ -20,9 +20,9 @@ export function OnboardingModal({ visible, error, onAccept, onDismiss }: Onboard
           source={require('@/assets/images/logo.png')}
           style={styles.logo}
           resizeMode="contain"
-          accessibilityLabel="Safe Night Home logo"
+          accessibilityLabel="SafeNight logo"
         />
-        <Text style={styles.title}>Safe Night Home</Text>
+        <Text style={styles.title}>SafeNight</Text>
         <Text style={styles.body}>
           We use your location to plan walking routes. Results are guidance only and do not
           guarantee safety.
