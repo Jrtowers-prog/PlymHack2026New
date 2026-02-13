@@ -8,17 +8,10 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk';
 const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa';
 
-/** Trigger a real file download on web by creating a temporary <a download> link */
-const downloadFile = (url: string, filename: string) => {
+/** Open the download URL in a new tab — GitHub redirects to the signed download automatically */
+const downloadFile = (url: string) => {
   if (Platform.OS === 'web') {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 };
 
@@ -43,7 +36,7 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
         {/* Apple — direct IPA download from GitHub Releases */}
         <Pressable
           style={styles.storeButtonActive}
-          onPress={() => downloadFile(IPA_URL, 'SafeNightHome.ipa')}
+          onPress={() => downloadFile(IPA_URL)}
           accessibilityRole="link"
         >
           <Ionicons name="logo-apple" size={24} color="#fff" />
@@ -57,7 +50,7 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
         {/* Android — direct APK download from GitHub Releases */}
         <Pressable
           style={styles.storeButtonActive}
-          onPress={() => downloadFile(APK_URL, 'SafeNightHome.apk')}
+          onPress={() => downloadFile(APK_URL)}
           accessibilityRole="link"
         >
           <Ionicons name="logo-google-playstore" size={24} color="#fff" />
