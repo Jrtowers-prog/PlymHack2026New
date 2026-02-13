@@ -19,6 +19,9 @@ Built with **React Native (Expo SDK 54)**, **TypeScript**, and a **2-service Exp
 | **Pin-drop routing** | Long-press to set origin/destination directly on the map. |
 | **Cross-platform maps** | Leaflet (via WebView) on Android, `react-native-maps` on iOS, and Leaflet on web — with platform-specific implementations. |
 | **Onboarding & disclaimer** | First-launch safety disclaimer persisted via AsyncStorage. |
+| **Auto-update check** | On Android, the app checks GitHub Releases for a newer APK build and prompts the user to download it. |
+| **Web download prompt** | When a web user tries to start navigation, a modal offers the Android APK download (iOS coming soon). |
+| **CI/CD builds** | GitHub Actions automatically builds a release APK on every push to `main` and uploads it to GitHub Releases. |
 | **Spatial indexing** | Grid-based spatial indices (~100 m cells) for O(1) proximity lookups, replacing brute-force distance checks. |
 | **Coverage maps** | Pre-computed `Float32Array` grids with inverse-distance-squared falloff for lighting and crime density — O(1) per-edge safety lookups. |
 | **Multi-layer caching** | Route cache (5 min), OSM data cache (30 min), crime data cache (24 h), and request coalescing for concurrent identical requests. |
@@ -48,7 +51,7 @@ Built with **React Native (Expo SDK 54)**, **TypeScript**, and a **2-service Exp
 │  │   ├── sheets/       Draggable bottom sheet                │
 │  │   └── ui/           Reusable widgets (progress, loading)  │
 │  ├── config/env.ts     Centralised env-var config            │
-│  ├── hooks/            12 custom React hooks                 │
+│  ├── hooks/            13 custom React hooks                 │
 │  ├── services/         API clients & scoring logic           │
 │  ├── types/            TypeScript type definitions           │
 │  └── utils/            Polyline, caching, spatial utils      │
@@ -116,7 +119,7 @@ Built with **React Native (Expo SDK 54)**, **TypeScript**, and a **2-service Exp
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/mobinzaki/PlymHack2026New.git
+git clone https://github.com/Jrtowers-prog/PlymHack2026New.git
 cd PlymHack2026New
 npm install
 cd backend && npm install && cd ..
@@ -160,7 +163,7 @@ NODE_ENV=development
 
 ```bash
 cd backend
-npm run dev          # Starts Express server on port 3001
+npm run dev          # Starts both services (Gateway on 3001, Safety on 3002)
 ```
 
 ### 4. Run the app
@@ -196,7 +199,7 @@ PlymHack2026New/
 │   │   │   ├── RouteMap.web.tsx      Web (Leaflet)
 │   │   │   ├── leafletMapHtml.ts     Leaflet HTML injection
 │   │   │   └── mapConstants.ts       Shared map config
-│   │   ├── modals/                   AI explanation & onboarding modals
+│   │   ├── modals/                   AI explanation, download & onboarding modals
 │   │   ├── navigation/              Turn-by-turn overlay
 │   │   ├── routes/                   Route list & route cards
 │   │   ├── safety/                   Safety panel & profile chart
@@ -210,6 +213,7 @@ PlymHack2026New/
 │   ├── hooks/
 │   │   ├── useAIExplanation.ts       Triggers OpenAI route explanation
 │   │   ├── useAllRoutesSafety.ts     Parallel safety scoring for all routes
+│   │   ├── useAutoPlaceSearch.ts     Automatic place search on input
 │   │   ├── useCurrentLocation.ts     GPS location + permission handling
 │   │   ├── useDirections.ts          Fetches OSRM walking directions
 │   │   ├── useHomeScreen.ts          Main screen orchestration
@@ -218,7 +222,8 @@ PlymHack2026New/
 │   │   ├── usePlaceAutocomplete.ts   Place autocomplete
 │   │   ├── useRouteSafety.ts         Full safety map data for selected route
 │   │   ├── useSafeRoutes.ts          Backend safe-routes integration
-│   │   └── useSegmentSafety.ts       Per-segment scoring for a route
+│   │   ├── useSegmentSafety.ts       Per-segment scoring for a route
+│   │   └── useUpdateCheck.ts         GitHub Releases auto-update check
 │   │
 │   ├── services/
 │   │   ├── googleMaps.ts             Google Maps REST client
@@ -282,6 +287,9 @@ PlymHack2026New/
 │               ├── overpassClient.js Overpass with 3-server rotation
 │               └── safetyGraph.js   A* pathfinding + MinHeap + K-routes
 │
+├── .github/workflows/                CI/CD pipelines
+│   ├── build-android.yml              Auto-build APK on push to main
+│   └── build-ios.yml                  iOS IPA build (manual, needs signing)
 ├── android/                         Android native project
 ├── ios/                             iOS native project
 ├── assets/images/                   Static image assets
@@ -429,11 +437,24 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 - **SPA**: `/* → /index.html` redirect
 - **Config**: See `netlify.toml`
 
-### Native Builds
+### Native Builds & Distribution
+
+**Android (automated):**
+- A GitHub Actions workflow (`.github/workflows/build-android.yml`) builds a release APK on every push to `main`
+- The APK is uploaded to [GitHub Releases](https://github.com/Jrtowers-prog/PlymHack2026New/releases/tag/latest) as `SafeNightHome.apk`
+- Download link: https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk
+- The app includes an auto-update check that prompts users when a newer build is available
+
+**iOS (not yet available):**
+- A workflow exists (`.github/workflows/build-ios.yml`) but is **manual trigger only**
+- Requires an Apple Developer account ($99/yr) and signing secrets (`IOS_CERTIFICATE_P12`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE`, `APPLE_TEAM_ID`)
+- iOS apps cannot be sideloaded like Android APKs — Apple requires code signing for all installs
+
+**Local builds:**
 
 ```bash
 npx expo run:android    # Android
-npx expo run:ios        # iOS (macOS only)
+npx expo run:ios        # iOS (macOS only, requires Xcode)
 ```
 
 ---
@@ -458,6 +479,23 @@ npx expo run:ios        # iOS (macOS only)
 | `npm run dev:gateway` | Gateway with `--watch` (auto-restart) |
 | `npm run dev:safety` | Safety with `--watch` (auto-restart) |
 | `npm run dev` | Start both services concurrently |
+
+---
+
+## 🔐 CI/CD Secrets (GitHub Actions)
+
+For the Android build workflow to work, add these secrets in **Settings → Secrets → Actions**:
+
+| Secret | Required for | Description |
+|---|---|---|
+| `EXPO_PUBLIC_API_BASE_URL` | Android + iOS | Backend gateway URL (e.g. `https://your-gateway.onrender.com`) |
+| `EXPO_PUBLIC_SAFETY_API_URL` | Android + iOS | Safety service URL (e.g. `https://your-safety.onrender.com`) |
+| `EXPO_PUBLIC_OSM_USER_AGENT` | Android + iOS | User-agent string for Nominatim requests |
+| `EXPO_PUBLIC_OSM_EMAIL` | Android + iOS | Contact email for Nominatim |
+| `IOS_CERTIFICATE_P12` | iOS only | Base64-encoded .p12 distribution certificate |
+| `IOS_CERTIFICATE_PASSWORD` | iOS only | Password for the .p12 |
+| `IOS_PROVISIONING_PROFILE` | iOS only | Base64-encoded .mobileprovision (Ad Hoc) |
+| `APPLE_TEAM_ID` | iOS only | 10-character Apple Developer Team ID |
 
 ---
 

@@ -25,6 +25,7 @@ import { RoadTypeBreakdown, SafetyPanel } from '@/src/components/safety/SafetyPa
 import { SafetyProfileChart } from '@/src/components/safety/SafetyProfileChart';
 import { SearchBar } from '@/src/components/search/SearchBar';
 import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheets/DraggableSheet';
+import { AndroidDownloadBanner } from '@/src/components/ui/AndroidDownloadBanner';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
 import { useHomeScreen } from '@/src/hooks/useHomeScreen';
 import { formatDistance, formatDuration } from '@/src/utils/format';
@@ -97,6 +98,9 @@ export default function HomeScreen() {
        * On iOS/web it's a no-op passthrough.
        */}
       <AndroidOverlayHost>
+        {/* ── Web: Android download banner ── */}
+        <AndroidDownloadBanner />
+
         {/* ── Pin-mode banner ── */}
         {h.pinMode && (
           <View style={[styles.pinBanner, { bottom: insets.bottom + 12 }]}>
