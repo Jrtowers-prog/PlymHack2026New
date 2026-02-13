@@ -6,7 +6,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk';
-const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.ipa';
 
 /** Open the download URL in a new tab — GitHub redirects to the signed download automatically */
 const downloadFile = (url: string) => {
@@ -33,19 +32,14 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
           Download it to navigate safely.
         </Text>
 
-        {/* Apple — direct IPA download from GitHub Releases */}
-        <Pressable
-          style={styles.storeButtonActive}
-          onPress={() => downloadFile(IPA_URL)}
-          accessibilityRole="link"
-        >
-          <Ionicons name="logo-apple" size={24} color="#fff" />
+        {/* Apple — iOS build not yet available */}
+        <View style={styles.storeButtonDisabled}>
+          <Ionicons name="logo-apple" size={24} color="#98A2B3" />
           <View style={styles.storeTextCol}>
-            <Text style={styles.storeLabel}>Download for iOS</Text>
-            <Text style={styles.storeSubtext}>IPA · Always latest version</Text>
+            <Text style={styles.storeLabelDisabled}>iOS — Coming Soon</Text>
+            <Text style={styles.storeSubtextDisabled}>Not yet available</Text>
           </View>
-          <Ionicons name="download-outline" size={20} color="#fff" />
-        </Pressable>
+        </View>
 
         {/* Android — direct APK download from GitHub Releases */}
         <Pressable
@@ -125,6 +119,27 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: 'rgba(255,255,255,0.7)',
+    marginTop: 1,
+  },
+  storeButtonDisabled: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    backgroundColor: '#F2F4F7',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+  },
+  storeLabelDisabled: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#98A2B3',
+  },
+  storeSubtextDisabled: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#D0D5DD',
     marginTop: 1,
   },
   closeButton: {
