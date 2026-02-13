@@ -12,8 +12,8 @@ import { Linking, Platform } from 'react-native';
 
 const REPO = 'Jrtowers-prog/PlymHack2026New';
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases/tags/latest`;
-const APK_URL = `https://github.com/${REPO}/releases/latest/download/SafeNightHome.apk`;
-const IPA_URL = `https://github.com/${REPO}/releases/latest/download/SafeNightHome.ipa`;
+const APK_URL = `https://github.com/${REPO}/releases/download/latest/SafeNightHome.apk`;
+const IPA_URL = `https://github.com/${REPO}/releases/download/latest/SafeNightHome.ipa`;
 
 // Injected at build time by CI; falls back to empty string in dev
 const BUILD_TIMESTAMP = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? '';

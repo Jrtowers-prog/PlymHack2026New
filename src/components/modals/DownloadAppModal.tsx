@@ -5,8 +5,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
-const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk';
-const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa';
+const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk';
+const IPA_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.ipa';
 
 /** Open the download URL in a new tab — GitHub redirects to the signed download automatically */
 const downloadFile = (url: string) => {

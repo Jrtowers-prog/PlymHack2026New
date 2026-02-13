@@ -1,6 +1,6 @@
 # Build Android APK on push to main and upload to GitHub Releases.
 # The latest APK is always at:
-#   https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk
+#   https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk
 
 name: Build Android APK
 
@@ -77,8 +77,8 @@ jobs:
             Automatically built from commit `${{ github.sha }}`.
 
             **Download:**
-            - [SafeNightHome.apk](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.apk) (Android)
-            - [SafeNightHome.ipa](https://github.com/Jrtowers-prog/PlymHack2026New/releases/latest/download/SafeNightHome.ipa) (iOS)
+            - [SafeNightHome.apk](https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk) (Android)
+            - [SafeNightHome.ipa](https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.ipa) (iOS)
           files: SafeNightHome.apk
           prerelease: true
           make_latest: true
