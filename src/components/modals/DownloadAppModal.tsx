@@ -1,16 +1,64 @@
 /**
  * DownloadAppModal — Shown on web when user tries to start navigation.
  * Prompts them to download the native app.
+ * Tracks download progress and prompts user to install once complete.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 const APK_URL = 'https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk';
 
-/** Open the download URL in a new tab — GitHub redirects to the signed download automatically */
-const downloadFile = (url: string) => {
-  if (Platform.OS === 'web') {
-    window.open(url, '_blank', 'noopener,noreferrer');
+type DownloadState = 'idle' | 'downloading' | 'done' | 'error';
+
+/** Download APK as blob, save it, and prompt install */
+const downloadAndPromptInstall = async (
+  setStatus: (s: DownloadState) => void,
+  setProgress: (p: number) => void,
+) => {
+  if (Platform.OS !== 'web') return;
+
+  setStatus('downloading');
+  setProgress(0);
+
+  try {
+    const response = await fetch(APK_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const contentLength = response.headers.get('content-length');
+    const total = contentLength ? parseInt(contentLength, 10) : 0;
+    const reader = response.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total > 0) setProgress(Math.round((received / total) * 100));
+      }
+    }
+
+    const blob = new Blob(chunks, { type: 'application/vnd.android.package-archive' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    // Trigger browser download with correct MIME type
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = 'SafeNightHome.apk';
+    a.type = 'application/vnd.android.package-archive';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Cleanup after a delay
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
+    setStatus('done');
+  } catch {
+    setStatus('error');
   }
 };
 
@@ -20,6 +68,9 @@ interface DownloadAppModalProps {
 }
 
 export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
+  const [status, setStatus] = useState<DownloadState>('idle');
+  const [progress, setProgress] = useState(0);
+
   if (!visible) return null;
 
   return (
@@ -41,19 +92,54 @@ export function DownloadAppModal({ visible, onClose }: DownloadAppModalProps) {
           </View>
         </View>
 
-        {/* Android — direct APK download from GitHub Releases */}
-        <Pressable
-          style={styles.storeButtonActive}
-          onPress={() => downloadFile(APK_URL)}
-          accessibilityRole="link"
-        >
-          <Ionicons name="logo-google-playstore" size={24} color="#fff" />
-          <View style={styles.storeTextCol}>
-            <Text style={styles.storeLabel}>Download for Android</Text>
-            <Text style={styles.storeSubtext}>APK · Always latest version</Text>
+        {/* Android — download + install flow */}
+        {status === 'idle' && (
+          <Pressable
+            style={styles.storeButtonActive}
+            onPress={() => downloadAndPromptInstall(setStatus, setProgress)}
+            accessibilityRole="link"
+          >
+            <Ionicons name="logo-google-playstore" size={24} color="#fff" />
+            <View style={styles.storeTextCol}>
+              <Text style={styles.storeLabel}>Download for Android</Text>
+              <Text style={styles.storeSubtext}>APK · Always latest version</Text>
+            </View>
+            <Ionicons name="download-outline" size={20} color="#fff" />
+          </Pressable>
+        )}
+
+        {status === 'downloading' && (
+          <View style={styles.storeButtonDownloading}>
+            <ActivityIndicator color="#fff" size="small" />
+            <View style={styles.storeTextCol}>
+              <Text style={styles.storeLabel}>Downloading{progress > 0 ? ` ${progress}%` : '...'}</Text>
+              <Text style={styles.storeSubtext}>Please wait</Text>
+            </View>
           </View>
-          <Ionicons name="download-outline" size={20} color="#fff" />
-        </Pressable>
+        )}
+
+        {status === 'done' && (
+          <View style={styles.storeButtonDone}>
+            <Ionicons name="checkmark-circle" size={24} color="#fff" />
+            <View style={styles.storeTextCol}>
+              <Text style={styles.storeLabel}>Download Complete!</Text>
+              <Text style={styles.storeSubtext}>Tap the notification or open your Downloads to install</Text>
+            </View>
+          </View>
+        )}
+
+        {status === 'error' && (
+          <Pressable
+            style={styles.storeButtonError}
+            onPress={() => downloadAndPromptInstall(setStatus, setProgress)}
+          >
+            <Ionicons name="alert-circle" size={24} color="#fff" />
+            <View style={styles.storeTextCol}>
+              <Text style={styles.storeLabel}>Download failed</Text>
+              <Text style={styles.storeSubtext}>Tap to retry</Text>
+            </View>
+          </Pressable>
+        )}
 
         <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button">
           <Text style={styles.closeText}>Close</Text>
@@ -103,6 +189,36 @@ const styles = StyleSheet.create({
     gap: 12,
     width: '100%',
     backgroundColor: '#1570EF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+  },
+  storeButtonDownloading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    backgroundColor: '#2E90FA',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+  },
+  storeButtonDone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    backgroundColor: '#12B76A',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+  },
+  storeButtonError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    backgroundColor: '#F04438',
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 18,
