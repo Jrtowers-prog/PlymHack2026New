@@ -5,6 +5,7 @@
  * Express user-service which proxies to Supabase.
  *
  * Auth tokens are stored in AsyncStorage and attached to every request.
+ * Includes a session event system so hooks can react to expiry/refresh.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -17,7 +18,24 @@ const AUTH_KEYS = {
   refreshToken: 'safenight_refresh_token',
   userId: 'safenight_user_id',
   userEmail: 'safenight_user_email',
+  expiresAt: 'safenight_expires_at',
 };
+
+// ─── Session event system ────────────────────────────────────────────────────
+
+export type SessionEvent = 'expired' | 'refreshed';
+type SessionListener = (event: SessionEvent) => void;
+const sessionListeners = new Set<SessionListener>();
+
+/** Subscribe to session lifecycle events (expired / refreshed). Returns unsubscribe fn. */
+export function onSessionChange(listener: SessionListener): () => void {
+  sessionListeners.add(listener);
+  return () => { sessionListeners.delete(listener); };
+}
+
+function emitSessionEvent(event: SessionEvent) {
+  sessionListeners.forEach((fn) => fn(event));
+}
 
 // ─── Token management ────────────────────────────────────────────────────────
 
@@ -28,22 +46,78 @@ async function getAccessToken(): Promise<string | null> {
 async function storeSession(session: {
   access_token: string;
   refresh_token: string;
+  expires_in?: number;
   user?: { id: string; email: string };
 }): Promise<void> {
-  await AsyncStorage.multiSet([
+  const pairs: [string, string][] = [
     [AUTH_KEYS.accessToken, session.access_token],
     [AUTH_KEYS.refreshToken, session.refresh_token],
-    ...(session.user
-      ? [
-          [AUTH_KEYS.userId, session.user.id] as [string, string],
-          [AUTH_KEYS.userEmail, session.user.email] as [string, string],
-        ]
-      : []),
-  ]);
+  ];
+
+  // Store expiry time so we can proactively refresh
+  if (session.expires_in) {
+    const expiresAt = Date.now() + session.expires_in * 1000;
+    pairs.push([AUTH_KEYS.expiresAt, String(expiresAt)]);
+  }
+
+  if (session.user) {
+    pairs.push(
+      [AUTH_KEYS.userId, session.user.id],
+      [AUTH_KEYS.userEmail, session.user.email],
+    );
+  }
+
+  await AsyncStorage.multiSet(pairs);
 }
 
 async function clearSession(): Promise<void> {
   await AsyncStorage.multiRemove(Object.values(AUTH_KEYS));
+}
+
+/** Returns epoch ms when the current access token expires, or null */
+export async function getTokenExpiresAt(): Promise<number | null> {
+  const v = await AsyncStorage.getItem(AUTH_KEYS.expiresAt);
+  return v ? Number(v) : null;
+}
+
+// ─── Proactive refresh helper ────────────────────────────────────────────────
+
+/** Refresh the token if it expires within `bufferMs` (default 2 min). */
+export async function refreshIfNeeded(bufferMs = 2 * 60 * 1000): Promise<boolean> {
+  const expiresAt = await getTokenExpiresAt();
+  if (!expiresAt) return false;
+
+  if (Date.now() + bufferMs < expiresAt) return true;  // still fresh
+
+  const refreshToken = await AsyncStorage.getItem(AUTH_KEYS.refreshToken);
+  if (!refreshToken) {
+    await clearSession();
+    emitSessionEvent('expired');
+    return false;
+  }
+
+  try {
+    const res = await fetch(`${BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      await storeSession(data);
+      emitSessionEvent('refreshed');
+      return true;
+    }
+  } catch {
+    // Network error — don't clear session, let the user retry
+    return false;
+  }
+
+  // Refresh failed with a 4xx — session is dead
+  await clearSession();
+  emitSessionEvent('expired');
+  return false;
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -76,6 +150,7 @@ async function authFetch(
       if (refreshRes.ok) {
         const data = await refreshRes.json();
         await storeSession(data);
+        emitSessionEvent('refreshed');
 
         // Retry original request with new token
         return fetch(`${BASE}${path}`, {
@@ -87,9 +162,14 @@ async function authFetch(
           },
         });
       } else {
-        // Refresh failed — clear session
+        // Refresh failed — clear session and notify listeners
         await clearSession();
+        emitSessionEvent('expired');
       }
+    } else {
+      // No refresh token — session is dead
+      await clearSession();
+      emitSessionEvent('expired');
     }
   }
 
