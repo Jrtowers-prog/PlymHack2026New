@@ -8,9 +8,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AnimatedSplashScreen } from '@/src/components/AnimatedSplashScreen';
 import LoginModal from '@/src/components/modals/LoginModal';
+import WelcomeModal, { hasCompletedWelcome } from '@/src/components/modals/WelcomeModal';
 import { UpdateBanner } from '@/src/components/ui/UpdateBanner';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useUpdateCheck } from '@/src/hooks/useUpdateCheck';
+import { setOnboardingAccepted } from '@/src/services/onboarding';
 
 // Hide native splash as fast as possible
 SplashScreen.preventAutoHideAsync().then(() => SplashScreen.hideAsync());
@@ -21,6 +23,9 @@ export default function RootLayout() {
   const [splashVisible, setSplashVisible] = useState(true);
   const [appReady, setAppReady] = useState(false);
   const [minTimePassed, setMinTimePassed] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [welcomeChecked, setWelcomeChecked] = useState(false);
+  const [locationGranted, setLocationGranted] = useState(false);
   const update = useUpdateCheck();
   const auth = useAuth();
 
@@ -41,6 +46,30 @@ export default function RootLayout() {
       setSplashVisible(false);
     }
   }, [appReady, minTimePassed, auth.isLoading]);
+
+  // Check if welcome flow is needed after login
+  useEffect(() => {
+    if (!auth.isLoggedIn) {
+      setWelcomeChecked(false);
+      return;
+    }
+    (async () => {
+      const done = await hasCompletedWelcome();
+      if (!done) setShowWelcome(true);
+      setWelcomeChecked(true);
+    })();
+  }, [auth.isLoggedIn]);
+
+  const handleWelcomeComplete = useCallback(() => {
+    setShowWelcome(false);
+  }, []);
+
+  const handleAcceptLocation = useCallback(() => {
+    setLocationGranted(true);
+    // Also mark the existing onboarding as accepted so
+    // the old OnboardingModal doesn't appear again
+    setOnboardingAccepted();
+  }, []);
 
   // Show login modal after splash if not authenticated
   const showLoginGate = !splashVisible && !auth.isLoggedIn;
@@ -90,6 +119,17 @@ export default function RootLayout() {
         onVerify={auth.verify}
         error={auth.error}
         dismissable={false}
+      />
+
+      {/* Post-login onboarding wizard */}
+      <WelcomeModal
+        visible={showWelcome}
+        onComplete={handleWelcomeComplete}
+        userName={auth.user?.name ?? ''}
+        currentUsername={auth.user?.username ?? null}
+        onSetUsername={auth.updateUsername}
+        onAcceptLocation={handleAcceptLocation}
+        hasLocationPermission={locationGranted}
       />
     </View>
   );
