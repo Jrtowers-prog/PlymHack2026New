@@ -115,11 +115,15 @@ export function useContacts(enabled: boolean = true) {
       response: 'accepted' | 'rejected' | 'blocked',
     ) => {
       try {
+        console.log('[useContacts] Responding to request:', { requestId, response });
         await contactsApi.respond(requestId, response);
+        console.log('[useContacts] Response successful, refreshing...');
         await refresh();
+        console.log('[useContacts] Refresh complete');
         return true;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to respond';
+        console.error('[useContacts] Respond error:', msg);
         setState((s) => ({ ...s, error: msg }));
         return false;
       }

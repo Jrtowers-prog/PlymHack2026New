@@ -207,12 +207,15 @@ router.post('/invite', checkFeatureLimit('emergency_contacts'), async (req, res,
 router.post('/respond', async (req, res, next) => {
   try {
     const { contact_request_id, response } = req.body;
+    console.log('[contacts] Respond request:', { contact_request_id, response, user_id: req.user?.id });
 
     if (!contact_request_id || !UUID_RE.test(contact_request_id)) {
+      console.log('[contacts] Invalid contact_request_id:', contact_request_id);
       return res.status(400).json({ error: 'Valid contact_request_id is required' });
     }
 
     if (!VALID_RESPONSES.includes(response)) {
+      console.log('[contacts] Invalid response:', response);
       return res.status(400).json({ error: `Response must be one of: ${VALID_RESPONSES.join(', ')}` });
     }
 
@@ -226,6 +229,7 @@ router.post('/respond', async (req, res, next) => {
       .maybeSingle();
 
     if (!request) {
+      console.log('[contacts] Pending request not found:', { contact_request_id, contact_id: req.user.id });
       return res.status(404).json({ error: 'Pending request not found' });
     }
 
@@ -240,6 +244,7 @@ router.post('/respond', async (req, res, next) => {
       .single();
 
     if (error) throw error;
+    console.log('[contacts] Response updated successfully:', { contact_request_id, response });
 
     // Notify the sender about the response
     if (response === 'accepted') {

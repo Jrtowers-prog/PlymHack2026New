@@ -393,8 +393,13 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
 
         {/* Error banner */}
         {error && (
-          <Pressable style={styles.errorBanner} onPress={clearError}>
-            <Text style={styles.errorText}>{error}</Text>
+          <Pressable
+            style={styles.errorBanner}
+            onPress={clearError}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
             <Ionicons name="close-circle" size={18} color="#FFF" />
           </Pressable>
         )}
