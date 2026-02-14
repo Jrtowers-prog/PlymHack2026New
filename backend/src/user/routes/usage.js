@@ -23,11 +23,15 @@ const router = express.Router();
 router.use(requireAuth);
 
 const VALID_EVENTS = [
+  'account_created',
   'app_open',
   'route_search',
   'navigation_start',
   'navigation_complete',
   'navigation_abandon',
+  'subscription_upgrade',
+  'subscription_cancel',
+  'live_session',
 ];
 
 // ─── POST /api/usage/track ──────────────────────────────────────────────────
