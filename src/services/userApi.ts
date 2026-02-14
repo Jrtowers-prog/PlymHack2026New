@@ -136,6 +136,7 @@ export const authApi = {
   async getProfile(): Promise<{
     id: string;
     name: string;
+    username: string | null;
     email: string;
     platform: string;
     app_version: string;
@@ -150,11 +151,13 @@ export const authApi = {
     return res.json();
   },
 
-  /** Update profile (name, platform, app_version) */
+  /** Update profile (name, username, platform, app_version, push_token) */
   async updateProfile(updates: {
     name?: string;
+    username?: string;
     platform?: string;
     app_version?: string;
+    push_token?: string;
   }): Promise<void> {
     await authFetch('/api/auth/update-profile', {
       method: 'POST',
