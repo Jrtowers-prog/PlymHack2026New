@@ -7,9 +7,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-    contactsApi,
-    type Contact,
-    type PendingContact,
+  authApi,
+  contactsApi,
+  type Contact,
+  type PendingContact,
 } from '../services/userApi';
 
 interface ContactsState {
@@ -29,16 +30,23 @@ export function useContacts(enabled: boolean = true) {
     error: null,
   });
 
-  // Load contacts and pending on mount
+  // Load contacts, pending, and username on mount
   const refresh = useCallback(async () => {
     if (!enabled) return;
     setState((s) => ({ ...s, isLoading: true, error: null }));
     try {
-      const [contacts, pending] = await Promise.all([
+      const [contacts, pending, profile] = await Promise.all([
         contactsApi.getAll(),
         contactsApi.getPending(),
+        authApi.getProfile(),
       ]);
-      setState((s) => ({ ...s, contacts, pending, isLoading: false }));
+      setState((s) => ({
+        ...s,
+        contacts,
+        pending,
+        username: profile?.username ?? s.username,
+        isLoading: false,
+      }));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to load contacts';
       setState((s) => ({ ...s, error: msg, isLoading: false }));
