@@ -19,6 +19,7 @@ import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
 import { DownloadAppModal } from '@/src/components/modals/DownloadAppModal';
 import { OnboardingModal } from '@/src/components/modals/OnboardingModal';
+import { ReportModal } from '@/src/components/modals/ReportModal';
 import { NavigationOverlay } from '@/src/components/navigation/NavigationOverlay';
 import { RouteList } from '@/src/components/routes/RouteList';
 import { RoadTypeBreakdown, SafetyPanel } from '@/src/components/safety/SafetyPanel';
@@ -43,6 +44,7 @@ export default function HomeScreen() {
   const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showFriendsOnMap, setShowFriendsOnMap] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [toast, setToast] = useState<ToastConfig | null>(null);
   const subscriptionTier = auth.user?.subscription ?? 'free';
   const maxDistanceKm = auth.user?.routeDistanceKm ?? 1; // DB-driven, fallback to free tier
@@ -83,6 +85,25 @@ export default function HomeScreen() {
       setToast({ message: 'Friend locations hidden', icon: 'eye-off-outline', iconColor: '#6B7280', duration: 2000 });
     }
   }, [showFriendsOnMap, checkFriendLocations]);
+
+  // Report category labels for toast
+  const reportLabels: Record<string, string> = {
+    poor_lighting: 'Poor Lighting',
+    unsafe_area: 'Unsafe Area',
+    obstruction: 'Obstruction',
+    harassment: 'Harassment',
+    other: 'Other',
+  };
+
+  const handleReportSubmitted = useCallback((category: string) => {
+    setShowReportModal(false);
+    setToast({
+      message: `${reportLabels[category] || 'Report'} reported — thank you for keeping others safe!`,
+      icon: 'shield-checkmark',
+      iconColor: '#10B981',
+      duration: 4000,
+    });
+  }, []);
 
   // Live tracking — auto-register push token on mount, share location during nav
   const live = useLiveTracking(auth.isLoggedIn);
@@ -252,6 +273,25 @@ export default function HomeScreen() {
                 size={20}
                 color={showFriendsOnMap ? '#fff' : '#7C3AED'}
               />
+            </Pressable>
+          </View>
+        )}
+
+        {/* ── Report hazard button (below friend toggle) ── */}
+        {!h.isNavActive && auth.isLoggedIn && (
+          <View style={{
+            position: 'absolute',
+            top: insets.top + (contacts.length > 0 ? 345 : 295),
+            right: 12,
+            zIndex: 100,
+          }}>
+            <Pressable
+              onPress={() => setShowReportModal(true)}
+              style={styles.reportBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Report a hazard"
+            >
+              <Ionicons name="flag-outline" size={20} color="#EF4444" />
             </Pressable>
           </View>
         )}
@@ -462,6 +502,14 @@ export default function HomeScreen() {
 
         {/* ── Toast notifications ── */}
         <MapToast toast={toast} onDismiss={() => setToast(null)} />
+
+        {/* ── Report modal ── */}
+        <ReportModal
+          visible={showReportModal}
+          location={h.location}
+          onClose={() => setShowReportModal(false)}
+          onSubmitted={handleReportSubmitted}
+        />
       </AndroidOverlayHost>
     </View>
   );
@@ -492,6 +540,21 @@ const styles = StyleSheet.create({
   friendToggleActive: {
     backgroundColor: '#7C3AED',
     borderColor: '#7C3AED',
+  },
+  reportBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
   },
   pinBanner: {
     position: 'absolute',
