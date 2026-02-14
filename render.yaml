@@ -1,10 +1,11 @@
-# Render.com deployment config — 2-service architecture
+# Render.com deployment config — 3-service architecture
 # See: https://render.com/docs/blueprint-spec
 #
 # Service 1: API Gateway — lightweight I/O proxy (places, directions, map, AI)
 # Service 2: Safety Service — CPU-heavy A* pathfinding + safety scoring
+# Service 3: User Data Service — auth, usage tracking, reports, reviews (Supabase)
 #
-# Both share the same rootDir (backend/) and node_modules,
+# All share the same rootDir (backend/) and node_modules,
 # but run separate entry points on independent free-tier instances.
 
 services:
@@ -28,7 +29,27 @@ services:
         sync: false  # Set manually in Render dashboard
     healthCheckPath: /api/health
 
-  # ─── Safety Compute Service ─────────────────────────────────────────────────
+  # ─── User Data Service ──────────────────────────────────────────────────────
+  - type: web
+    name: safenighthome-user
+    runtime: node
+    region: eu-west
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node src/user/server.js
+    envVars:
+      - key: PORT
+        value: 3003
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://safenight.netlify.app
+      - key: SUPABASE_URL
+        sync: false  # Set manually in Render dashboard
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false  # Set manually in Render dashboard
+    healthCheckPath: /api/health  # ─── Safety Compute Service ─────────────────────────────────────────────────
   - type: web
     name: safenighthome-safety
     runtime: node

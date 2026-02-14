@@ -18,6 +18,16 @@ const safetyApiUrl =
   Platform.OS === 'android' && isLocalSafety
     ? rawSafetyApiUrl.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2')
     : rawSafetyApiUrl;
+
+// User data service URL — auth, usage, reports, reviews
+// In production, set EXPO_PUBLIC_USER_API_URL to your deployed user service (e.g. https://safenighthome-user.onrender.com)
+const rawUserApiUrl = process.env.EXPO_PUBLIC_USER_API_URL ?? 'http://localhost:3003';
+const isLocalUser = rawUserApiUrl.includes('localhost') || rawUserApiUrl.includes('127.0.0.1');
+const userApiUrl =
+  Platform.OS === 'android' && isLocalUser
+    ? rawUserApiUrl.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2')
+    : rawUserApiUrl;
+
 // TODO: Set EXPO_PUBLIC_OS_MAPS_API_KEY in .env / EAS env vars.
 const osMapsApiKey = process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ?? '';
 const osMapsLayer = process.env.EXPO_PUBLIC_OS_MAPS_LAYER ?? 'Road_3857';
@@ -39,6 +49,7 @@ const openaiApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 export const env = {
   apiBaseUrl,
   safetyApiUrl,
+  userApiUrl,
   osMapsApiKey,
   osMapsLayer,
   osMapsBaseUrl,
