@@ -7,9 +7,10 @@ import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AnimatedSplashScreen } from '@/src/components/AnimatedSplashScreen';
+import DisclaimerModal from '@/src/components/modals/DisclaimerModal';
 import LoginModal from '@/src/components/modals/LoginModal';
 import WelcomeModal, { hasCompletedWelcome } from '@/src/components/modals/WelcomeModal';
-import { UpdateBanner } from '@/src/components/ui/UpdateBanner';
+import ForceUpdateScreen from '@/src/components/ui/ForceUpdateScreen';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useUpdateCheck } from '@/src/hooks/useUpdateCheck';
 import { setOnboardingAccepted } from '@/src/services/onboarding';
@@ -48,17 +49,23 @@ export default function RootLayout() {
   }, [appReady, minTimePassed, auth.isLoading]);
 
   // Check if welcome flow is needed after login
+  // Shows if: (a) AsyncStorage says not done, OR (b) profile is missing name/username
   useEffect(() => {
-    if (!auth.isLoggedIn) {
+    if (!auth.isLoggedIn || !auth.user) {
       setWelcomeChecked(false);
       return;
     }
     (async () => {
       const done = await hasCompletedWelcome();
-      if (!done) setShowWelcome(true);
+      const profileIncomplete =
+        !auth.user!.name?.trim() || !auth.user!.username?.trim();
+
+      if (!done || profileIncomplete) {
+        setShowWelcome(true);
+      }
       setWelcomeChecked(true);
     })();
-  }, [auth.isLoggedIn]);
+  }, [auth.isLoggedIn, auth.user]);
 
   const handleWelcomeComplete = useCallback(() => {
     setShowWelcome(false);
@@ -74,21 +81,38 @@ export default function RootLayout() {
   // Show login modal after splash if not authenticated
   const showLoginGate = !splashVisible && !auth.isLoggedIn;
 
+  // Show disclaimer if logged in but hasn't accepted yet
+  const needsDisclaimer =
+    !splashVisible &&
+    auth.isLoggedIn &&
+    !auth.user?.disclaimer_accepted_at;
+
+  // Force update blocks EVERYTHING (highest priority, after splash)
+  const showForceUpdate = !splashVisible && update.forceUpdate;
+
   return (
     <View style={styles.root}>
+      {/* Force update screen — blocks the entire app */}
+      {showForceUpdate && (
+        <View style={styles.forceUpdateOverlay}>
+          <SafeAreaProvider>
+            <ForceUpdateScreen />
+          </SafeAreaProvider>
+        </View>
+      )}
+
       {/* App loads underneath the splash */}
       <View 
         style={[
           styles.app, 
-          !splashVisible && styles.appVisible,
-          showLoginGate && styles.appBlocked
+          !splashVisible && !showForceUpdate && styles.appVisible,
+          (showLoginGate || needsDisclaimer) && styles.appBlocked
         ]} 
         onLayout={onMainLayout}
       >
         <SafeAreaProvider>
           <StatusBar style="dark" translucent />
           <Stack screenOptions={{ headerShown: false }} />
-          <UpdateBanner update={update} />
         </SafeAreaProvider>
       </View>
 
@@ -121,13 +145,20 @@ export default function RootLayout() {
         dismissable={false}
       />
 
-      {/* Post-login onboarding wizard */}
+      {/* Safety disclaimer — must accept before using the app */}
+      <DisclaimerModal
+        visible={needsDisclaimer && !showForceUpdate}
+        onAccept={auth.acceptDisclaimer}
+      />
+
+      {/* Post-login onboarding wizard (only after disclaimer is accepted) */}
       <WelcomeModal
-        visible={showWelcome}
+        visible={showWelcome && !needsDisclaimer && !showForceUpdate}
         onComplete={handleWelcomeComplete}
         userName={auth.user?.name ?? ''}
         currentUsername={auth.user?.username ?? null}
         onSetUsername={auth.updateUsername}
+        onSetName={auth.updateName}
         onAcceptLocation={handleAcceptLocation}
         hasLocationPermission={locationGranted}
       />
@@ -157,5 +188,10 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#F8FAFC',
     zIndex: 9,
+  },
+  forceUpdateOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100,
+    backgroundColor: '#FFFFFF',
   },
 });
