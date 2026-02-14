@@ -204,12 +204,12 @@ export function SearchBar({
                 <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
               )}
               <Pressable
-                style={styles.mapPinButton}
+                style={[styles.mapPinButton, pinMode === 'origin' && styles.mapPinButtonActive]}
                 onPress={() => setPinMode(pinMode === 'origin' ? null : 'origin')}
                 accessibilityRole="button"
                 accessibilityLabel="Pick on map"
               >
-                <Ionicons name="location-outline" size={16} color={pinMode === 'origin' ? '#1570ef' : '#98a2b3'} />
+                <Ionicons name={pinMode === 'origin' ? 'pin' : 'pin-outline'} size={20} color={pinMode === 'origin' ? '#1570ef' : '#667085'} />
               </Pressable>
               {!isUsingCurrentLocation && (
                 <Pressable
@@ -281,12 +281,12 @@ export function SearchBar({
                 <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
               )}
               <Pressable
-                style={styles.mapPinButton}
+                style={[styles.mapPinButton, pinMode === 'destination' && styles.mapPinButtonActive]}
                 onPress={() => setPinMode(pinMode === 'destination' ? null : 'destination')}
                 accessibilityRole="button"
                 accessibilityLabel="Pick on map"
               >
-                <Ionicons name="location-outline" size={16} color={pinMode === 'destination' ? '#d92d20' : '#98a2b3'} />
+                <Ionicons name={pinMode === 'destination' ? 'pin' : 'pin-outline'} size={20} color={pinMode === 'destination' ? '#d92d20' : '#667085'} />
               </Pressable>
               {(destSearch.place || manualDest) && (
                 <Pressable
@@ -456,8 +456,12 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   mapPinButton: {
-    padding: 3,
-    borderRadius: 4,
+    padding: 5,
+    borderRadius: 6,
+    backgroundColor: '#f2f4f7',
+  },
+  mapPinButtonActive: {
+    backgroundColor: '#e8f0fe',
   },
   inputDivider: {
     flex: 1,
