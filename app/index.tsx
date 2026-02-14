@@ -28,6 +28,7 @@ import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheet
 import { AndroidDownloadBanner } from '@/src/components/ui/AndroidDownloadBanner';
 import { BuddyButton } from '@/src/components/ui/BuddyButton';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
+import { MapToast, type ToastConfig } from '@/src/components/ui/MapToast';
 import { ProfileMenu } from '@/src/components/ui/ProfileMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useContacts } from '@/src/hooks/useContacts';
@@ -42,6 +43,7 @@ export default function HomeScreen() {
   const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showFriendsOnMap, setShowFriendsOnMap] = useState(false);
+  const [toast, setToast] = useState<ToastConfig | null>(null);
   const subscriptionTier = auth.user?.subscription ?? 'free';
   const maxDistanceKm = auth.user?.routeDistanceKm ?? 1; // DB-driven, fallback to free tier
 
@@ -49,7 +51,38 @@ export default function HomeScreen() {
   const { contacts, liveContacts } = useContacts(auth.isLoggedIn);
 
   // Friend locations — poll when the toggle is on and user has contacts
-  const friendMarkers = useFriendLocations(showFriendsOnMap && contacts.length > 0);
+  const { friends: friendMarkers, checkNow: checkFriendLocations } = useFriendLocations(
+    showFriendsOnMap && contacts.length > 0,
+  );
+
+  // Toggle friend locations with immediate check + toast
+  const handleFriendToggle = useCallback(async () => {
+    const next = !showFriendsOnMap;
+    setShowFriendsOnMap(next);
+
+    if (next) {
+      setToast({ message: 'Checking friend locations…', icon: 'search', iconColor: '#7C3AED', duration: 2000 });
+      const { found, names } = await checkFriendLocations();
+      if (found === 0) {
+        setToast({
+          message: 'No friends are sharing their location right now',
+          icon: 'location-outline',
+          iconColor: '#F59E0B',
+          duration: 3500,
+        });
+      } else {
+        const nameList = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : '');
+        setToast({
+          message: `Found ${found} friend${found > 1 ? 's' : ''} — showing ${nameList}`,
+          icon: 'people',
+          iconColor: '#10B981',
+          duration: 4000,
+        });
+      }
+    } else {
+      setToast({ message: 'Friend locations hidden', icon: 'eye-off-outline', iconColor: '#6B7280', duration: 2000 });
+    }
+  }, [showFriendsOnMap, checkFriendLocations]);
 
   // Live tracking — auto-register push token on mount, share location during nav
   const live = useLiveTracking(auth.isLoggedIn);
@@ -206,7 +239,7 @@ export default function HomeScreen() {
         {!h.isNavActive && auth.isLoggedIn && contacts.length > 0 && (
           <View style={{ position: 'absolute', top: insets.top + 295, right: 12, zIndex: 100 }}>
             <Pressable
-              onPress={() => setShowFriendsOnMap((v) => !v)}
+              onPress={handleFriendToggle}
               style={[
                 styles.friendToggle,
                 showFriendsOnMap && styles.friendToggleActive,
@@ -426,6 +459,9 @@ export default function HomeScreen() {
           visible={showDownloadModal}
           onClose={() => setShowDownloadModal(false)}
         />
+
+        {/* ── Toast notifications ── */}
+        <MapToast toast={toast} onDismiss={() => setToast(null)} />
       </AndroidOverlayHost>
     </View>
   );
