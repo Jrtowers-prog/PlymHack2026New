@@ -9,6 +9,8 @@
 create table if not exists public.profiles (
   id            uuid primary key references auth.users(id) on delete cascade,
   name          text not null default '',
+  username      text unique,                       -- unique handle for QR pairing
+  push_token    text,                              -- Expo push token for notifications
   platform      text not null default 'unknown',  -- android, ios, web
   app_version   text not null default '0.0.0',
   subscription  text not null default 'free',      -- free, pro, premium
@@ -30,7 +32,38 @@ create table if not exists public.subscriptions (
   created_at    timestamptz not null default now()
 );
 
--- ─── 2. Usage Events ────────────────────────────────────────────────
+-- ─── 2. Emergency Contacts (Buddy System) ───────────────────────────
+-- Links two SafeNight users. Both must have the app.
+-- Contact requests: pending → accepted / rejected / blocked.
+create table if not exists public.emergency_contacts (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references public.profiles(id) on delete cascade,
+  contact_id    uuid not null references public.profiles(id) on delete cascade,
+  status        text not null default 'pending',   -- pending, accepted, rejected, blocked
+  nickname      text not null default '',           -- optional friendly name
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  unique (user_id, contact_id)                      -- no duplicate pairs
+);
+
+-- ─── 3. Live Sessions ────────────────────────────────────────────────
+-- Active navigation / walking sessions for real-time location sharing.
+-- Created when user starts walking, ended on arrival or manual stop.
+create table if not exists public.live_sessions (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references public.profiles(id) on delete cascade,
+  status          text not null default 'active',  -- active, completed, cancelled
+  current_lat     real,
+  current_lng     real,
+  destination_lat real,
+  destination_lng real,
+  destination_name text,                            -- friendly destination label
+  started_at      timestamptz not null default now(),
+  ended_at        timestamptz,
+  last_update_at  timestamptz not null default now()
+);
+
+-- ─── 4. Usage Events ────────────────────────────────────────────────
 -- Flexible event log — one row per event, tiny per row.
 -- event_type: app_open, route_search, navigation_start,
 --             navigation_complete, navigation_abandon
@@ -43,7 +76,7 @@ create table if not exists public.usage_events (
   created_at  timestamptz not null default now()
 );
 
--- ─── 3. Safety Reports ──────────────────────────────────────────────
+-- ─── 5. Safety Reports ──────────────────────────────────────────────
 -- User-reported hazards with pinned location.
 -- Categories: poor_lighting, unsafe_area, obstruction, harassment, other
 create table if not exists public.safety_reports (
@@ -57,7 +90,7 @@ create table if not exists public.safety_reports (
   resolved_at timestamptz
 );
 
--- ─── 4. Reviews ─────────────────────────────────────────────────────
+-- ─── 6. Reviews ─────────────────────────────────────────────────────
 -- App reviews with 1-5 rating.
 create table if not exists public.reviews (
   id          uuid primary key default gen_random_uuid(),
@@ -71,6 +104,12 @@ create table if not exists public.reviews (
 -- INDEXES — fast queries on common access patterns
 -- ═══════════════════════════════════════════════════════════════════
 
+create index if not exists idx_username        on public.profiles(username);
+create index if not exists idx_contacts_user   on public.emergency_contacts(user_id);
+create index if not exists idx_contacts_contact on public.emergency_contacts(contact_id);
+create index if not exists idx_contacts_status on public.emergency_contacts(status);
+create index if not exists idx_live_user       on public.live_sessions(user_id);
+create index if not exists idx_live_status     on public.live_sessions(status);
 create index if not exists idx_usage_user      on public.usage_events(user_id);
 create index if not exists idx_usage_type      on public.usage_events(event_type);
 create index if not exists idx_usage_created   on public.usage_events(created_at);
@@ -88,6 +127,8 @@ create index if not exists idx_subs_status     on public.subscriptions(status);
 
 alter table public.profiles enable row level security;
 alter table public.subscriptions enable row level security;
+alter table public.emergency_contacts enable row level security;
+alter table public.live_sessions enable row level security;
 alter table public.usage_events enable row level security;
 alter table public.safety_reports enable row level security;
 alter table public.reviews enable row level security;
@@ -105,6 +146,42 @@ create policy "Users can update own profile"
 create policy "Users can view own subscriptions"
   on public.subscriptions for select
   using (auth.uid() = user_id);
+
+-- Emergency contacts: users can see contacts where they are user or contact
+create policy "Users can view own contacts"
+  on public.emergency_contacts for select
+  using (auth.uid() = user_id or auth.uid() = contact_id);
+
+create policy "Users can insert contact requests"
+  on public.emergency_contacts for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update contacts they are part of"
+  on public.emergency_contacts for update
+  using (auth.uid() = user_id or auth.uid() = contact_id);
+
+create policy "Users can delete own contacts"
+  on public.emergency_contacts for delete
+  using (auth.uid() = user_id or auth.uid() = contact_id);
+
+-- Live sessions: users can manage their own sessions,
+-- contacts can view sessions of their accepted contacts
+create policy "Users can manage own live sessions"
+  on public.live_sessions for all
+  using (auth.uid() = user_id);
+
+create policy "Contacts can view live sessions"
+  on public.live_sessions for select
+  using (
+    exists (
+      select 1 from public.emergency_contacts
+      where status = 'accepted'
+        and (
+          (user_id = auth.uid() and contact_id = public.live_sessions.user_id)
+          or (contact_id = auth.uid() and user_id = public.live_sessions.user_id)
+        )
+    )
+  );
 
 -- Usage events: users can insert their own events, read their own
 create policy "Users can insert own usage events"
