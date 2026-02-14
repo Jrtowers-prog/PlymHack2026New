@@ -23,11 +23,11 @@ const AUTH_KEYS = {
 
 // ─── Session event system ────────────────────────────────────────────────────
 
-export type SessionEvent = 'expired' | 'refreshed';
+export type SessionEvent = 'expired' | 'refreshed' | 'logged_in' | 'logged_out';
 type SessionListener = (event: SessionEvent) => void;
 const sessionListeners = new Set<SessionListener>();
 
-/** Subscribe to session lifecycle events (expired / refreshed). Returns unsubscribe fn. */
+/** Subscribe to session lifecycle events. Returns unsubscribe fn. */
 export function onSessionChange(listener: SessionListener): () => void {
   sessionListeners.add(listener);
   return () => { sessionListeners.delete(listener); };
@@ -187,6 +187,10 @@ export const authApi = {
       body: JSON.stringify({ email, name }),
     });
     if (!res.ok) {
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({ retry_after: 900 }));
+        throw new Error(`RATE_LIMIT:${body.retry_after || 900}`);
+      }
       const err = await res.json().catch(() => ({ error: 'Request failed' }));
       throw new Error(err.error || 'Failed to send magic link');
     }
@@ -204,11 +208,16 @@ export const authApi = {
       body: JSON.stringify({ email, token }),
     });
     if (!res.ok) {
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({ retry_after: 900 }));
+        throw new Error(`RATE_LIMIT:${body.retry_after || 900}`);
+      }
       const err = await res.json().catch(() => ({ error: 'Verification failed' }));
       throw new Error(err.error || 'Invalid or expired token');
     }
     const data = await res.json();
     await storeSession(data);
+    emitSessionEvent('logged_in');
     return data;
   },
 
@@ -220,6 +229,7 @@ export const authApi = {
     email: string;
     platform: string;
     app_version: string;
+    disclaimer_accepted_at: string | null;
     created_at: string;
     last_seen_at: string;
   } | null> {
@@ -245,12 +255,25 @@ export const authApi = {
     });
   },
 
+  /** Accept safety disclaimer */
+  async acceptDisclaimer(): Promise<{ accepted_at: string }> {
+    const res = await authFetch('/api/auth/accept-disclaimer', {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Request failed' }));
+      throw new Error(err.error || 'Failed to accept disclaimer');
+    }
+    return res.json();
+  },
+
   /** Log out */
   async logout(): Promise<void> {
     try {
       await authFetch('/api/auth/logout', { method: 'POST' });
     } finally {
       await clearSession();
+      emitSessionEvent('logged_out');
     }
   },
 
