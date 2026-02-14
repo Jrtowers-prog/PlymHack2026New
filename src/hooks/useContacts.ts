@@ -7,9 +7,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  contactsApi,
-  type Contact,
-  type PendingContact,
+    contactsApi,
+    type Contact,
+    type PendingContact,
 } from '../services/userApi';
 
 interface ContactsState {
@@ -20,17 +20,18 @@ interface ContactsState {
   error: string | null;
 }
 
-export function useContacts() {
+export function useContacts(enabled: boolean = true) {
   const [state, setState] = useState<ContactsState>({
     contacts: [],
     pending: [],
     username: null,
-    isLoading: true,
+    isLoading: enabled,
     error: null,
   });
 
   // Load contacts and pending on mount
   const refresh = useCallback(async () => {
+    if (!enabled) return;
     setState((s) => ({ ...s, isLoading: true, error: null }));
     try {
       const [contacts, pending] = await Promise.all([
@@ -42,11 +43,22 @@ export function useContacts() {
       const msg = err instanceof Error ? err.message : 'Failed to load contacts';
       setState((s) => ({ ...s, error: msg, isLoading: false }));
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (enabled) {
+      refresh();
+    } else {
+      // Reset state when not logged in
+      setState({
+        contacts: [],
+        pending: [],
+        username: null,
+        isLoading: false,
+        error: null,
+      });
+    }
+  }, [enabled, refresh]);
 
   // Set or update username (for QR code)
   const setUsername = useCallback(async (username: string) => {
