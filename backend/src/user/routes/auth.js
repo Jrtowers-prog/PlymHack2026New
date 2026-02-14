@@ -89,7 +89,7 @@ async function ensureUserRecords(userId, email, name) {
 // ─── Strict rate limit for sensitive auth endpoints ──────────────────────────
 // magic-link + verify only — prevents brute-force OTP guessing & email spam.
 // Uses ipOnly because there's no JWT yet at sign-in time.
-const authSensitiveLimit = require('../../../shared/middleware/rateLimiter').createRateLimiter({
+const authSensitiveLimit = require('../../shared/middleware/rateLimiter').createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 20,         // 20 per IP per 15 min (plenty for real users, blocks abuse)
   ipOnly: true,
