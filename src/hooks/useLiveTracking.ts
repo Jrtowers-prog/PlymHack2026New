@@ -9,27 +9,38 @@
  * 5. Watching a contact's live location (polling)
  */
 
+import * as Device from 'expo-device';
+import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import { liveApi, type LiveSession, type WatchResult } from '../services/userApi';
 
 // ─── Push notification setup ─────────────────────────────────────────────────
-// Configure how notifications appear when the app is in the foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// expo-notifications crashes on web at import time (localStorage SSR issue),
+// so we lazy-load it only on native platforms.
+let Notifications: typeof import('expo-notifications') | null = null;
+
+if (Platform.OS !== 'web') {
+  // Safe to import — we're on iOS or Android
+  Notifications = require('expo-notifications');
+
+  // Configure how notifications appear when the app is in the foreground
+  Notifications!.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 /** Register for Expo push notifications and return the token */
 async function registerForPushNotifications(): Promise<string | null> {
+  // Push notifications are not supported on web
+  if (Platform.OS === 'web' || !Notifications) return null;
+
   // Push notifications don't work on simulators
   if (!Device.isDevice) {
     console.log('[push] Push notifications require a physical device');
