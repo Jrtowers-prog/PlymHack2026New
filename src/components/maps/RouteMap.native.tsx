@@ -379,7 +379,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
 
       /* — Pan to — */
       if(data.panTo){
-        map.easeTo({center:[data.panTo.lng,data.panTo.lat],zoom:Math.max(map.getZoom(),14),duration:500});
+        map.easeTo({center:[data.panTo.lng,data.panTo.lat],zoom:Math.max(map.getZoom(),16),duration:500});
       }
 
       /* — Range circle — */

@@ -188,7 +188,7 @@ function updateMap(d){
 
   /* Fit bounds */
   if(d.fitBounds&&hasBounds&&!d.navLocation)map.fitBounds(bounds,{padding:[40,40],maxZoom:16});
-  if(d.panTo){map.panTo([d.panTo.lat,d.panTo.lng]);if(map.getZoom()<14)map.setZoom(14);}
+  if(d.panTo){map.panTo([d.panTo.lat,d.panTo.lng]);if(map.getZoom()<16)map.setZoom(16);}
 
   /* Range circle */
   if(rangeCircle){map.removeLayer(rangeCircle);rangeCircle=null;}
