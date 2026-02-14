@@ -46,7 +46,7 @@ export default function HomeScreen() {
   const { liveContacts } = useContacts(auth.isLoggedIn);
 
   // Live tracking — auto-register push token on mount, share location during nav
-  const live = useLiveTracking();
+  const live = useLiveTracking(auth.isLoggedIn);
   const liveStarted = useRef(false);
 
   // Auto-start live tracking when navigation begins (if logged in with contacts)
