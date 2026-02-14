@@ -11,8 +11,23 @@ create table if not exists public.profiles (
   name          text not null default '',
   platform      text not null default 'unknown',  -- android, ios, web
   app_version   text not null default '0.0.0',
+  subscription  text not null default 'free',      -- free, pro, premium
   created_at    timestamptz not null default now(),
   last_seen_at  timestamptz not null default now()
+);
+
+-- ─── 1b. Subscriptions ───────────────────────────────────────────────
+-- Full subscription history — tracks upgrades, downgrades, expirations.
+create table if not exists public.subscriptions (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references public.profiles(id) on delete cascade,
+  tier          text not null default 'free',      -- free, pro, premium
+  status        text not null default 'active',    -- active, expired, cancelled
+  started_at    timestamptz not null default now(),
+  expires_at    timestamptz,                       -- null = never expires (free)
+  cancelled_at  timestamptz,
+  payment_ref   text,                              -- external payment ID (Stripe, RevenueCat, etc.)
+  created_at    timestamptz not null default now()
 );
 
 -- ─── 2. Usage Events ────────────────────────────────────────────────
@@ -63,6 +78,8 @@ create index if not exists idx_reports_loc     on public.safety_reports(lat, lng
 create index if not exists idx_reports_cat     on public.safety_reports(category);
 create index if not exists idx_reports_created on public.safety_reports(created_at);
 create index if not exists idx_reviews_user    on public.reviews(user_id);
+create index if not exists idx_subs_user       on public.subscriptions(user_id);
+create index if not exists idx_subs_status     on public.subscriptions(status);
 
 -- ═══════════════════════════════════════════════════════════════════
 -- ROW LEVEL SECURITY — users can only access their own data
@@ -70,6 +87,7 @@ create index if not exists idx_reviews_user    on public.reviews(user_id);
 -- ═══════════════════════════════════════════════════════════════════
 
 alter table public.profiles enable row level security;
+alter table public.subscriptions enable row level security;
 alter table public.usage_events enable row level security;
 alter table public.safety_reports enable row level security;
 alter table public.reviews enable row level security;
@@ -82,6 +100,11 @@ create policy "Users can view own profile"
 create policy "Users can update own profile"
   on public.profiles for update
   using (auth.uid() = id);
+
+-- Subscriptions: users can view their own subscription history
+create policy "Users can view own subscriptions"
+  on public.subscriptions for select
+  using (auth.uid() = user_id);
 
 -- Usage events: users can insert their own events, read their own
 create policy "Users can insert own usage events"
