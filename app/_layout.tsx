@@ -9,7 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AnimatedSplashScreen } from '@/src/components/AnimatedSplashScreen';
 import DisclaimerModal from '@/src/components/modals/DisclaimerModal';
 import LoginModal from '@/src/components/modals/LoginModal';
-import WelcomeModal, { hasCompletedWelcome } from '@/src/components/modals/WelcomeModal';
+import WelcomeModal from '@/src/components/modals/WelcomeModal';
 import ForceUpdateScreen from '@/src/components/ui/ForceUpdateScreen';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useUpdateCheck } from '@/src/hooks/useUpdateCheck';
@@ -25,7 +25,6 @@ export default function RootLayout() {
   const [appReady, setAppReady] = useState(false);
   const [minTimePassed, setMinTimePassed] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
-  const [welcomeChecked, setWelcomeChecked] = useState(false);
   const [locationGranted, setLocationGranted] = useState(false);
   const update = useUpdateCheck();
   const auth = useAuth();
@@ -49,22 +48,20 @@ export default function RootLayout() {
   }, [appReady, minTimePassed, auth.isLoading]);
 
   // Check if welcome flow is needed after login
-  // Shows if: (a) AsyncStorage says not done, OR (b) profile is missing name/username
+  // Source of truth is the DB profile — only show if name or username is missing
   useEffect(() => {
     if (!auth.isLoggedIn || !auth.user) {
-      setWelcomeChecked(false);
+      setShowWelcome(false);
       return;
     }
-    (async () => {
-      const done = await hasCompletedWelcome();
-      const profileIncomplete =
-        !auth.user!.name?.trim() || !auth.user!.username?.trim();
+    const profileIncomplete =
+      !auth.user.name?.trim() || !auth.user.username?.trim();
 
-      if (!done || profileIncomplete) {
-        setShowWelcome(true);
-      }
-      setWelcomeChecked(true);
-    })();
+    if (profileIncomplete) {
+      setShowWelcome(true);
+    } else {
+      setShowWelcome(false);
+    }
   }, [auth.isLoggedIn, auth.user]);
 
   const handleWelcomeComplete = useCallback(() => {
