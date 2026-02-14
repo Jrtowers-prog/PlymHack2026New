@@ -86,7 +86,7 @@ interface LiveTrackingState {
   error: string | null;
 }
 
-export function useLiveTracking() {
+export function useLiveTracking(isLoggedIn = false) {
   const [state, setState] = useState<LiveTrackingState>({
     isTracking: false,
     session: null,
@@ -98,8 +98,9 @@ export function useLiveTracking() {
   const updateInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastLocation = useRef<{ lat: number; lng: number } | null>(null);
 
-  // Register push token on mount
+  // Register push token when logged in
   useEffect(() => {
+    if (!isLoggedIn) return;
     (async () => {
       try {
         const token = await registerForPushNotifications();
@@ -111,10 +112,11 @@ export function useLiveTracking() {
         // Silently fail — push is nice-to-have
       }
     })();
-  }, []);
+  }, [isLoggedIn]);
 
-  // Check for existing session on mount
+  // Check for existing session when logged in
   useEffect(() => {
+    if (!isLoggedIn) return;
     (async () => {
       try {
         const session = await liveApi.getMySession();
@@ -125,7 +127,7 @@ export function useLiveTracking() {
         // Ignore
       }
     })();
-  }, []);
+  }, [isLoggedIn]);
 
   // Start live tracking — call this when navigation begins
   const startTracking = useCallback(
