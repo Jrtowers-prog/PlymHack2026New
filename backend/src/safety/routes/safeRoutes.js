@@ -97,7 +97,9 @@ const {
 
 const router = express.Router();
 
-const MAX_DISTANCE_KM = 10;
+// Default fallback — can be overridden per request via ?max_distance query param
+// (the gateway / user-service resolves the caller's tier → distance limit)
+const DEFAULT_MAX_DISTANCE_KM = 20;
 const WALKING_SPEED_MPS = 1.35;
 
 // ── Route cache (5 min TTL) ─────────────────────────────────────────────────
@@ -147,7 +149,12 @@ router.get('/', async (req, res) => {
     const straightLineDist = haversine(oLat.value, oLng.value, dLat.value, dLng.value);
     const straightLineKm = straightLineDist / 1000;
 
-    if (straightLineKm > MAX_DISTANCE_KM) {
+    // The gateway sends ?max_distance=<km> based on the user's subscription tier
+    const maxDistanceKm = req.query.max_distance
+      ? Math.min(Number(req.query.max_distance), DEFAULT_MAX_DISTANCE_KM)
+      : DEFAULT_MAX_DISTANCE_KM;
+
+    if (straightLineKm > maxDistanceKm) {
       // Estimate how many data points the system would need to fetch.
       // The safety engine queries every street, lamp, CCTV camera, bus stop,
       // open venue, and recent crime record inside the bounding box.
@@ -163,12 +170,12 @@ router.get('/', async (req, res) => {
 
       return res.status(400).json({
         error: 'DESTINATION_OUT_OF_RANGE',
-        message: `That destination is ${straightLineKm.toFixed(1)} km away — our limit is ${MAX_DISTANCE_KM} km.`,
-        maxDistanceKm: MAX_DISTANCE_KM,
+        message: `That destination is ${straightLineKm.toFixed(1)} km away — your limit is ${maxDistanceKm} km.`,
+        maxDistanceKm,
         actualDistanceKm: Math.round(straightLineKm * 10) / 10,
         estimatedDataPoints,
         areaKm2: Math.round(areaKm2 * 10) / 10,
-        detail: `To score this route for safety, we'd need to analyse roughly ${estimatedDataPoints.toLocaleString()} data points — every street, street light, CCTV camera, bus stop, open venue, and police-reported crime in a ${areaKm2.toFixed(1)} km² area. To keep SafeNight free and fast, we cap routes at ${MAX_DISTANCE_KM} km.`,
+        detail: `To score this route for safety, we'd need to analyse roughly ${estimatedDataPoints.toLocaleString()} data points — every street, street light, CCTV camera, bus stop, open venue, and police-reported crime in a ${areaKm2.toFixed(1)} km² area. To keep SafeNight fast, we cap routes at ${maxDistanceKm} km for your plan.`,
       });
     }
 
@@ -495,7 +502,7 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     routes: responseRoutes,
     meta: {
       straightLineDistanceKm: Math.round(straightLineKm * 10) / 10,
-      maxDistanceKm: MAX_DISTANCE_KM,
+      maxDistanceKm: maxDistanceKm,
       routeCount: responseRoutes.length,
       dataQuality: {
         roads: roadCount,
