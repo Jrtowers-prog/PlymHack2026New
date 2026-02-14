@@ -34,6 +34,8 @@ const authRouter = require('./routes/auth');
 const usageRouter = require('./routes/usage');
 const reportsRouter = require('./routes/reports');
 const reviewsRouter = require('./routes/reviews');
+const contactsRouter = require('./routes/contacts');
+const liveRouter = require('./routes/live');
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -55,6 +57,8 @@ app.use('/api/auth', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 }), a
 app.use('/api/usage', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 80 }), usageRouter);
 app.use('/api/reports', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 }), reportsRouter);
 app.use('/api/reviews', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 }), reviewsRouter);
+app.use('/api/contacts', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 }), contactsRouter);
+app.use('/api/live', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 200 }), liveRouter);
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get('/api/health', healthCheck('user-service'));
@@ -65,5 +69,5 @@ app.use(errorHandler);
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[user] User Data Service running on http://0.0.0.0:${PORT}`);
-  console.log(`[user] Routes: auth, usage, reports, reviews`);
+  console.log(`[user] Routes: auth, usage, reports, reviews, contacts, live`);
 });
