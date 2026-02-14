@@ -43,6 +43,7 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
   const [tab, setTab] = useState<Tab>('qr');
   const [hasScanned, setHasScanned] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+  const [respondingToId, setRespondingToId] = useState<string | null>(null);
 
   const {
     contacts,
@@ -134,19 +135,22 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         resp === 'accepted' ? 'Accept Contact' : 'Reject Contact',
         `${resp === 'accepted' ? 'Accept' : 'Reject'} ${name}'s request?`,
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: 'Cancel', style: 'cancel', onPress: () => setRespondingToId(null) },
           {
             text: resp === 'accepted' ? 'Accept' : 'Reject',
             onPress: async () => {
               try {
+                setRespondingToId(id);
                 console.log(`[BuddyModal] Responding to request ${id}: ${resp}`);
                 const ok = await respond(id, resp);
+                setRespondingToId(null);
                 if (ok) {
                   Alert.alert('Success', `Contact request ${resp}.`);
                 } else {
                   Alert.alert('Error', 'Failed to respond. Please try again.');
                 }
               } catch (err: unknown) {
+                setRespondingToId(null);
                 const msg = err instanceof Error ? err.message : 'Unknown error';
                 console.error('[BuddyModal] Respond error:', msg);
                 Alert.alert('Error', msg || 'Failed to respond to request');
@@ -272,20 +276,32 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
               </View>
               <View style={styles.actionButtons}>
                 <Pressable
-                  style={[styles.smallBtn, styles.acceptBtn]}
+                  style={[styles.smallBtn, styles.acceptBtn, respondingToId === p.id && styles.buttonDisabled]}
                   onPress={() =>
                     handleRespond(p.id, p.from.name || 'this user', 'accepted')
                   }
+                  hitSlop={8}
+                  disabled={respondingToId === p.id}
                 >
-                  <Ionicons name="checkmark" size={18} color="#FFF" />
+                  {respondingToId === p.id ? (
+                    <ActivityIndicator size={16} color="#FFF" />
+                  ) : (
+                    <Ionicons name="checkmark" size={18} color="#FFF" />
+                  )}
                 </Pressable>
                 <Pressable
-                  style={[styles.smallBtn, styles.rejectBtn]}
+                  style={[styles.smallBtn, styles.rejectBtn, respondingToId === p.id && styles.buttonDisabled]}
                   onPress={() =>
                     handleRespond(p.id, p.from.name || 'this user', 'rejected')
                   }
+                  hitSlop={8}
+                  disabled={respondingToId === p.id}
                 >
-                  <Ionicons name="close" size={18} color="#FFF" />
+                  {respondingToId === p.id ? (
+                    <ActivityIndicator size={16} color="#FFF" />
+                  ) : (
+                    <Ionicons name="close" size={18} color="#FFF" />
+                  )}
                 </Pressable>
               </View>
             </View>
