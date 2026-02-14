@@ -15,6 +15,86 @@ const { requireAuth } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
+// ─── Ensure all required DB records exist for a user ─────────────────────────
+// Idempotent — safe to call on every login. Creates profile, default
+// subscription, and first usage event if they don't already exist.
+async function ensureUserRecords(userId, email, name) {
+  try {
+    // 1. Profile — upsert (create if missing, otherwise just update last_seen + email)
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!existingProfile) {
+      await supabase.from('profiles').insert({
+        id: userId,
+        email: email || null,
+        name: name || '',
+        created_at: new Date().toISOString(),
+        last_seen_at: new Date().toISOString(),
+      });
+    } else {
+      // Only update last_seen and fill in email if it was missing
+      await supabase
+        .from('profiles')
+        .update({
+          last_seen_at: new Date().toISOString(),
+          ...(email ? { email } : {}),
+        })
+        .eq('id', userId);
+    }
+
+    // 2. Default free subscription (only if none exists)
+    const { data: existingSub } = await supabase
+      .from('subscriptions')
+      .select('id')
+      .eq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingSub) {
+      await supabase.from('subscriptions').insert({
+        user_id: userId,
+        tier: 'free',
+        status: 'active',
+      });
+    }
+
+    // 3. Log account_created event (only if never logged)
+    const { data: existingEvent } = await supabase
+      .from('usage_events')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('event_type', 'account_created')
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingEvent) {
+      await supabase.from('usage_events').insert({
+        user_id: userId,
+        event_type: 'account_created',
+        value_text: 'signup',
+      });
+    }
+
+    console.log(`[auth] ensureUserRecords OK for ${userId}`);
+  } catch (err) {
+    // Non-fatal — log but don't block login
+    console.error('[auth] ensureUserRecords error:', err.message);
+  }
+}
+
+// ─── Strict rate limit for sensitive auth endpoints ──────────────────────────
+// magic-link + verify only — prevents brute-force OTP guessing & email spam.
+// Uses ipOnly because there's no JWT yet at sign-in time.
+const authSensitiveLimit = require('../../../shared/middleware/rateLimiter').createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,         // 20 per IP per 15 min (plenty for real users, blocks abuse)
+  ipOnly: true,
+});
+
 // ─── Validation helpers ──────────────────────────────────────────────────────
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_NAME = 100;
@@ -28,7 +108,7 @@ function validateEmail(email) {
 // ─── POST /api/auth/magic-link ───────────────────────────────────────────────
 // Send a passwordless magic link to the user's email.
 // If the user doesn't exist, Supabase creates them automatically.
-router.post('/magic-link', async (req, res, next) => {
+router.post('/magic-link', authSensitiveLimit, async (req, res, next) => {
   try {
     const { email, name } = req.body;
 
@@ -60,7 +140,7 @@ router.post('/magic-link', async (req, res, next) => {
 
 // ─── POST /api/auth/verify ──────────────────────────────────────────────────
 // Exchange OTP token (from magic link URL) for a session.
-router.post('/verify', async (req, res, next) => {
+router.post('/verify', authSensitiveLimit, async (req, res, next) => {
   try {
     const { token, email } = req.body;
 
@@ -83,6 +163,11 @@ router.post('/verify', async (req, res, next) => {
       console.error('[auth] Verify OTP error:', error?.message);
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
+
+    // ── Ensure all required DB records exist (safety net) ─────────
+    // The DB trigger handles this on first signup, but if the schema
+    // was recreated or the trigger failed, this catches it.
+    await ensureUserRecords(data.user.id, data.user.email, data.user.user_metadata?.name);
 
     // Update last_seen
     await supabase
@@ -136,9 +221,12 @@ router.post('/refresh', async (req, res, next) => {
 // Get the current user's profile (requires auth).
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
+    // Ensure records exist (covers edge case: schema recreated after signup)
+    await ensureUserRecords(req.user.id, req.user.email);
+
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, name, username, platform, app_version, created_at, last_seen_at')
+      .select('id, email, name, username, push_token, platform, app_version, subscription, onboarded, disclaimer_accepted_at, created_at, last_seen_at')
       .eq('id', req.user.id)
       .single();
 
@@ -152,21 +240,73 @@ router.get('/me', requireAuth, async (req, res, next) => {
       .update({ last_seen_at: new Date().toISOString() })
       .eq('id', req.user.id);
 
+    // Fetch active subscription details
+    const { data: sub } = await supabase
+      .from('subscriptions')
+      .select('id, tier, status, started_at, expires_at')
+      .eq('user_id', req.user.id)
+      .eq('status', 'active')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // Fetch contact counts
+    const { count: contactCount } = await supabase
+      .from('emergency_contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'accepted')
+      .or(`user_id.eq.${req.user.id},contact_id.eq.${req.user.id}`);
+
     res.json({
       ...data,
-      email: req.user.email,
+      email: data.email || req.user.email,
+      subscription_details: sub || { tier: 'free', status: 'active' },
+      contact_count: contactCount || 0,
     });
   } catch (err) {
     next(err);
   }
 });
 
+// ─── POST /api/auth/accept-disclaimer ───────────────────────────────────────
+// Record that the user has accepted the safety disclaimer.
+// Idempotent — if already accepted, returns success without overwriting.
+router.post('/accept-disclaimer', requireAuth, async (req, res, next) => {
+  try {
+    // Only set if not already accepted (preserve original acceptance time)
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('disclaimer_accepted_at')
+      .eq('id', req.user.id)
+      .single();
+
+    if (profile?.disclaimer_accepted_at) {
+      return res.json({ message: 'Already accepted', accepted_at: profile.disclaimer_accepted_at });
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('profiles')
+      .update({ disclaimer_accepted_at: now })
+      .eq('id', req.user.id);
+
+    if (error) {
+      console.error('[auth] Disclaimer accept error:', error.message);
+      return res.status(500).json({ error: 'Failed to save disclaimer acceptance' });
+    }
+
+    res.json({ message: 'Disclaimer accepted', accepted_at: now });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── POST /api/auth/update-profile ──────────────────────────────────────────
-// Update name, platform, app_version, push_token.
+// Update name, platform, app_version, push_token, onboarded.
 router.post('/update-profile', requireAuth, async (req, res, next) => {
   try {
     const updates = {};
-    const { name, platform, app_version, push_token } = req.body;
+    const { name, platform, app_version, push_token, onboarded } = req.body;
 
     if (typeof name === 'string') {
       updates.name = name.trim().slice(0, MAX_NAME);
@@ -179,6 +319,9 @@ router.post('/update-profile', requireAuth, async (req, res, next) => {
     }
     if (typeof push_token === 'string' && push_token.length <= 200) {
       updates.push_token = push_token;
+    }
+    if (typeof onboarded === 'boolean') {
+      updates.onboarded = onboarded;
     }
 
     if (Object.keys(updates).length === 0) {
