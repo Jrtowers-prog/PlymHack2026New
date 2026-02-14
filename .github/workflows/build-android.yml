@@ -7,6 +7,12 @@ name: Build Android APK
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'backend/**'
+      - '*.md'
+      - '.github/workflows/build-ios.yml'
+      - 'netlify.toml'
+      - 'render.yaml'
   workflow_dispatch: # allow manual trigger
 
 jobs:
@@ -33,6 +39,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
       - name: Create .env for build
         run: |
@@ -45,7 +52,7 @@ jobs:
           EOF
 
       - name: Generate native Android project
-        run: npx expo prebuild --platform android --clean
+        run: npx expo prebuild --platform android
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -53,12 +60,13 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
+            ~/.gradle/build-cache
           key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a
 
       - name: Rename APK
         run: |
