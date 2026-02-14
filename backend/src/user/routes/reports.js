@@ -13,6 +13,7 @@
 const express = require('express');
 const { supabase } = require('../lib/supabase');
 const { requireAuth } = require('../middleware/authMiddleware');
+const { checkFeatureLimit } = require('../middleware/subscriptionMiddleware');
 
 const router = express.Router();
 
@@ -28,7 +29,8 @@ const MAX_DESC = 500;
 
 // ─── POST /api/reports ──────────────────────────────────────────────────────
 // Submit a new safety report. Requires auth.
-router.post('/', requireAuth, async (req, res, next) => {
+// Gated by safety_reports feature limit (free: 3/month, pro+: unlimited).
+router.post('/', requireAuth, checkFeatureLimit('safety_reports'), async (req, res, next) => {
   try {
     const { lat, lng, category, description } = req.body;
 
