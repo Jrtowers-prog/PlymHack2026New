@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import {
   authApi,
+  contactsApi,
   getTokenExpiresAt,
   onSessionChange,
   refreshIfNeeded,
@@ -46,6 +47,8 @@ function isNetworkError(err: unknown): boolean {
 
 function friendlyError(err: unknown, action: 'send' | 'verify'): string {
   if (isNetworkError(err)) return 'Server is down. Try again in a bit.';
+  // Pass through rate limit errors with the seconds so the UI can show a countdown
+  if (err instanceof Error && err.message.startsWith('RATE_LIMIT:')) return err.message;
   if (action === 'verify') return 'Invalid or expired code. Try again.';
   return 'Something went wrong. Give it another go.';
 }
@@ -60,8 +63,61 @@ interface AuthState {
     username: string | null;
     platform: string;
     app_version: string;
+    disclaimer_accepted_at: string | null;
   } | null;
   error: string | null;
+}
+
+// ─── Shared session loader (prevents duplicate network calls) ────────────────
+// Multiple useAuth() instances mount concurrently. Without de-duplication each
+// one fires /refresh + /me + /update-profile, burning through the rate limit.
+let _sharedLoadPromise: Promise<AuthState> | null = null;
+let _sharedLoadTs = 0;
+const DEDUP_WINDOW_MS = 3_000; // collapse requests within 3 s
+
+async function _loadSessionOnce(
+  scheduleRefresh: () => Promise<void>,
+): Promise<AuthState> {
+  const loggedIn = await authApi.isLoggedIn();
+  if (!loggedIn) {
+    return { isLoggedIn: false, isLoading: false, user: null, error: null };
+  }
+
+  const tokenOk = await refreshIfNeeded();
+  if (!tokenOk) {
+    return { isLoggedIn: false, isLoading: false, user: null, error: null };
+  }
+
+  const profile = await authApi.getProfile();
+  if (!profile) {
+    return { isLoggedIn: false, isLoading: false, user: null, error: null };
+  }
+
+  // Sync version + platform (fire-and-forget)
+  const platform = Platform.OS;
+  if (profile.app_version !== APP_VERSION || profile.platform !== platform) {
+    authApi.updateProfile({ app_version: APP_VERSION, platform });
+  }
+
+  // Track app open (fire-and-forget)
+  usageApi.track('app_open', null, APP_VERSION);
+
+  scheduleRefresh();
+
+  return {
+    isLoggedIn: true,
+    isLoading: false,
+    user: {
+      id: profile.id,
+      email: profile.email,
+      name: profile.name,
+      username: profile.username ?? null,
+      platform: profile.platform,
+      app_version: profile.app_version,
+      disclaimer_accepted_at: profile.disclaimer_accepted_at ?? null,
+    },
+    error: null,
+  };
 }
 
 export function useAuth() {
@@ -94,56 +150,23 @@ export function useAuth() {
     }, refreshIn);
   }, []);
 
-  // ─── Load session on mount ─────────────────────────────────────────────────
+  // ─── Load session (de-duplicated across all instances) ─────────────────────
 
   const loadSession = useCallback(async () => {
     try {
-      const loggedIn = await authApi.isLoggedIn();
-      if (!loggedIn) {
-        setState((s) => ({ ...s, isLoading: false }));
+      const now = Date.now();
+      // Re-use the in-flight promise if still fresh
+      if (_sharedLoadPromise && now - _sharedLoadTs < DEDUP_WINDOW_MS) {
+        const result = await _sharedLoadPromise;
+        setState(result);
         return;
       }
 
-      // Proactively refresh if token is close to expiry
-      const tokenOk = await refreshIfNeeded();
-      if (!tokenOk) {
-        // Token expired and refresh failed — already emits 'expired'
-        setState({ isLoggedIn: false, isLoading: false, user: null, error: null });
-        return;
-      }
+      _sharedLoadTs = now;
+      _sharedLoadPromise = _loadSessionOnce(scheduleRefresh);
 
-      const profile = await authApi.getProfile();
-      if (profile) {
-        setState({
-          isLoggedIn: true,
-          isLoading: false,
-          user: {
-            id: profile.id,
-            email: profile.email,
-            name: profile.name,
-            username: profile.username ?? null,
-            platform: profile.platform,
-            app_version: profile.app_version,
-          },
-          error: null,
-        });
-
-        // Sync version + platform
-        const platform = Platform.OS;
-        if (profile.app_version !== APP_VERSION || profile.platform !== platform) {
-          authApi.updateProfile({ app_version: APP_VERSION, platform });
-        }
-
-        // Track app open
-        usageApi.track('app_open', null, APP_VERSION);
-
-        // Schedule next refresh
-        scheduleRefresh();
-        return;
-      }
-
-      // Profile fetch failed — session is invalid
-      setState({ isLoggedIn: false, isLoading: false, user: null, error: null });
+      const result = await _sharedLoadPromise;
+      setState(result);
     } catch {
       setState((s) => ({ ...s, isLoading: false }));
     }
@@ -157,16 +180,20 @@ export function useAuth() {
 
   useEffect(() => {
     const unsub = onSessionChange((event) => {
-      if (event === 'expired') {
+      if (event === 'expired' || event === 'logged_out') {
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         setState({ isLoggedIn: false, isLoading: false, user: null, error: null });
       } else if (event === 'refreshed') {
         // Token was auto-refreshed — re-schedule next refresh
         scheduleRefresh();
+      } else if (event === 'logged_in') {
+        // Another useAuth instance (e.g. _layout) completed login —
+        // re-load session from storage so this instance syncs up
+        loadSession();
       }
     });
     return unsub;
-  }, [scheduleRefresh]);
+  }, [scheduleRefresh, loadSession]);
 
   // ─── Revalidate on app foreground (phone) / tab focus (web) ────────────────
 
@@ -241,6 +268,7 @@ export function useAuth() {
               username: profile.username ?? null,
               platform: profile.platform,
               app_version: profile.app_version,
+              disclaimer_accepted_at: profile.disclaimer_accepted_at ?? null,
             }
           : {
               id: data.user.id,
@@ -249,6 +277,7 @@ export function useAuth() {
               username: null,
               platform: Platform.OS,
               app_version: APP_VERSION,
+              disclaimer_accepted_at: null,
             },
         error: null,
       });
@@ -297,9 +326,23 @@ export function useAuth() {
 
   const updateUsername = useCallback(async (username: string) => {
     try {
-      await authApi.updateProfile({ username });
+      await contactsApi.setUsername(username);
       setState((s) =>
         s.user ? { ...s, user: { ...s.user, username } } : s,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const acceptDisclaimer = useCallback(async () => {
+    try {
+      const result = await authApi.acceptDisclaimer();
+      setState((s) =>
+        s.user
+          ? { ...s, user: { ...s.user, disclaimer_accepted_at: result.accepted_at } }
+          : s,
       );
       return true;
     } catch {
@@ -314,5 +357,6 @@ export function useAuth() {
     logout,
     updateName,
     updateUsername,
+    acceptDisclaimer,
   };
 }
