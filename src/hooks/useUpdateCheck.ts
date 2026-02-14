@@ -1,11 +1,12 @@
 /**
- * useUpdateCheck — Checks GitHub Releases for a newer APK build.
+ * useUpdateCheck — Checks GitHub Releases for a newer APK/IPA build.
  *
  * Compares the app's build timestamp (injected at CI time via
  * EXPO_PUBLIC_BUILD_TIMESTAMP) against the latest GitHub Release's
- * published_at date. Shows an update prompt if a newer version exists.
+ * published_at date. Shows a full-screen force update if a newer version exists.
  *
- * Only runs on Android (sideloaded APK). Web + iOS skip the check.
+ * This is a FORCE UPDATE — the app is fully blocked until the user reinstalls.
+ * Only runs on native (sideloaded APK/IPA). Web skips the check.
  */
 import { useEffect, useState } from 'react';
 import { Linking, Platform } from 'react-native';
@@ -19,11 +20,13 @@ const IPA_URL = `https://github.com/${REPO}/releases/download/latest/SafeNightHo
 const BUILD_TIMESTAMP = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? '';
 
 export interface UpdateInfo {
-  /** Whether an update is available */
+  /** Whether a force update is required (blocks the entire app) */
+  forceUpdate: boolean;
+  /** Whether an update is available (kept for backward compat) */
   available: boolean;
-  /** Dismiss the update banner */
+  /** Dismiss the update banner (no-op in force mode) */
   dismiss: () => void;
-  /** Open the APK download link */
+  /** Open the APK/IPA download link */
   download: () => void;
 }
 
@@ -64,6 +67,8 @@ export function useUpdateCheck(): UpdateInfo {
   }, []);
 
   return {
+    // Force update — always blocks (cannot dismiss)
+    forceUpdate: available,
     available: available && !dismissed,
     dismiss: () => setDismissed(true),
     download: () => Linking.openURL(Platform.OS === 'ios' ? IPA_URL : APK_URL),
