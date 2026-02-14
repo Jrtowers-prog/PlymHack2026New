@@ -11,7 +11,6 @@
 
 import { setOnboardingAccepted } from '@/src/services/onboarding';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -25,7 +24,6 @@ import {
     View,
 } from 'react-native';
 
-const WELCOME_KEY = 'safenight_welcome_done_v1';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 interface Props {
@@ -51,7 +49,19 @@ export default function WelcomeModal({
   onAcceptLocation,
   hasLocationPermission,
 }: Props) {
-  const [step, setStep] = useState<Step>('welcome');
+  // Determine which steps are already done based on DB data
+  const hasName = Boolean(userName?.trim());
+  const hasUsername = Boolean(currentUsername?.trim());
+  const profileComplete = hasName && hasUsername;
+
+  // Start at the first incomplete step
+  const initialStep: Step = !profileComplete
+    ? 'welcome'
+    : !hasLocationPermission
+      ? 'location'
+      : 'buddy';
+
+  const [step, setStep] = useState<Step>(initialStep);
   const [displayName, setDisplayName] = useState(userName || '');
   const [username, setUsername] = useState(currentUsername ?? '');
   const [usernameError, setUsernameError] = useState<string | null>(null);
@@ -61,10 +71,18 @@ export default function WelcomeModal({
     hasLocationPermission ? 'granted' : 'idle',
   );
 
-  // Sync location status from prop
+  // Reset step when modal visibility or profile data changes
   useEffect(() => {
-    if (hasLocationPermission) setLocationStatus('granted');
-  }, [hasLocationPermission]);
+    if (!visible) return;
+    const newStep: Step = !profileComplete
+      ? 'welcome'
+      : !hasLocationPermission
+        ? 'location'
+        : 'buddy';
+    setStep(newStep);
+    setDisplayName(userName || '');
+    setUsername(currentUsername ?? '');
+  }, [visible, profileComplete, hasLocationPermission]);
 
   // ─── Step 1: Welcome + Name + Username ─────────────────────────────────────
 
@@ -119,8 +137,7 @@ export default function WelcomeModal({
   // ─── Step 3: Buddy ────────────────────────────────────────────────────────
 
   const handleFinish = useCallback(async () => {
-    await AsyncStorage.setItem(WELCOME_KEY, 'true');
-    // Also mark old onboarding as done so OnboardingModal never shows
+    // Mark old onboarding as done so OnboardingModal never shows
     await setOnboardingAccepted();
     onComplete();
   }, [onComplete]);
@@ -288,10 +305,11 @@ export default function WelcomeModal({
   );
 }
 
-/** Check if the user has completed the welcome flow */
+/** Check if the user has completed the welcome flow (legacy — kept for backward compat) */
 export async function hasCompletedWelcome(): Promise<boolean> {
-  const val = await AsyncStorage.getItem(WELCOME_KEY);
-  return val === 'true';
+  // No longer used — DB profile is the source of truth.
+  // Kept as export to avoid breaking any lingering imports.
+  return true;
 }
 
 // ─── FeatureRow helper ───────────────────────────────────────────────────────
