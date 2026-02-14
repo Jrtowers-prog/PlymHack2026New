@@ -46,10 +46,10 @@ export default function HomeScreen() {
   const maxDistanceKm = auth.user?.routeDistanceKm ?? 1; // DB-driven, fallback to free tier
 
   // Only load contacts when logged in
-  const { liveContacts } = useContacts(auth.isLoggedIn);
+  const { contacts, liveContacts } = useContacts(auth.isLoggedIn);
 
-  // Friend locations — only poll when the toggle is on and user has live contacts
-  const friendMarkers = useFriendLocations(showFriendsOnMap && liveContacts.length > 0);
+  // Friend locations — poll when the toggle is on and user has contacts
+  const friendMarkers = useFriendLocations(showFriendsOnMap && contacts.length > 0);
 
   // Live tracking — auto-register push token on mount, share location during nav
   const live = useLiveTracking(auth.isLoggedIn);
@@ -203,7 +203,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Show Friends on Map toggle (below Safety Circle) ── */}
-        {!h.isNavActive && auth.isLoggedIn && liveContacts.length > 0 && (
+        {!h.isNavActive && auth.isLoggedIn && contacts.length > 0 && (
           <View style={{ position: 'absolute', top: insets.top + 295, right: 12, zIndex: 100 }}>
             <Pressable
               onPress={() => setShowFriendsOnMap((v) => !v)}
