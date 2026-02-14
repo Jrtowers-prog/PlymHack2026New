@@ -115,9 +115,15 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       map.addSource('route-segments', { type:'geojson', data:emptyFC });
       map.addSource('route-remaining', { type:'geojson', data:emptyFC });
       map.addSource('safety-markers', { type:'geojson', data:emptyFC });
+      map.addSource('range-circle', { type:'geojson', data:emptyFC });
     }
 
     function addCustomLayers() {
+      map.addLayer({ id:'range-circle-fill', type:'fill', source:'range-circle',
+        paint:{'fill-color':'#EF4444','fill-opacity':0.04} });
+      map.addLayer({ id:'range-circle-line', type:'line', source:'range-circle',
+        layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':'#EF4444','line-opacity':0.8,'line-width':2.5,'line-dasharray':[3,2]} });
       map.addLayer({ id:'unselected-routes-line', type:'line', source:'unselected-routes',
         layout:{'line-cap':'round','line-join':'round'},
         paint:{'line-color':'#98a2b3','line-opacity':0.5,'line-width':5} });
@@ -251,6 +257,19 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       return [[Math.min(b[0][0],c[0]),Math.min(b[0][1],c[1])],[Math.max(b[1][0],c[0]),Math.max(b[1][1],c[1])]];
     }
 
+    function makeCirclePolygon(centerLng,centerLat,radiusKm,steps){
+      steps=steps||64;
+      var coords=[];
+      var R=6371;
+      for(var i=0;i<=steps;i++){
+        var angle=2*Math.PI*i/steps;
+        var lat2=Math.asin(Math.sin(centerLat*Math.PI/180)*Math.cos(radiusKm/R)+Math.cos(centerLat*Math.PI/180)*Math.sin(radiusKm/R)*Math.cos(angle));
+        var lng2=(centerLng*Math.PI/180)+Math.atan2(Math.sin(angle)*Math.sin(radiusKm/R)*Math.cos(centerLat*Math.PI/180),Math.cos(radiusKm/R)-Math.sin(centerLat*Math.PI/180)*Math.sin(lat2));
+        coords.push([lng2*180/Math.PI,lat2*180/Math.PI]);
+      }
+      return {type:'Feature',properties:{},geometry:{type:'Polygon',coordinates:[coords]}};
+    }
+
     /* ── Main update (called from RN) ──────────────────────── */
     function updateMap(data){
       if(!styleReady) return;
@@ -363,6 +382,14 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
         map.easeTo({center:[data.panTo.lng,data.panTo.lat],zoom:Math.max(map.getZoom(),14),duration:500});
       }
 
+      /* — Range circle — */
+      if(data.origin&&data.maxDistanceKm&&data.maxDistanceKm>0&&!data.navLocation){
+        var cf=makeCirclePolygon(data.origin.lng,data.origin.lat,data.maxDistanceKm,64);
+        map.getSource('range-circle').setData({type:'FeatureCollection',features:[cf]});
+      }else{
+        map.getSource('range-circle').setData(emptyFC);
+      }
+
       /* — Navigation marker + 3D camera — */
       if(navMarkerObj){navMarkerObj.remove();navMarkerObj=null}
       clearMarkerArray(hazardMarkers);
@@ -468,6 +495,7 @@ export const RouteMap = ({
   navigationLocation,
   navigationHeading,
   mapType = 'roadmap',
+  maxDistanceKm,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -482,12 +510,12 @@ export const RouteMap = ({
   const propsRef = useRef({
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading,
+    isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
   });
   propsRef.current = {
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading,
+    isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
   };
 
   const mapTypeRef = useRef(mapType);
@@ -561,6 +589,7 @@ export const RouteMap = ({
           ? toLL(p.navigationLocation)
           : null,
       navHeading: p.navigationHeading,
+      maxDistanceKm: p.maxDistanceKm || null,
     };
 
     const js = `try{updateMap(${JSON.stringify(payload)})}catch(e){}true;`;
@@ -582,6 +611,7 @@ export const RouteMap = ({
     isNavigating,
     navigationLocation,
     navigationHeading,
+    maxDistanceKm,
     pushUpdate,
   ]);
 

@@ -73,6 +73,7 @@ html,body{width:100%;height:100%;overflow:hidden}
 <script>
 var map,tileLayer,markers=[],polylines=[],navMarker=null,longPressTimer=null,longPressLatLng=null;
 var isNavMode=false,currentRotation=0,userInteracted=false,lastNavLL=null;
+var rangeCircle=null;
 
 function clearArr(a){for(var i=0;i<a.length;i++)map.removeLayer(a[i]);a.length=0;}
 
@@ -189,6 +190,18 @@ function updateMap(d){
   if(d.fitBounds&&hasBounds&&!d.navLocation)map.fitBounds(bounds,{padding:[40,40],maxZoom:16});
   if(d.panTo){map.panTo([d.panTo.lat,d.panTo.lng]);if(map.getZoom()<14)map.setZoom(14);}
 
+  /* Range circle */
+  if(rangeCircle){map.removeLayer(rangeCircle);rangeCircle=null;}
+  if(d.origin&&d.maxDistanceKm&&d.maxDistanceKm>0&&!d.navLocation){
+    rangeCircle=L.circle([d.origin.lat,d.origin.lng],{
+      radius:d.maxDistanceKm*1000,
+      color:'#EF4444',weight:2.5,opacity:0.8,
+      fillColor:'#EF4444',fillOpacity:0.04,
+      dashArray:'8,6',
+      interactive:false
+    }).addTo(map);
+  }
+
   /* Navigation arrow + 3D nav view */
   if(navMarker){map.removeLayer(navMarker);navMarker=null;}
   if(d.navLocation){var h=d.navHeading||0;
@@ -225,6 +238,7 @@ export const RouteMap = ({
   navigationHeading,
   mapType = 'roadmap',
   highlightCategory,
+  maxDistanceKm,
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -315,6 +329,7 @@ export const RouteMap = ({
       navLocation: isNavigating && navigationLocation ? toLL(navigationLocation) : null,
       navHeading: navigationHeading,
       highlightCategory: highlightCategory || null,
+      maxDistanceKm: maxDistanceKm || null,
     };
 
     try {
@@ -328,7 +343,7 @@ export const RouteMap = ({
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
     isNavigating, navigationLocation, navigationHeading,
-    highlightCategory,
+    highlightCategory, maxDistanceKm,
   ]);
 
   // Switch tile layer on mapType change

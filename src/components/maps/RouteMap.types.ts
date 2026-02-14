@@ -23,6 +23,8 @@ export type RouteMapProps = {
   mapType?: MapType;
   /** When set, only markers of this kind are shown and they're rendered larger */
   highlightCategory?: string | null;
+  /** Max navigation distance in km — draws a red boundary circle around origin */
+  maxDistanceKm?: number | null;
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;
