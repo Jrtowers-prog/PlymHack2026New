@@ -34,6 +34,7 @@ interface Props {
   userName: string;
   currentUsername: string | null;
   onSetUsername: (username: string) => Promise<boolean>;
+  onSetName: (name: string) => Promise<void>;
   onAcceptLocation: () => void;
   hasLocationPermission: boolean;
 }
@@ -46,12 +47,15 @@ export default function WelcomeModal({
   userName,
   currentUsername,
   onSetUsername,
+  onSetName,
   onAcceptLocation,
   hasLocationPermission,
 }: Props) {
   const [step, setStep] = useState<Step>('welcome');
+  const [displayName, setDisplayName] = useState(userName || '');
   const [username, setUsername] = useState(currentUsername ?? '');
   const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [locationStatus, setLocationStatus] = useState<'idle' | 'granted' | 'denied'>(
     hasLocationPermission ? 'granted' : 'idle',
@@ -62,28 +66,37 @@ export default function WelcomeModal({
     if (hasLocationPermission) setLocationStatus('granted');
   }, [hasLocationPermission]);
 
-  // ─── Step 1: Welcome + Username ────────────────────────────────────────────
+  // ─── Step 1: Welcome + Name + Username ─────────────────────────────────────
 
-  const handleSaveUsername = useCallback(async () => {
-    const clean = username.trim();
-    if (!USERNAME_RE.test(clean)) {
+  const handleSaveProfile = useCallback(async () => {
+    const cleanName = displayName.trim();
+    const cleanUsername = username.trim();
+
+    if (!cleanName || cleanName.length < 2) {
+      setNameError('Please enter your name (at least 2 characters).');
+      return;
+    }
+    if (!USERNAME_RE.test(cleanUsername)) {
       setUsernameError('3-20 characters, letters, numbers, and underscores only.');
       return;
     }
+
     setSaving(true);
     setUsernameError(null);
-    const ok = await onSetUsername(clean);
+    setNameError(null);
+
+    // Save name first
+    await onSetName(cleanName);
+
+    // Then set username
+    const ok = await onSetUsername(cleanUsername);
     setSaving(false);
     if (ok) {
       setStep('location');
     } else {
       setUsernameError('Username taken. Try another one.');
     }
-  }, [username, onSetUsername]);
-
-  const handleSkipUsername = useCallback(() => {
-    setStep('location');
-  }, []);
+  }, [displayName, username, onSetName, onSetUsername]);
 
   // ─── Step 2: Location ──────────────────────────────────────────────────────
 
@@ -138,22 +151,37 @@ export default function WelcomeModal({
             ))}
           </View>
 
-          {/* ─── Step 1: Welcome ─── */}
+          {/* ─── Step 1: Welcome + Name + Username ─── */}
           {step === 'welcome' && (
             <View style={styles.stepContent}>
               <View style={styles.iconCircle}>
                 <Ionicons name="hand-left" size={36} color="#6366F1" />
               </View>
-              <Text style={styles.heading}>
-                Welcome{userName ? `, ${userName.split(' ')[0]}` : ''}!
-              </Text>
+              <Text style={styles.heading}>Welcome to SafeNight!</Text>
               <Text style={styles.subtext}>
-                Let's get you set up. Pick a username so your friends can find you.
+                Tell us your name and pick a username so your friends can find you.
               </Text>
 
               <TextInput
+                style={[styles.input, nameError && styles.inputError]}
+                placeholder="Your name"
+                placeholderTextColor="#94A3B8"
+                value={displayName}
+                onChangeText={(t) => {
+                  setDisplayName(t);
+                  setNameError(null);
+                }}
+                autoCapitalize="words"
+                autoCorrect={false}
+                maxLength={100}
+              />
+              {nameError && (
+                <Text style={styles.errorText}>{nameError}</Text>
+              )}
+
+              <TextInput
                 style={[styles.input, usernameError && styles.inputError]}
-                placeholder="e.g. nightwalker42"
+                placeholder="Username (e.g. nightwalker42)"
                 placeholderTextColor="#94A3B8"
                 value={username}
                 onChangeText={(t) => {
@@ -169,19 +197,15 @@ export default function WelcomeModal({
               )}
 
               <Pressable
-                style={[styles.button, !username.trim() && styles.buttonDisabled]}
-                onPress={handleSaveUsername}
-                disabled={!username.trim() || saving}
+                style={[styles.button, (!username.trim() || !displayName.trim()) && styles.buttonDisabled]}
+                onPress={handleSaveProfile}
+                disabled={!username.trim() || !displayName.trim() || saving}
               >
                 {saving ? (
                   <ActivityIndicator color="#FFF" size="small" />
                 ) : (
-                  <Text style={styles.buttonText}>Set Username</Text>
+                  <Text style={styles.buttonText}>Continue</Text>
                 )}
-              </Pressable>
-
-              <Pressable style={styles.skipBtn} onPress={handleSkipUsername}>
-                <Text style={styles.skipText}>Skip for now</Text>
               </Pressable>
             </View>
           )}
