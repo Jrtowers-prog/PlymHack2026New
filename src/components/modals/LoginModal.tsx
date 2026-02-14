@@ -2,14 +2,14 @@
  * LoginModal.tsx — Magic link login modal.
  *
  * Two steps:
- * 1. Enter email + name → sends magic link
+ * 1. Enter email → sends OTP code
  * 2. Enter OTP code from email → verifies
  *
- * Shown when unauthenticated user tries to use buddy features.
+ * Name/username are collected separately in WelcomeModal after first login.
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -45,27 +45,59 @@ export default function LoginModal({
 }: Props) {
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
   const [otp, setOtp] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(0);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Combine hook error and local error
-  const displayError = localError || error;
+  // Parse rate-limit errors and start countdown
+  const rawError = localError || error;
+  useEffect(() => {
+    if (rawError && rawError.startsWith('RATE_LIMIT:')) {
+      const secs = parseInt(rawError.split(':')[1], 10) || 900;
+      setCountdown(secs);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      countdownRef.current = setInterval(() => {
+        setCountdown((c) => {
+          if (c <= 1) {
+            if (countdownRef.current) clearInterval(countdownRef.current);
+            setLocalError(null);
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, [rawError]);
+
+  // Build display error with countdown
+  const isRateLimited = countdown > 0;
+  const formatCountdown = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec.toString().padStart(2, '0')}s` : `${sec}s`;
+  };
+  const displayError = isRateLimited
+    ? `Slow down! Try again in ${formatCountdown(countdown)}. We limit requests to keep SafeNight free for everyone.`
+    : rawError;
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const handleSend = useCallback(async () => {
-    if (!isEmailValid || !name.trim()) return;
+    if (!isEmailValid) return;
     setLocalError(null);
     setIsLoading(true);
-    const ok = await onSendMagicLink(email.trim().toLowerCase(), name.trim());
+    const ok = await onSendMagicLink(email.trim().toLowerCase(), '');
     setIsLoading(false);
     if (ok) {
       setStep('otp');
     }
     // error is shown via displayError from the hook
-  }, [email, name, isEmailValid, onSendMagicLink]);
+  }, [email, isEmailValid, onSendMagicLink]);
 
   const handleVerify = useCallback(async () => {
     if (otp.length < 6) return;
@@ -76,7 +108,6 @@ export default function LoginModal({
     if (ok) {
       setStep('email');
       setEmail('');
-      setName('');
       setOtp('');
       setLocalError(null);
       onClose();
@@ -87,7 +118,6 @@ export default function LoginModal({
   const handleClose = useCallback(() => {
     setStep('email');
     setEmail('');
-    setName('');
     setOtp('');
     setLocalError(null);
     onClose();
@@ -129,19 +159,8 @@ export default function LoginModal({
                     </View>
                     <Text style={styles.heading}>Sign in to SafeNight</Text>
                     <Text style={styles.subtitle}>
-                      We'll send a magic link to your email — no password needed.
+                      Enter your email and we'll send you a code — no password needed.
                     </Text>
-
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Your name"
-                      placeholderTextColor="#94A3B8"
-                      value={name}
-                      onChangeText={setName}
-                      autoCapitalize="words"
-                      autoCorrect={false}
-                      returnKeyType="next"
-                    />
 
                     <TextInput
                       style={styles.input}
@@ -158,10 +177,10 @@ export default function LoginModal({
                     <Pressable
                       style={[
                         styles.button,
-                        (!isEmailValid || !name.trim()) && styles.buttonDisabled,
+                        (!isEmailValid || isRateLimited) && styles.buttonDisabled,
                       ]}
                       onPress={handleSend}
-                      disabled={!isEmailValid || !name.trim() || isLoading}
+                      disabled={!isEmailValid || isLoading || isRateLimited}
                     >
                       {isLoading ? (
                         <ActivityIndicator color="#FFF" size="small" />
@@ -196,10 +215,10 @@ export default function LoginModal({
                     <Pressable
                       style={[
                         styles.button,
-                        otp.length < 6 && styles.buttonDisabled,
+                        (otp.length < 6 || isRateLimited) && styles.buttonDisabled,
                       ]}
                       onPress={handleVerify}
-                      disabled={otp.length < 6 || isLoading}
+                      disabled={otp.length < 6 || isLoading || isRateLimited}
                     >
                       {isLoading ? (
                         <ActivityIndicator color="#FFF" size="small" />
@@ -222,16 +241,16 @@ export default function LoginModal({
 
                 {displayError && (
                   <Pressable
-                    style={styles.errorBanner}
-                    onPress={() => setLocalError(null)}
+                    style={[styles.errorBanner, isRateLimited && styles.rateLimitBanner]}
+                    onPress={isRateLimited ? undefined : () => setLocalError(null)}
                   >
                     <Ionicons
-                      name={displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
+                      name={isRateLimited ? 'time-outline' : displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
                       size={18}
-                      color="#DC2626"
+                      color={isRateLimited ? '#D97706' : '#DC2626'}
                       style={styles.errorIcon}
                     />
-                    <Text style={styles.errorText}>{displayError}</Text>
+                    <Text style={[styles.errorText, isRateLimited && styles.rateLimitText]}>{displayError}</Text>
                   </Pressable>
                 )}
               </View>
@@ -270,19 +289,8 @@ export default function LoginModal({
                     </View>
                     <Text style={styles.heading}>Sign in to SafeNight</Text>
                     <Text style={styles.subtitle}>
-                      We'll send a magic link to your email — no password needed.
+                      Enter your email and we'll send you a code — no password needed.
                     </Text>
-
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Your name"
-                      placeholderTextColor="#94A3B8"
-                      value={name}
-                      onChangeText={setName}
-                      autoCapitalize="words"
-                      autoCorrect={false}
-                      returnKeyType="next"
-                    />
 
                     <TextInput
                       style={styles.input}
@@ -299,10 +307,10 @@ export default function LoginModal({
                     <Pressable
                       style={[
                         styles.button,
-                        (!isEmailValid || !name.trim()) && styles.buttonDisabled,
+                        (!isEmailValid || isRateLimited) && styles.buttonDisabled,
                       ]}
                       onPress={handleSend}
-                      disabled={!isEmailValid || !name.trim() || isLoading}
+                      disabled={!isEmailValid || isLoading || isRateLimited}
                     >
                       {isLoading ? (
                         <ActivityIndicator color="#FFF" size="small" />
@@ -337,10 +345,10 @@ export default function LoginModal({
                     <Pressable
                       style={[
                         styles.button,
-                        otp.length < 6 && styles.buttonDisabled,
+                        (otp.length < 6 || isRateLimited) && styles.buttonDisabled,
                       ]}
                       onPress={handleVerify}
-                      disabled={otp.length < 6 || isLoading}
+                      disabled={otp.length < 6 || isLoading || isRateLimited}
                     >
                       {isLoading ? (
                         <ActivityIndicator color="#FFF" size="small" />
@@ -363,16 +371,16 @@ export default function LoginModal({
 
                 {displayError && (
                   <Pressable
-                    style={styles.errorBanner}
-                    onPress={() => setLocalError(null)}
+                    style={[styles.errorBanner, isRateLimited && styles.rateLimitBanner]}
+                    onPress={isRateLimited ? undefined : () => setLocalError(null)}
                   >
                     <Ionicons
-                      name={displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
+                      name={isRateLimited ? 'time-outline' : displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
                       size={18}
-                      color="#DC2626"
+                      color={isRateLimited ? '#D97706' : '#DC2626'}
                       style={styles.errorIcon}
                     />
-                    <Text style={styles.errorText}>{displayError}</Text>
+                    <Text style={[styles.errorText, isRateLimited && styles.rateLimitText]}>{displayError}</Text>
                   </Pressable>
                 )}
               </View>
@@ -541,5 +549,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     flex: 1,
     lineHeight: 18,
+  },
+  rateLimitBanner: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  rateLimitText: {
+    color: '#D97706',
   },
 });
