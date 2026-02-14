@@ -14,15 +14,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Dimensions,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { useContacts } from '../../hooks/useContacts';
@@ -135,7 +135,24 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         `${resp === 'accepted' ? 'Accept' : 'Reject'} ${name}'s request?`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: resp === 'accepted' ? 'Accept' : 'Reject', onPress: () => respond(id, resp) },
+          {
+            text: resp === 'accepted' ? 'Accept' : 'Reject',
+            onPress: async () => {
+              try {
+                console.log(`[BuddyModal] Responding to request ${id}: ${resp}`);
+                const ok = await respond(id, resp);
+                if (ok) {
+                  Alert.alert('Success', `Contact request ${resp}.`);
+                } else {
+                  Alert.alert('Error', 'Failed to respond. Please try again.');
+                }
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : 'Unknown error';
+                console.error('[BuddyModal] Respond error:', msg);
+                Alert.alert('Error', msg || 'Failed to respond to request');
+              }
+            },
+          },
         ],
       );
     },
@@ -149,7 +166,21 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: () => removeContact(id),
+          onPress: async () => {
+            try {
+              console.log(`[BuddyModal] Removing contact ${id}`);
+              const ok = await removeContact(id);
+              if (ok) {
+                Alert.alert('Success', 'Contact removed.');
+              } else {
+                Alert.alert('Error', 'Failed to remove contact. Please try again.');
+              }
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : 'Unknown error';
+              console.error('[BuddyModal] Remove contact error:', msg);
+              Alert.alert('Error', msg || 'Failed to remove contact');
+            }
+          },
         },
       ]);
     },
