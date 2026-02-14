@@ -152,11 +152,10 @@ export function SearchBar({
 
   return (
     <ScrollView
-      style={[styles.container, { top: topInset + 8 }]}
+      style={[styles.container, { top: topInset + 8, pointerEvents: 'box-none' }]}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="always"
       scrollEnabled={false}
-      pointerEvents="box-none"
     >
       <View style={styles.card}>
         {/* Origin Input */}
