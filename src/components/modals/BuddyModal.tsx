@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -246,38 +247,90 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
     [removeContact],
   );
 
-  // ─── Render tabs ──────────────────────────────────────────────────────
-  const renderMyQR = () => (
+  // ─── Web download prompt (replaces QR/Scan on web) ────────────────────
+  const renderWebDownloadPrompt = (context: 'qr' | 'scan') => (
     <View style={styles.tabContent}>
-      {currentUsername ? (
-        <>
-          <Text style={styles.subtitle}>Show this to a friend to add you</Text>
-          <View style={styles.qrContainer}>
-            <QRCode
-              value={`safenight://${currentUsername}`}
-              size={QR_SIZE}
-              backgroundColor="#FFFFFF"
-              color="#1E293B"
-            />
+      <View style={styles.downloadPrompt}>
+        <Ionicons name="phone-portrait-outline" size={56} color="#6366F1" />
+        <Text style={styles.downloadTitle}>
+          {context === 'qr' ? 'QR Code Pairing' : 'QR Code Scanning'}
+        </Text>
+        <Text style={styles.downloadTitle}>Available on the App</Text>
+        <Text style={styles.downloadDescription}>
+          {context === 'qr'
+            ? 'Your unique QR code is available in the SafeNight mobile app. Friends can scan it to add you as an emergency contact.'
+            : 'Use the SafeNight mobile app to scan a friend\'s QR code and add them to your Safety Circle.'}
+        </Text>
+
+        <View style={styles.howItWorks}>
+          <Text style={styles.howItWorksTitle}>How Safety Circle Works</Text>
+          <View style={styles.stepRow}>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
+            <Text style={styles.stepText}>Download SafeNight on your phone</Text>
           </View>
-          <View style={styles.usernameTag}>
-            <Ionicons name="person" size={16} color="#6366F1" />
-            <Text style={styles.usernameText}>@{currentUsername}</Text>
+          <View style={styles.stepRow}>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>2</Text></View>
+            <Text style={styles.stepText}>Open Safety Circle and share your QR code with a friend</Text>
           </View>
-        </>
-      ) : (
-        <View style={styles.usernameSetup}>
-          <Ionicons name="alert-circle" size={40} color="#F59E0B" />
-          <Text style={styles.subtitle}>No username set</Text>
-          <Text style={styles.hint}>
-            Your username should have been set during onboarding. Please log out and log back in to complete setup.
-          </Text>
+          <View style={styles.stepRow}>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
+            <Text style={styles.stepText}>Your friend scans it to send a contact request</Text>
+          </View>
+          <View style={styles.stepRow}>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>4</Text></View>
+            <Text style={styles.stepText}>Accept the request — you can now share live location while walking</Text>
+          </View>
         </View>
-      )}
+
+        <Pressable
+          style={styles.downloadButton}
+          onPress={() => Linking.openURL('https://github.com/MobinZaki/PlymHack2026New/releases')}
+        >
+          <Ionicons name="download-outline" size={20} color="#FFF" />
+          <Text style={styles.downloadButtonText}>Download Latest Version</Text>
+        </Pressable>
+      </View>
     </View>
   );
 
+  // ─── Render tabs ──────────────────────────────────────────────────────
+  const renderMyQR = () => {
+    if (Platform.OS === 'web') return renderWebDownloadPrompt('qr');
+
+    return (
+      <View style={[styles.tabContent, styles.qrTabContent]}>
+        {currentUsername ? (
+          <>
+            <Text style={styles.subtitle}>Show this to a friend to add you</Text>
+            <View style={styles.qrContainer}>
+              <QRCode
+                value={`safenight://${currentUsername}`}
+                size={QR_SIZE}
+                backgroundColor="#FFFFFF"
+                color="#1E293B"
+              />
+            </View>
+            <View style={styles.usernameTag}>
+              <Ionicons name="person" size={16} color="#6366F1" />
+              <Text style={styles.usernameText}>@{currentUsername}</Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.usernameSetup}>
+            <Ionicons name="alert-circle" size={40} color="#F59E0B" />
+            <Text style={styles.subtitle}>No username set</Text>
+            <Text style={styles.hint}>
+              Your username should have been set during onboarding. Please log out and log back in to complete setup.
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   const renderScanner = () => {
+    if (Platform.OS === 'web') return renderWebDownloadPrompt('scan');
+
     if (!permission?.granted) {
       return (
         <View style={styles.tabContent}>
@@ -568,9 +621,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   // QR code
+  qrTabContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    margin: 8,
+  },
   qrContainer: {
-    padding: 20,
-    backgroundColor: '#FFF',
+    padding: 24,
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -808,5 +866,79 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#EF4444',
     fontWeight: '500',
+  },
+  // Web download prompt
+  downloadPrompt: {
+    alignItems: 'center',
+    gap: 16,
+    paddingHorizontal: 8,
+    maxWidth: 400,
+  },
+  downloadTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1E293B',
+    textAlign: 'center',
+  },
+  downloadDescription: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  howItWorks: {
+    width: '100%',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 16,
+    gap: 12,
+    marginTop: 4,
+  },
+  howItWorksTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 2,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  stepNumber: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#6366F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepNumberText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+  },
+  downloadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#6366F1',
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    marginTop: 4,
+    width: '100%',
+  } as any,
+  downloadButtonText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
