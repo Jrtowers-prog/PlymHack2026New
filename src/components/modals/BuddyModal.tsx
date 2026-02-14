@@ -18,6 +18,7 @@ import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -99,94 +100,148 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
 
       const user = await lookupUser(scannedUsername);
       if (!user) {
-        Alert.alert('Not Found', 'This user was not found on SafeNight.', [
-          { text: 'OK', onPress: () => setHasScanned(false) },
-        ]);
+        if (Platform.OS === 'web') {
+          window.alert('This user was not found on SafeNight.');
+          setHasScanned(false);
+        } else {
+          Alert.alert('Not Found', 'This user was not found on SafeNight.', [
+            { text: 'OK', onPress: () => setHasScanned(false) },
+          ]);
+        }
         return;
       }
 
-      Alert.alert(
-        'Add Contact',
-        `Add ${user.name || user.username} as an emergency contact?`,
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => setHasScanned(false) },
-          {
-            text: 'Add',
-            onPress: async () => {
-              const ok = await invite(user.id, user.name);
-              if (ok) {
-                Alert.alert('Sent!', 'Contact request sent.');
-                setTab('contacts');
-              } else {
-                setHasScanned(false);
-              }
-            },
-          },
-        ],
-      );
+      const doAdd = async () => {
+        const ok = await invite(user.id, user.name);
+        if (ok) {
+          if (Platform.OS === 'web') {
+            window.alert('Contact request sent.');
+          } else {
+            Alert.alert('Sent!', 'Contact request sent.');
+          }
+          setTab('contacts');
+        } else {
+          setHasScanned(false);
+        }
+      };
+
+      if (Platform.OS === 'web') {
+        if (window.confirm(`Add ${user.name || user.username} as an emergency contact?`)) {
+          doAdd();
+        } else {
+          setHasScanned(false);
+        }
+      } else {
+        Alert.alert(
+          'Add Contact',
+          `Add ${user.name || user.username} as an emergency contact?`,
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => setHasScanned(false) },
+            { text: 'Add', onPress: doAdd },
+          ],
+        );
+      }
     },
     [hasScanned, lookupUser, invite],
   );
 
   // ─── Handle contact response ──────────────────────────────────────────
-  const handleRespond = useCallback(
-    (id: string, name: string, resp: 'accepted' | 'rejected') => {
-      Alert.alert(
-        resp === 'accepted' ? 'Accept Contact' : 'Reject Contact',
-        `${resp === 'accepted' ? 'Accept' : 'Reject'} ${name}'s request?`,
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => setRespondingToId(null) },
-          {
-            text: resp === 'accepted' ? 'Accept' : 'Reject',
-            onPress: async () => {
-              try {
-                setRespondingToId(id);
-                console.log(`[BuddyModal] Responding to request ${id}: ${resp}`);
-                const ok = await respond(id, resp);
-                setRespondingToId(null);
-                if (ok) {
-                  Alert.alert('Success', `Contact request ${resp}.`);
-                } else {
-                  Alert.alert('Error', 'Failed to respond. Please try again.');
-                }
-              } catch (err: unknown) {
-                setRespondingToId(null);
-                const msg = err instanceof Error ? err.message : 'Unknown error';
-                console.error('[BuddyModal] Respond error:', msg);
-                Alert.alert('Error', msg || 'Failed to respond to request');
-              }
-            },
-          },
-        ],
-      );
+  const doRespond = useCallback(
+    async (id: string, resp: 'accepted' | 'rejected') => {
+      try {
+        setRespondingToId(id);
+        console.log(`[BuddyModal] Responding to request ${id}: ${resp}`);
+        const ok = await respond(id, resp);
+        setRespondingToId(null);
+        if (ok) {
+          if (Platform.OS === 'web') {
+            window.alert(`Contact request ${resp}.`);
+          } else {
+            Alert.alert('Success', `Contact request ${resp}.`);
+          }
+        } else {
+          if (Platform.OS === 'web') {
+            window.alert('Failed to respond. Please try again.');
+          } else {
+            Alert.alert('Error', 'Failed to respond. Please try again.');
+          }
+        }
+      } catch (err: unknown) {
+        setRespondingToId(null);
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        console.error('[BuddyModal] Respond error:', msg);
+        if (Platform.OS === 'web') {
+          window.alert(msg || 'Failed to respond to request');
+        } else {
+          Alert.alert('Error', msg || 'Failed to respond to request');
+        }
+      }
     },
     [respond],
   );
 
+  const handleRespond = useCallback(
+    (id: string, name: string, resp: 'accepted' | 'rejected') => {
+      const title = resp === 'accepted' ? 'Accept Contact' : 'Reject Contact';
+      const message = `${resp === 'accepted' ? 'Accept' : 'Reject'} ${name}'s request?`;
+
+      if (Platform.OS === 'web') {
+        if (window.confirm(`${title}\n${message}`)) {
+          doRespond(id, resp);
+        }
+      } else {
+        Alert.alert(title, message, [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: resp === 'accepted' ? 'Accept' : 'Reject',
+            onPress: () => doRespond(id, resp),
+          },
+        ]);
+      }
+    },
+    [doRespond],
+  );
+
   const handleRemove = useCallback(
     (id: string, name: string) => {
-      Alert.alert('Remove Contact', `Remove ${name} as your emergency contact?`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              console.log(`[BuddyModal] Removing contact ${id}`);
-              const ok = await removeContact(id);
-              if (ok) {
-                Alert.alert('Success', 'Contact removed.');
-              } else {
-                Alert.alert('Error', 'Failed to remove contact. Please try again.');
-              }
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : 'Unknown error';
-              console.error('[BuddyModal] Remove contact error:', msg);
-              Alert.alert('Error', msg || 'Failed to remove contact');
+      const doRemove = async () => {
+        try {
+          console.log(`[BuddyModal] Removing contact ${id}`);
+          const ok = await removeContact(id);
+          if (ok) {
+            if (Platform.OS === 'web') {
+              window.alert('Contact removed.');
+            } else {
+              Alert.alert('Success', 'Contact removed.');
             }
-          },
-        },
-      ]);
+          } else {
+            if (Platform.OS === 'web') {
+              window.alert('Failed to remove contact. Please try again.');
+            } else {
+              Alert.alert('Error', 'Failed to remove contact. Please try again.');
+            }
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          console.error('[BuddyModal] Remove contact error:', msg);
+          if (Platform.OS === 'web') {
+            window.alert(msg || 'Failed to remove contact');
+          } else {
+            Alert.alert('Error', msg || 'Failed to remove contact');
+          }
+        }
+      };
+
+      if (Platform.OS === 'web') {
+        if (window.confirm(`Remove ${name} as your emergency contact?`)) {
+          doRemove();
+        }
+      } else {
+        Alert.alert('Remove Contact', `Remove ${name} as your emergency contact?`, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: doRemove },
+        ]);
+      }
     },
     [removeContact],
   );
