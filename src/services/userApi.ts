@@ -232,6 +232,7 @@ export const authApi = {
     disclaimer_accepted_at: string | null;
     subscription: string;
     subscription_details?: { tier: string; status: string };
+    route_distance_km?: number;
     created_at: string;
     last_seen_at: string;
   } | null> {

@@ -14,13 +14,14 @@ import { decodePolyline } from '@/src/utils/polyline';
 
 const BACKEND_BASE = env.safetyApiUrl;
 
-// ── Subscription tier distance limits ───────────────────────────────────────
+// ── Subscription tier distance limits (fallback only — prefer DB value) ──────
 const DISTANCE_LIMITS_KM: Record<string, number> = {
   free: 1,      // 1 km for free users
   pro: 10,      // 10 km for pro users
   premium: 20,  // 20 km for premium users
 };
 
+/** Fallback: compute limit from tier when DB value is not available */
 export function getMaxDistanceKmForTier(tier: string): number {
   return DISTANCE_LIMITS_KM[tier?.toLowerCase()] ?? DISTANCE_LIMITS_KM.free;
 }
@@ -221,6 +222,7 @@ export async function fetchSafeRoutes(
   origin: LatLng,
   destination: LatLng,
   subscriptionTier: string = 'free',
+  maxDistanceKmOverride?: number,
 ): Promise<SafeRoutesResponse> {
   const key = cacheKey(origin, destination);
   const cached = cache.get(key);
@@ -229,7 +231,8 @@ export async function fetchSafeRoutes(
     return cached.data;
   }
 
-  const maxDistanceKm = getMaxDistanceKmForTier(subscriptionTier);
+  // Use the DB-driven override if provided, otherwise fall back to hardcoded tier lookup
+  const maxDistanceKm = maxDistanceKmOverride ?? getMaxDistanceKmForTier(subscriptionTier);
   const url =
     `${BACKEND_BASE}/api/safe-routes?` +
     `origin_lat=${origin.latitude}&origin_lng=${origin.longitude}` +

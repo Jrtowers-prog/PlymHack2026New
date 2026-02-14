@@ -257,11 +257,25 @@ router.get('/me', requireAuth, async (req, res, next) => {
       .eq('status', 'accepted')
       .or(`user_id.eq.${req.user.id},contact_id.eq.${req.user.id}`);
 
+    // Fetch route_distance limit from DB (tier-aware)
+    const effectiveTier = sub?.tier || data.subscription || 'free';
+    const { data: distRow } = await supabase
+      .from('feature_limits')
+      .select('max_count')
+      .eq('feature', 'route_distance')
+      .eq('tier', effectiveTier)
+      .maybeSingle();
+
+    // Fallback: free=1, pro=10, premium=20
+    const defaultDistances = { free: 1, pro: 10, premium: 20 };
+    const routeDistanceKm = distRow?.max_count ?? defaultDistances[effectiveTier] ?? 1;
+
     res.json({
       ...data,
       email: data.email || req.user.email,
       subscription_details: sub || { tier: 'free', status: 'active' },
       contact_count: contactCount || 0,
+      route_distance_km: routeDistanceKm,
     });
   } catch (err) {
     next(err);

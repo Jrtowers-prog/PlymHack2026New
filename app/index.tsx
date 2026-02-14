@@ -40,6 +40,8 @@ export default function HomeScreen() {
   const h = useHomeScreen();
   const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const subscriptionTier = auth.user?.subscription ?? 'free';
+  const maxDistanceKm = auth.user?.routeDistanceKm ?? 1; // DB-driven, fallback to free tier
 
   // Only load contacts when logged in
   const { liveContacts } = useContacts(auth.isLoggedIn);
@@ -120,6 +122,7 @@ export default function HomeScreen() {
         navigationHeading={h.nav.userHeading}
         mapType={h.mapType}
         highlightCategory={h.highlightCategory}
+        maxDistanceKm={maxDistanceKm}
         onSelectRoute={h.setSelectedRouteId}
         onLongPress={h.handleMapLongPress}
         onMapPress={h.handleMapPress}

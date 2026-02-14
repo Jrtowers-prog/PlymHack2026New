@@ -33,6 +33,7 @@ export function useHomeScreen() {
   // ── Auth ──
   const { user } = useAuth();
   const subscriptionTier = user?.subscription ?? 'free';
+  const routeDistanceKm = user?.routeDistanceKm;
 
   useEffect(() => {
     if (onboardingStatus === 'ready' && !hasAccepted) setShowOnboarding(true);
@@ -84,7 +85,7 @@ export function useHomeScreen() {
     outOfRange,
     outOfRangeMessage,
     meta: safeRoutesMeta,
-  } = useSafeRoutes(effectiveOrigin, effectiveDestination, subscriptionTier);
+  } = useSafeRoutes(effectiveOrigin, effectiveDestination, subscriptionTier, routeDistanceKm);
 
   const routes: DirectionsRoute[] = safeRoutes;
   const directionsStatus = safeRoutesStatus;

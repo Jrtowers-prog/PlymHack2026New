@@ -51,6 +51,7 @@ export function useSafeRoutes(
   origin: LatLng | null,
   destination: LatLng | null,
   subscriptionTier: string = 'free',
+  maxDistanceKmOverride?: number,
 ): UseSafeRoutesState {
   const [status, setStatus] = useState<SafeRoutesStatus>('idle');
   const [routes, setRoutes] = useState<SafeRoute[]>([]);
@@ -88,7 +89,7 @@ export function useSafeRoutes(
           `${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`,
       );
 
-      const result = await fetchSafeRoutes(origin, destination, subscriptionTier);
+      const result = await fetchSafeRoutes(origin, destination, subscriptionTier, maxDistanceKmOverride);
 
       if (cancelRef.current !== batchId) return; // stale
 
