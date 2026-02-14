@@ -13,7 +13,7 @@
  * Security:
  * - Helmet headers
  * - CORS whitelist
- * - Rate limiting (auth: 10/15min, general: 80/15min)
+ * - Per-user rate limiting (JWT peek → user ID, fallback to IP)
  * - JWT validation on all protected routes
  * - Supabase service_role key server-side only
  * - Input validation on all endpoints
@@ -36,6 +36,7 @@ const reportsRouter = require('./routes/reports');
 const reviewsRouter = require('./routes/reviews');
 const contactsRouter = require('./routes/contacts');
 const liveRouter = require('./routes/live');
+const subscriptionsRouter = require('./routes/subscriptions');
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -53,15 +54,16 @@ app.use(createCorsMiddleware());
 app.use(express.json({ limit: '10kb' }));
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
-// Auth — stricter rate limit (10 req / 15 min)
-app.use('/api/auth', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 }), authRouter);
+// Limits are PER USER (via JWT peek) per 15 minutes; falls back to IP when
+// no token is present. magic-link & verify use ipOnly since there's no user yet.
+app.use('/api/auth', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 120 }), authRouter);
 
-// Protected routes — moderate rate limit (80 req / 15 min)
-app.use('/api/usage', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 80 }), usageRouter);
-app.use('/api/reports', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 }), reportsRouter);
-app.use('/api/reviews', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 }), reviewsRouter);
-app.use('/api/contacts', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 }), contactsRouter);
-app.use('/api/live', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 200 }), liveRouter);
+app.use('/api/usage', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 200 }), usageRouter);
+app.use('/api/reports', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 60 }), reportsRouter);
+app.use('/api/reviews', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 }), reviewsRouter);
+app.use('/api/contacts', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 100 }), contactsRouter);
+app.use('/api/live', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 500 }), liveRouter);
+app.use('/api/subscriptions', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 60 }), subscriptionsRouter);
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get('/api/health', healthCheck('user-service'));
@@ -72,5 +74,5 @@ app.use(errorHandler);
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[user] User Data Service running on http://0.0.0.0:${PORT}`);
-  console.log(`[user] Routes: auth, usage, reports, reviews, contacts, live`);
+  console.log(`[user] Routes: auth, usage, reports, reviews, contacts, live, subscriptions`);
 });
