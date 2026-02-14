@@ -14,12 +14,10 @@ import BuddyModal from '../modals/BuddyModal';
 interface Props {
   username: string | null;
   userId: string | null;
-  isLoggedIn: boolean;
   hasLiveContacts?: boolean;
-  onLoginPress: () => void;
 }
 
-export function BuddyButton({ username, userId, isLoggedIn, hasLiveContacts = false, onLoginPress }: Props) {
+export function BuddyButton({ username, userId, hasLiveContacts = false }: Props) {
   const [visible, setVisible] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -55,12 +53,12 @@ export function BuddyButton({ username, userId, isLoggedIn, hasLiveContacts = fa
           style={styles.button}
           onPress={() => setVisible(true)}
           accessibilityRole="button"
-          accessibilityLabel="Open buddy system"
+          accessibilityLabel="Open Safety Circle"
           hitSlop={8}
         >
           <Ionicons
             name={hasLiveContacts ? 'people' : 'qr-code'}
-            size={18}
+            size={22}
             color={hasLiveContacts ? '#22C55E' : '#1E293B'}
           />
           {hasLiveContacts && (
@@ -79,8 +77,6 @@ export function BuddyButton({ username, userId, isLoggedIn, hasLiveContacts = fa
         onClose={() => setVisible(false)}
         username={username}
         userId={userId}
-        isLoggedIn={isLoggedIn}
-        onLoginPress={onLoginPress}
       />
     </>
   );
@@ -88,21 +84,20 @@ export function BuddyButton({ username, userId, isLoggedIn, hasLiveContacts = fa
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
     zIndex: 100,
   },
   button: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
   },
   liveDot: {
     position: 'absolute',
