@@ -10,7 +10,7 @@
  * inside the map container.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -18,6 +18,7 @@ import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost'
 import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
 import { DownloadAppModal } from '@/src/components/modals/DownloadAppModal';
+import LoginModal from '@/src/components/modals/LoginModal';
 import { OnboardingModal } from '@/src/components/modals/OnboardingModal';
 import { NavigationOverlay } from '@/src/components/navigation/NavigationOverlay';
 import { RouteList } from '@/src/components/routes/RouteList';
@@ -28,15 +29,46 @@ import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheet
 import { AndroidDownloadBanner } from '@/src/components/ui/AndroidDownloadBanner';
 import { BuddyButton } from '@/src/components/ui/BuddyButton';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
-import { useHomeScreen } from '@/src/hooks/useHomeScreen';
+import { useAuth } from '@/src/hooks/useAuth';
 import { useContacts } from '@/src/hooks/useContacts';
+import { useHomeScreen } from '@/src/hooks/useHomeScreen';
+import { useLiveTracking } from '@/src/hooks/useLiveTracking';
 import { formatDistance, formatDuration } from '@/src/utils/format';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const h = useHomeScreen();
+  const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
-  const { liveContacts } = useContacts();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+
+  // Only load contacts when logged in
+  const { liveContacts } = useContacts(auth.isLoggedIn);
+
+  // Live tracking — auto-register push token on mount, share location during nav
+  const live = useLiveTracking();
+  const liveStarted = useRef(false);
+
+  // Auto-start live tracking when navigation begins (if logged in with contacts)
+  useEffect(() => {
+    if (h.nav.state === 'navigating' && auth.isLoggedIn && liveContacts.length > 0 && !liveStarted.current) {
+      liveStarted.current = true;
+      const dest = h.effectiveDestination;
+      live.startTracking({
+        destination_lat: dest?.latitude,
+        destination_lng: dest?.longitude,
+        destination_name: h.destSearch?.place?.name ?? 'Unknown destination',
+      });
+    }
+  }, [h.nav.state, auth.isLoggedIn, liveContacts.length, h.effectiveDestination, h.destSearch?.place?.name, live]);
+
+  // Auto-stop live tracking when navigation ends
+  useEffect(() => {
+    if (liveStarted.current && (h.nav.state === 'arrived' || h.nav.state === 'idle')) {
+      liveStarted.current = false;
+      live.stopTracking(h.nav.state === 'arrived' ? 'completed' : 'cancelled');
+    }
+  }, [h.nav.state, live]);
 
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
@@ -144,9 +176,11 @@ export default function HomeScreen() {
         {!h.isNavActive && (
           <View style={{ position: 'absolute', top: insets.top + 120, right: 12, zIndex: 100 }}>
             <BuddyButton
-              username={null}
-              userId={null}
+              username={auth.user?.username ?? null}
+              userId={auth.user?.id ?? null}
+              isLoggedIn={auth.isLoggedIn}
               hasLiveContacts={liveContacts.length > 0}
+              onLoginPress={() => setShowLoginModal(true)}
             />
           </View>
         )}
@@ -171,8 +205,7 @@ export default function HomeScreen() {
         {/* ── AI floating button ── */}
         {h.safetyResult && !h.isNavActive && h.routes.length > 0 && (
           <Animated.View
-            style={[styles.aiWrap, { bottom: Animated.add(h.sheetHeight, 12) }]}
-            pointerEvents="box-none"
+            style={[styles.aiWrap, { bottom: Animated.add(h.sheetHeight, 12), pointerEvents: 'box-none' }]}
           >
             <Pressable
               style={styles.aiButton}
@@ -354,6 +387,14 @@ export default function HomeScreen() {
         <DownloadAppModal
           visible={showDownloadModal}
           onClose={() => setShowDownloadModal(false)}
+        />
+
+        <LoginModal
+          visible={showLoginModal}
+          onClose={() => setShowLoginModal(false)}
+          onSendMagicLink={auth.sendMagicLink}
+          onVerify={auth.verify}
+          error={auth.error}
         />
       </AndroidOverlayHost>
     </View>
