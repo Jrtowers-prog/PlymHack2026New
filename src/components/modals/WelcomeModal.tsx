@@ -15,9 +15,11 @@ import * as Location from 'expo-location';
 import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
     Modal,
     Platform,
     Pressable,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
@@ -156,7 +158,15 @@ export default function WelcomeModal({
       transparent
       onRequestClose={() => {}}
     >
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          contentContainerStyle={styles.overlay}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+        >
         <View style={[styles.card, Platform.OS === 'web' && styles.webCard]}>
           {/* Progress dots */}
           <View style={styles.dots}>
@@ -300,7 +310,8 @@ export default function WelcomeModal({
             </View>
           )}
         </View>
-      </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -327,11 +338,12 @@ function FeatureRow({ icon, text }: { icon: string; text: string }) {
 
 const styles = StyleSheet.create({
   overlay: {
-    flex: 1,
+    flexGrow: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    paddingTop: 60,
   },
   card: {
     width: '100%',
