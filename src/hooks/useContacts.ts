@@ -35,10 +35,17 @@ export function useContacts(enabled: boolean = true) {
     if (!enabled) return;
     setState((s) => ({ ...s, isLoading: true, error: null }));
     try {
-      const [contacts, pending, profile] = await Promise.all([
+      // Fetch profile first to verify user exists in DB
+      const profile = await authApi.getProfile();
+      if (!profile?.id) {
+        // User not fully set up yet — skip contacts fetch
+        setState((s) => ({ ...s, isLoading: false }));
+        return;
+      }
+
+      const [contacts, pending] = await Promise.all([
         contactsApi.getAll(),
         contactsApi.getPending(),
-        authApi.getProfile(),
       ]);
       setState((s) => ({
         ...s,
