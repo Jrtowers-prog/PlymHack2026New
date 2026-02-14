@@ -85,12 +85,21 @@ export async function getTokenExpiresAt(): Promise<number | null> {
 /** Refresh the token if it expires within `bufferMs` (default 2 min). */
 export async function refreshIfNeeded(bufferMs = 2 * 60 * 1000): Promise<boolean> {
   const expiresAt = await getTokenExpiresAt();
-  if (!expiresAt) return false;
+  const token = await getAccessToken();
+
+  // No token at all — not logged in
+  if (!token) return false;
+
+  // No stored expiry but we have a token — assume still valid
+  // (can happen if session was stored before expiry tracking was added)
+  if (!expiresAt) return true;
 
   if (Date.now() + bufferMs < expiresAt) return true;  // still fresh
 
   const refreshToken = await AsyncStorage.getItem(AUTH_KEYS.refreshToken);
   if (!refreshToken) {
+    // No refresh token — check if access token is actually expired
+    if (Date.now() < expiresAt) return true; // token still valid, just can't refresh
     await clearSession();
     emitSessionEvent('expired');
     return false;
@@ -110,11 +119,15 @@ export async function refreshIfNeeded(bufferMs = 2 * 60 * 1000): Promise<boolean
       return true;
     }
   } catch {
-    // Network error — don't clear session, let the user retry
+    // Network error — if the token hasn't actually expired yet, stay logged in
+    if (Date.now() < expiresAt) return true;
     return false;
   }
 
-  // Refresh failed with a 4xx — session is dead
+  // Refresh failed with a 4xx — check if access token is still usable
+  if (Date.now() < expiresAt) return true;
+
+  // Token is truly expired and refresh failed — session is dead
   await clearSession();
   emitSessionEvent('expired');
   return false;
@@ -221,7 +234,7 @@ export const authApi = {
     return data;
   },
 
-  /** Get current user profile */
+  /** Get current user profile (retries once on network error) */
   async getProfile(): Promise<{
     id: string;
     name: string;
@@ -239,9 +252,25 @@ export const authApi = {
     const token = await getAccessToken();
     if (!token) return null;
 
-    const res = await authFetch('/api/auth/me');
-    if (!res.ok) return null;
-    return res.json();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await authFetch('/api/auth/me');
+        if (res.ok) return res.json();
+        if (res.status === 401) return null; // genuinely unauthorized
+        // Server error (5xx) — retry once
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+      } catch {
+        // Network error — retry once
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+      }
+    }
+    return null;
   },
 
   /** Update profile (name, username, platform, app_version, push_token) */

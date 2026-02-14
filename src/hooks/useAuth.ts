@@ -92,6 +92,27 @@ async function _loadSessionOnce(
 
   const profile = await authApi.getProfile();
   if (!profile) {
+    // Profile fetch failed (network issue / cold start) but we have tokens.
+    // Use cached user data so the user stays logged in.
+    const cached = await authApi.getStoredUser();
+    if (cached) {
+      return {
+        isLoggedIn: true,
+        isLoading: false,
+        user: {
+          id: cached.id,
+          email: cached.email,
+          name: '',
+          username: null,
+          platform: Platform.OS,
+          app_version: APP_VERSION,
+          disclaimer_accepted_at: null,
+          subscription: 'free',
+          routeDistanceKm: 1,
+        },
+        error: null,
+      };
+    }
     return { isLoggedIn: false, isLoading: false, user: null, error: null };
   }
 
