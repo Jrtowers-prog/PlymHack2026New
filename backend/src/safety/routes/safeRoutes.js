@@ -209,7 +209,7 @@ router.get('/', async (req, res) => {
     try {
       const result = await computeSafeRoutes(
         oLat.value, oLng.value, dLat.value, dLng.value,
-        straightLineDist, straightLineKm, startTime,
+        straightLineDist, straightLineKm, startTime, maxDistanceKm,
       );
 
       // Cache the result
@@ -257,7 +257,7 @@ router.get('/', async (req, res) => {
 /**
  * Core computation — separated for request coalescing.
  */
-async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, straightLineKm, startTime) {
+async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, straightLineKm, startTime, maxDistanceKm = DEFAULT_MAX_DISTANCE_KM) {
   console.log(`[safe-routes] 🔍 Computing: ${oLatV},${oLngV} → ${dLatV},${dLngV} (${straightLineKm.toFixed(1)} km)`);
 
   // ── 5. Compute bounding box ─────────────────────────────────────────
