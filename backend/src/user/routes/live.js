@@ -16,6 +16,7 @@
 const express = require('express');
 const { supabase } = require('../lib/supabase');
 const { requireAuth } = require('../middleware/authMiddleware');
+const { checkFeatureLimit } = require('../middleware/subscriptionMiddleware');
 const { sendPush } = require('../lib/pushNotifications');
 
 const router = express.Router();
@@ -37,7 +38,8 @@ function isValidCoord(lat, lng) {
 // ─── POST /api/live/start ────────────────────────────────────────────────────
 // Start a live session. Automatically ends any existing active session.
 // Notifies all accepted emergency contacts.
-router.post('/start', async (req, res, next) => {
+// Gated by live_sessions feature limit (free: 1/month, pro+: unlimited).
+router.post('/start', checkFeatureLimit('live_sessions'), async (req, res, next) => {
   try {
     const { current_lat, current_lng, destination_lat, destination_lng, destination_name } = req.body;
 
