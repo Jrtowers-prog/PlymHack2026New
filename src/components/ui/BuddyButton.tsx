@@ -14,10 +14,12 @@ import BuddyModal from '../modals/BuddyModal';
 interface Props {
   username: string | null;
   userId: string | null;
+  isLoggedIn: boolean;
   hasLiveContacts?: boolean;
+  onLoginPress: () => void;
 }
 
-export function BuddyButton({ username, userId, hasLiveContacts = false }: Props) {
+export function BuddyButton({ username, userId, isLoggedIn, hasLiveContacts = false, onLoginPress }: Props) {
   const [visible, setVisible] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -77,6 +79,8 @@ export function BuddyButton({ username, userId, hasLiveContacts = false }: Props
         onClose={() => setVisible(false)}
         username={username}
         userId={userId}
+        isLoggedIn={isLoggedIn}
+        onLoginPress={onLoginPress}
       />
     </>
   );
