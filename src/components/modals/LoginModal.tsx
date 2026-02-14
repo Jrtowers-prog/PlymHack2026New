@@ -304,12 +304,13 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   content: {
-    flex: 1,
+    flex: Platform.OS === 'web' ? 0 : 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
-    paddingBottom: 60,
-  },
+    paddingTop: 32,
+    paddingBottom: Platform.OS === 'web' ? 32 : 60,
+  } as any,
   iconWrap: {
     width: 80,
     height: 80,
