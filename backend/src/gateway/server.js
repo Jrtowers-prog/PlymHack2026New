@@ -34,6 +34,9 @@ const explainRouter = require('./routes/explain');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ─── Trust proxy (Render / reverse-proxy sets X-Forwarded-For) ────────────────
+app.set('trust proxy', 1);
+
 // ─── Security headers ───────────────────────────────────────────────────────
 app.use(helmet());
 

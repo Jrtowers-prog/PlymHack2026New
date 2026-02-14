@@ -35,6 +35,9 @@ const safeRoutesRouter = require('./routes/safeRoutes');
 const app = express();
 const PORT = process.env.PORT || 3002;
 
+// ─── Trust proxy (Render / reverse-proxy sets X-Forwarded-For) ────────────────
+app.set('trust proxy', 1);
+
 // ─── Security headers ───────────────────────────────────────────────────────
 app.use(helmet());
 

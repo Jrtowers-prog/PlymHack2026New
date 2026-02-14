@@ -40,6 +40,9 @@ const liveRouter = require('./routes/live');
 const app = express();
 const PORT = process.env.PORT || 3003;
 
+// ─── Trust proxy (Render / reverse-proxy sets X-Forwarded-For) ────────────────
+app.set('trust proxy', 1);
+
 // ─── Security headers ───────────────────────────────────────────────────────
 app.use(helmet());
 
