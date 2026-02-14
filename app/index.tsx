@@ -281,7 +281,7 @@ export default function HomeScreen() {
         {!h.isNavActive && auth.isLoggedIn && (
           <View style={{
             position: 'absolute',
-            top: insets.top + (contacts.length > 0 ? 345 : 295),
+            top: insets.top + (contacts.length > 0 ? 350 : 295),
             right: 12,
             zIndex: 100,
           }}>
