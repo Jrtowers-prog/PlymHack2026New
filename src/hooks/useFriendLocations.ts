@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { contactsApi } from '../services/userApi';
 
 export interface FriendMarker {
@@ -24,13 +25,16 @@ export interface FriendLocationResult {
   checkNow: () => Promise<{ found: number; names: string[] }>;
 }
 
-const POLL_INTERVAL = 10_000; // 10 seconds
+const POLL_INTERVAL = 15_000; // 15 seconds
 
 export function useFriendLocations(enabled: boolean): FriendLocationResult {
   const [friends, setFriends] = useState<FriendMarker[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const appActiveRef = useRef(true);
 
   const poll = useCallback(async (): Promise<FriendMarker[]> => {
+    // Skip polling when app is backgrounded to save server resources
+    if (!appActiveRef.current) return [];
     try {
       const contacts = await contactsApi.getAll();
       const live = contacts
@@ -75,11 +79,17 @@ export function useFriendLocations(enabled: boolean): FriendLocationResult {
     // Poll at regular intervals
     intervalRef.current = setInterval(poll, POLL_INTERVAL);
 
+    // Pause polling when app is backgrounded
+    const sub = AppState.addEventListener('change', (state) => {
+      appActiveRef.current = state === 'active';
+    });
+
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      sub.remove();
     };
   }, [enabled, poll]);
 
