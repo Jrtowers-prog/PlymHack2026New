@@ -7,12 +7,12 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import {
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    Modal,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 export interface AlertButton {
