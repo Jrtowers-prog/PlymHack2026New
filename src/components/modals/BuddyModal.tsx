@@ -15,7 +15,6 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Linking,
   Modal,
@@ -28,6 +27,7 @@ import {
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { useContacts } from '../../hooks/useContacts';
+import { CustomAlert, type AlertButton } from '../ui/CustomAlert';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const QR_SIZE = Math.min(SCREEN_W * 0.55, 220);
@@ -46,6 +46,36 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
   const [hasScanned, setHasScanned] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [respondingToId, setRespondingToId] = useState<string | null>(null);
+
+  // ─── Custom alert state ────────────────────────────────────────────────
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    icon?: string;
+    iconColor?: string;
+    buttons?: AlertButton[];
+  }>({ visible: false, title: '', message: '' });
+
+  const showAlert = useCallback(
+    (title: string, message: string, opts?: {
+      icon?: string; iconColor?: string; buttons?: AlertButton[];
+    }) => {
+      setAlertState({
+        visible: true,
+        title,
+        message,
+        icon: opts?.icon,
+        iconColor: opts?.iconColor,
+        buttons: opts?.buttons,
+      });
+    },
+    [],
+  );
+
+  const dismissAlert = useCallback(() => {
+    setAlertState((s) => ({ ...s, visible: false }));
+  }, []);
 
   const {
     contacts,
@@ -108,49 +138,41 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
 
       const user = await lookupUser(scannedUsername);
       if (!user) {
-        if (Platform.OS === 'web') {
-          window.alert('This user was not found on SafeNight.');
-          setHasScanned(false);
-        } else {
-          Alert.alert('Not Found', 'This user was not found on SafeNight.', [
-            { text: 'OK', onPress: () => setHasScanned(false) },
-          ]);
-        }
+        showAlert('Not Found', 'This user was not found on SafeNight.', {
+          icon: 'person-outline',
+          iconColor: '#F59E0B',
+          buttons: [{ text: 'OK', style: 'default', onPress: () => setHasScanned(false) }],
+        });
         return;
       }
 
       const doAdd = async () => {
         const ok = await invite(user.id, user.name);
         if (ok) {
-          if (Platform.OS === 'web') {
-            window.alert('Contact request sent.');
-          } else {
-            Alert.alert('Sent!', 'Contact request sent.');
-          }
+          showAlert('Sent!', 'Contact request sent.', {
+            icon: 'checkmark-circle',
+            iconColor: '#10B981',
+          });
           setTab('contacts');
         } else {
           setHasScanned(false);
         }
       };
 
-      if (Platform.OS === 'web') {
-        if (window.confirm(`Add ${user.name || user.username} as an emergency contact?`)) {
-          doAdd();
-        } else {
-          setHasScanned(false);
-        }
-      } else {
-        Alert.alert(
-          'Add Contact',
-          `Add ${user.name || user.username} as an emergency contact?`,
-          [
+      showAlert(
+        'Add Contact',
+        `Add ${user.name || user.username} as an emergency contact?`,
+        {
+          icon: 'person-add',
+          iconColor: '#6366F1',
+          buttons: [
             { text: 'Cancel', style: 'cancel', onPress: () => setHasScanned(false) },
-            { text: 'Add', onPress: doAdd },
+            { text: 'Add', style: 'default', onPress: doAdd },
           ],
-        );
-      }
+        },
+      );
     },
-    [hasScanned, lookupUser, invite],
+    [hasScanned, lookupUser, invite, showAlert],
   );
 
   // ─── Handle contact response ──────────────────────────────────────────
@@ -162,30 +184,27 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         const ok = await respond(id, resp);
         setRespondingToId(null);
         if (ok) {
-          if (Platform.OS === 'web') {
-            window.alert(`Contact request ${resp}.`);
-          } else {
-            Alert.alert('Success', `Contact request ${resp}.`);
-          }
+          showAlert('Success', `Contact request ${resp}.`, {
+            icon: resp === 'accepted' ? 'checkmark-circle' : 'close-circle',
+            iconColor: resp === 'accepted' ? '#10B981' : '#94A3B8',
+          });
         } else {
-          if (Platform.OS === 'web') {
-            window.alert('Failed to respond. Please try again.');
-          } else {
-            Alert.alert('Error', 'Failed to respond. Please try again.');
-          }
+          showAlert('Error', 'Failed to respond. Please try again.', {
+            icon: 'alert-circle',
+            iconColor: '#EF4444',
+          });
         }
       } catch (err: unknown) {
         setRespondingToId(null);
         const msg = err instanceof Error ? err.message : 'Unknown error';
         console.error('[BuddyModal] Respond error:', msg);
-        if (Platform.OS === 'web') {
-          window.alert(msg || 'Failed to respond to request');
-        } else {
-          Alert.alert('Error', msg || 'Failed to respond to request');
-        }
+        showAlert('Error', msg || 'Failed to respond to request', {
+          icon: 'alert-circle',
+          iconColor: '#EF4444',
+        });
       }
     },
-    [respond],
+    [respond, showAlert],
   );
 
   const handleRespond = useCallback(
@@ -193,21 +212,20 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
       const title = resp === 'accepted' ? 'Accept Contact' : 'Reject Contact';
       const message = `${resp === 'accepted' ? 'Accept' : 'Reject'} ${name}'s request?`;
 
-      if (Platform.OS === 'web') {
-        if (window.confirm(`${title}\n${message}`)) {
-          doRespond(id, resp);
-        }
-      } else {
-        Alert.alert(title, message, [
+      showAlert(title, message, {
+        icon: resp === 'accepted' ? 'person-add' : 'person-remove',
+        iconColor: resp === 'accepted' ? '#10B981' : '#F59E0B',
+        buttons: [
           { text: 'Cancel', style: 'cancel' },
           {
             text: resp === 'accepted' ? 'Accept' : 'Reject',
+            style: resp === 'accepted' ? 'default' : 'destructive',
             onPress: () => doRespond(id, resp),
           },
-        ]);
-      }
+        ],
+      });
     },
-    [doRespond],
+    [doRespond, showAlert],
   );
 
   const handleRemove = useCallback(
@@ -217,41 +235,36 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
           console.log(`[BuddyModal] Removing contact ${id}`);
           const ok = await removeContact(id);
           if (ok) {
-            if (Platform.OS === 'web') {
-              window.alert('Contact removed.');
-            } else {
-              Alert.alert('Success', 'Contact removed.');
-            }
+            showAlert('Removed', 'Contact removed.', {
+              icon: 'checkmark-circle',
+              iconColor: '#10B981',
+            });
           } else {
-            if (Platform.OS === 'web') {
-              window.alert('Failed to remove contact. Please try again.');
-            } else {
-              Alert.alert('Error', 'Failed to remove contact. Please try again.');
-            }
+            showAlert('Error', 'Failed to remove contact. Please try again.', {
+              icon: 'alert-circle',
+              iconColor: '#EF4444',
+            });
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : 'Unknown error';
           console.error('[BuddyModal] Remove contact error:', msg);
-          if (Platform.OS === 'web') {
-            window.alert(msg || 'Failed to remove contact');
-          } else {
-            Alert.alert('Error', msg || 'Failed to remove contact');
-          }
+          showAlert('Error', msg || 'Failed to remove contact', {
+            icon: 'alert-circle',
+            iconColor: '#EF4444',
+          });
         }
       };
 
-      if (Platform.OS === 'web') {
-        if (window.confirm(`Remove ${name} as your emergency contact?`)) {
-          doRemove();
-        }
-      } else {
-        Alert.alert('Remove Contact', `Remove ${name} as your emergency contact?`, [
+      showAlert('Remove Contact', `Remove ${name} as your emergency contact?`, {
+        icon: 'person-remove',
+        iconColor: '#EF4444',
+        buttons: [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Remove', style: 'destructive', onPress: doRemove },
-        ]);
-      }
+        ],
+      });
     },
-    [removeContact],
+    [removeContact, showAlert],
   );
 
   // ─── Web download prompt (replaces QR/Scan on web) ────────────────────
@@ -561,6 +574,16 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
           </Pressable>
         )}
       </View>
+
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        icon={alertState.icon}
+        iconColor={alertState.iconColor}
+        buttons={alertState.buttons}
+        onDismiss={dismissAlert}
+      />
     </Modal>
   );
 }
