@@ -26,14 +26,17 @@ import { SafetyProfileChart } from '@/src/components/safety/SafetyProfileChart';
 import { SearchBar } from '@/src/components/search/SearchBar';
 import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheets/DraggableSheet';
 import { AndroidDownloadBanner } from '@/src/components/ui/AndroidDownloadBanner';
+import { BuddyButton } from '@/src/components/ui/BuddyButton';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
 import { useHomeScreen } from '@/src/hooks/useHomeScreen';
+import { useContacts } from '@/src/hooks/useContacts';
 import { formatDistance, formatDuration } from '@/src/utils/format';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const h = useHomeScreen();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const { liveContacts } = useContacts();
 
   const distanceLabel = h.selectedRoute ? `🚶 ${formatDistance(h.selectedRoute.distanceMeters)}` : '--';
   const durationLabel = h.selectedRoute ? formatDuration(h.selectedRoute.durationSeconds) : '--';
@@ -135,6 +138,17 @@ export default function HomeScreen() {
             onClearRoute={h.clearSelectedRoute}
             onSwap={h.swapOriginAndDest}
           />
+        )}
+
+        {/* ── Buddy button (QR / contacts) ── */}
+        {!h.isNavActive && (
+          <View style={{ position: 'absolute', top: insets.top + 120, right: 12, zIndex: 100 }}>
+            <BuddyButton
+              username={null}
+              userId={null}
+              hasLiveContacts={liveContacts.length > 0}
+            />
+          </View>
         )}
 
         {/* ── Category highlight banner — shows when user tapped a stat card ── */}
