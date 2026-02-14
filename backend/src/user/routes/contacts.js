@@ -15,6 +15,7 @@
 const express = require('express');
 const { supabase } = require('../lib/supabase');
 const { requireAuth } = require('../middleware/authMiddleware');
+const { checkFeatureLimit } = require('../middleware/subscriptionMiddleware');
 
 const router = express.Router();
 
@@ -100,7 +101,8 @@ router.get('/lookup/:username', async (req, res, next) => {
 
 // ─── POST /api/contacts/invite ───────────────────────────────────────────────
 // Send a contact request to another SafeNight user.
-router.post('/invite', async (req, res, next) => {
+// Gated by emergency_contacts feature limit (free: 2, pro: 5, premium: unlimited).
+router.post('/invite', checkFeatureLimit('emergency_contacts'), async (req, res, next) => {
   try {
     const { contact_id, nickname } = req.body;
 
