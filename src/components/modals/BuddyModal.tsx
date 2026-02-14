@@ -579,7 +579,7 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         visible={alertState.visible}
         title={alertState.title}
         message={alertState.message}
-        icon={alertState.icon}
+        icon={alertState.icon as any}
         iconColor={alertState.iconColor}
         buttons={alertState.buttons}
         onDismiss={dismissAlert}

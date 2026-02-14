@@ -31,6 +31,7 @@ import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
 import { ProfileMenu } from '@/src/components/ui/ProfileMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useContacts } from '@/src/hooks/useContacts';
+import { useFriendLocations } from '@/src/hooks/useFriendLocations';
 import { useHomeScreen } from '@/src/hooks/useHomeScreen';
 import { useLiveTracking } from '@/src/hooks/useLiveTracking';
 import { formatDistance, formatDuration } from '@/src/utils/format';
@@ -40,11 +41,15 @@ export default function HomeScreen() {
   const h = useHomeScreen();
   const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showFriendsOnMap, setShowFriendsOnMap] = useState(false);
   const subscriptionTier = auth.user?.subscription ?? 'free';
   const maxDistanceKm = auth.user?.routeDistanceKm ?? 1; // DB-driven, fallback to free tier
 
   // Only load contacts when logged in
   const { liveContacts } = useContacts(auth.isLoggedIn);
+
+  // Friend locations — only poll when the toggle is on and user has live contacts
+  const friendMarkers = useFriendLocations(showFriendsOnMap && liveContacts.length > 0);
 
   // Live tracking — auto-register push token on mount, share location during nav
   const live = useLiveTracking(auth.isLoggedIn);
@@ -123,6 +128,7 @@ export default function HomeScreen() {
         mapType={h.mapType}
         highlightCategory={h.highlightCategory}
         maxDistanceKm={maxDistanceKm}
+        friendMarkers={friendMarkers}
         onSelectRoute={h.setSelectedRouteId}
         onLongPress={h.handleMapLongPress}
         onMapPress={h.handleMapPress}
@@ -193,6 +199,27 @@ export default function HomeScreen() {
               userId={auth.user?.id ?? null}
               hasLiveContacts={liveContacts.length > 0}
             />
+          </View>
+        )}
+
+        {/* ── Show Friends on Map toggle (below Safety Circle) ── */}
+        {!h.isNavActive && auth.isLoggedIn && liveContacts.length > 0 && (
+          <View style={{ position: 'absolute', top: insets.top + 295, right: 12, zIndex: 100 }}>
+            <Pressable
+              onPress={() => setShowFriendsOnMap((v) => !v)}
+              style={[
+                styles.friendToggle,
+                showFriendsOnMap && styles.friendToggleActive,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={showFriendsOnMap ? 'Hide friends on map' : 'Show friends on map'}
+            >
+              <Ionicons
+                name={showFriendsOnMap ? 'people' : 'people-outline'}
+                size={20}
+                color={showFriendsOnMap ? '#fff' : '#7C3AED'}
+              />
+            </Pressable>
           </View>
         )}
 
@@ -410,6 +437,25 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#ffffff',
+  },
+  friendToggle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#7C3AED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  friendToggleActive: {
+    backgroundColor: '#7C3AED',
+    borderColor: '#7C3AED',
   },
   pinBanner: {
     position: 'absolute',
