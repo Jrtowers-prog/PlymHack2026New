@@ -64,6 +64,7 @@ interface AuthState {
     platform: string;
     app_version: string;
     disclaimer_accepted_at: string | null;
+    subscription: string; // free, pro, premium
   } | null;
   error: string | null;
 }
@@ -115,6 +116,7 @@ async function _loadSessionOnce(
       platform: profile.platform,
       app_version: profile.app_version,
       disclaimer_accepted_at: profile.disclaimer_accepted_at ?? null,
+      subscription: profile.subscription_details?.tier ?? profile.subscription ?? 'free',
     },
     error: null,
   };

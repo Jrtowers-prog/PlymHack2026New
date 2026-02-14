@@ -12,9 +12,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
-    fetchSafeRoutes,
-    type SafeRoute,
-    type SafeRoutesResponse,
+  fetchSafeRoutes,
+  type SafeRoute,
+  type SafeRoutesResponse,
 } from '@/src/services/safeRoutes';
 import { AppError } from '@/src/types/errors';
 import type { LatLng } from '@/src/types/google';
@@ -50,6 +50,7 @@ export interface UseSafeRoutesState {
 export function useSafeRoutes(
   origin: LatLng | null,
   destination: LatLng | null,
+  subscriptionTier: string = 'free',
 ): UseSafeRoutesState {
   const [status, setStatus] = useState<SafeRoutesStatus>('idle');
   const [routes, setRoutes] = useState<SafeRoute[]>([]);
@@ -87,7 +88,7 @@ export function useSafeRoutes(
           `${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`,
       );
 
-      const result = await fetchSafeRoutes(origin, destination);
+      const result = await fetchSafeRoutes(origin, destination, subscriptionTier);
 
       if (cancelRef.current !== batchId) return; // stale
 

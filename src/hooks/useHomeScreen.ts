@@ -12,6 +12,7 @@ import type { MapType } from '@/src/components/maps/RouteMap.types';
 import { SHEET_DEFAULT } from '@/src/components/sheets/DraggableSheet';
 import { useAIExplanation } from '@/src/hooks/useAIExplanation';
 import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
+import { useAuth } from '@/src/hooks/useAuth';
 import { useAutoPlaceSearch } from '@/src/hooks/useAutoPlaceSearch';
 import { useCurrentLocation } from '@/src/hooks/useCurrentLocation';
 import { useNavigation } from '@/src/hooks/useNavigation';
@@ -28,6 +29,10 @@ export function useHomeScreen() {
   // ── Onboarding ──
   const { status: onboardingStatus, hasAccepted, error: onboardingError, accept } = useOnboarding();
   const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // ── Auth ──
+  const { user } = useAuth();
+  const subscriptionTier = user?.subscription ?? 'free';
 
   useEffect(() => {
     if (onboardingStatus === 'ready' && !hasAccepted) setShowOnboarding(true);
@@ -79,7 +84,7 @@ export function useHomeScreen() {
     outOfRange,
     outOfRangeMessage,
     meta: safeRoutesMeta,
-  } = useSafeRoutes(effectiveOrigin, effectiveDestination);
+  } = useSafeRoutes(effectiveOrigin, effectiveDestination, subscriptionTier);
 
   const routes: DirectionsRoute[] = safeRoutes;
   const directionsStatus = safeRoutesStatus;

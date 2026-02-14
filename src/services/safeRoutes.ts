@@ -14,6 +14,17 @@ import { decodePolyline } from '@/src/utils/polyline';
 
 const BACKEND_BASE = env.safetyApiUrl;
 
+// ── Subscription tier distance limits ───────────────────────────────────────
+const DISTANCE_LIMITS_KM: Record<string, number> = {
+  free: 1,      // 1 km for free users
+  pro: 10,      // 10 km for pro users
+  premium: 20,  // 20 km for premium users
+};
+
+export function getMaxDistanceKmForTier(tier: string): number {
+  return DISTANCE_LIMITS_KM[tier?.toLowerCase()] ?? DISTANCE_LIMITS_KM.free;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SafetyBreakdown {
@@ -209,6 +220,7 @@ function cacheKey(origin: LatLng, dest: LatLng): string {
 export async function fetchSafeRoutes(
   origin: LatLng,
   destination: LatLng,
+  subscriptionTier: string = 'free',
 ): Promise<SafeRoutesResponse> {
   const key = cacheKey(origin, destination);
   const cached = cache.get(key);
@@ -217,10 +229,12 @@ export async function fetchSafeRoutes(
     return cached.data;
   }
 
+  const maxDistanceKm = getMaxDistanceKmForTier(subscriptionTier);
   const url =
     `${BACKEND_BASE}/api/safe-routes?` +
     `origin_lat=${origin.latitude}&origin_lng=${origin.longitude}` +
-    `&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}`;
+    `&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}` +
+    `&max_distance=${maxDistanceKm}`;
 
   console.log(`[safeRoutes] 🔍 Fetching safe routes from ${BACKEND_BASE}...`);
 

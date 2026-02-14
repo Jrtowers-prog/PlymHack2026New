@@ -67,6 +67,26 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
     if (tab === 'scan') setHasScanned(false);
   }, [tab]);
 
+  // ─── Auto-refresh on auth errors ───────────────────────────────────────
+  useEffect(() => {
+    if (!error) return;
+    
+    // Check if error is auth-related (missing user id, invalid token, etc.)
+    const isAuthError = error.toLowerCase().includes('authentication') ||
+                       error.toLowerCase().includes('no user') ||
+                       error.toLowerCase().includes('401') ||
+                       error.toLowerCase().includes('invalid');
+    
+    if (!isAuthError) return;
+
+    // Auto-retry after 2 seconds
+    const timeoutId = setTimeout(() => {
+      refresh();
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [error, refresh]);
+
   // ─── Handle QR scan ───────────────────────────────────────────────────
   const handleBarCodeScanned = useCallback(
     async ({ data }: { data: string }) => {

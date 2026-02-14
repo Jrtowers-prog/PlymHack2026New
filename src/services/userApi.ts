@@ -230,6 +230,8 @@ export const authApi = {
     platform: string;
     app_version: string;
     disclaimer_accepted_at: string | null;
+    subscription: string;
+    subscription_details?: { tier: string; status: string };
     created_at: string;
     last_seen_at: string;
   } | null> {
