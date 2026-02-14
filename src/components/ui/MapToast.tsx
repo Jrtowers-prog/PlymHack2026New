@@ -1,5 +1,5 @@
 /**
- * MapToast — Lightweight animated toast that slides down from the top.
+ * MapToast — Lightweight animated toast that slides up from the bottom.
  *
  * Auto-dismisses after a configurable duration. Supports icon + message.
  */
@@ -26,7 +26,7 @@ interface Props {
 
 export function MapToast({ toast, onDismiss }: Props) {
   const insets = useSafeAreaInsets();
-  const slideAnim = useRef(new Animated.Value(-120)).current;
+  const slideAnim = useRef(new Animated.Value(120)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -52,7 +52,7 @@ export function MapToast({ toast, onDismiss }: Props) {
     timerRef.current = setTimeout(() => {
       Animated.parallel([
         Animated.timing(slideAnim, {
-          toValue: -120,
+          toValue: 120,
           duration: 300,
           useNativeDriver: true,
         }),
@@ -76,7 +76,7 @@ export function MapToast({ toast, onDismiss }: Props) {
       style={[
         styles.container,
         {
-          top: insets.top + 120,
+          bottom: insets.bottom + 24,
           backgroundColor: toast.bgColor ?? 'rgba(30, 30, 46, 0.95)',
           transform: [{ translateY: slideAnim }],
           opacity: opacityAnim,
