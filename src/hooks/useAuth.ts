@@ -26,6 +26,7 @@ interface AuthState {
     id: string;
     email: string;
     name: string;
+    username: string | null;
     platform: string;
     app_version: string;
   } | null;
@@ -55,6 +56,7 @@ export function useAuth() {
                 id: profile.id,
                 email: profile.email,
                 name: profile.name,
+                username: profile.username ?? null,
                 platform: profile.platform,
                 app_version: profile.app_version,
               },
@@ -108,6 +110,7 @@ export function useAuth() {
               id: profile.id,
               email: profile.email,
               name: profile.name,
+              username: profile.username ?? null,
               platform: profile.platform,
               app_version: profile.app_version,
             }
@@ -115,6 +118,7 @@ export function useAuth() {
               id: data.user.id,
               email: data.user.email,
               name: '',
+              username: null,
               platform: Platform.OS,
               app_version: APP_VERSION,
             },
@@ -159,11 +163,24 @@ export function useAuth() {
     }
   }, []);
 
+  const updateUsername = useCallback(async (username: string) => {
+    try {
+      await authApi.updateProfile({ username });
+      setState((s) =>
+        s.user ? { ...s, user: { ...s.user, username } } : s,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   return {
     ...state,
     sendMagicLink,
     verify,
     logout,
     updateName,
+    updateUsername,
   };
 }
