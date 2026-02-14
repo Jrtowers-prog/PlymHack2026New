@@ -14,16 +14,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { useContacts } from '../../hooks/useContacts';
@@ -31,18 +31,24 @@ import { useContacts } from '../../hooks/useContacts';
 const { width: SCREEN_W } = Dimensions.get('window');
 const QR_SIZE = Math.min(SCREEN_W * 0.55, 220);
 
+// Username validation: 3-20 chars, letters/numbers/underscores
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+
 interface Props {
   visible: boolean;
   onClose: () => void;
   username: string | null;
   userId: string | null;
+  isLoggedIn: boolean;
+  onLoginPress: () => void;
 }
 
 type Tab = 'qr' | 'scan' | 'contacts';
 
-export default function BuddyModal({ visible, onClose, username: initialUsername, userId }: Props) {
+export default function BuddyModal({ visible, onClose, username: initialUsername, userId, isLoggedIn, onLoginPress }: Props) {
   const [tab, setTab] = useState<Tab>('qr');
   const [usernameInput, setUsernameInput] = useState('');
+  const [usernameError, setUsernameError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -61,7 +67,7 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
     clearError,
     refresh,
     liveContacts,
-  } = useContacts();
+  } = useContacts(isLoggedIn);
 
   const currentUsername = username || initialUsername;
 
@@ -72,12 +78,18 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
 
   // ─── Save username ────────────────────────────────────────────────────
   const handleSaveUsername = useCallback(async () => {
-    if (!usernameInput.trim()) return;
+    const trimmed = usernameInput.trim();
+    if (!trimmed) return;
+    if (!USERNAME_RE.test(trimmed)) {
+      setUsernameError('Username must be 3-20 chars: letters, numbers, or underscores only.');
+      return;
+    }
+    setUsernameError(null);
     setIsSaving(true);
-    const ok = await setUsername(usernameInput.trim());
+    const ok = await setUsername(trimmed);
     setIsSaving(false);
     if (!ok) {
-      Alert.alert('Error', error || 'Failed to set username');
+      Alert.alert('Error', error || 'Failed to set username. It may already be taken.');
     }
   }, [usernameInput, setUsername, error]);
 
@@ -174,16 +186,23 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
           <Ionicons name="person-add" size={40} color="#6366F1" />
           <Text style={styles.subtitle}>Set a username to create your QR code</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, usernameError ? styles.inputError : null]}
             placeholder="Choose a username"
             placeholderTextColor="#94A3B8"
             value={usernameInput}
-            onChangeText={setUsernameInput}
+            onChangeText={(t) => {
+              setUsernameInput(t.replace(/\s/g, ''));
+              if (usernameError) setUsernameError(null);
+            }}
             autoCapitalize="none"
             autoCorrect={false}
             maxLength={20}
           />
-          <Text style={styles.hint}>3-20 chars, letters/numbers/underscores</Text>
+          {usernameError ? (
+            <Text style={styles.validationError}>{usernameError}</Text>
+          ) : (
+            <Text style={styles.hint}>3-20 chars, letters/numbers/underscores</Text>
+          )}
           <Pressable
             style={[styles.button, !usernameInput.trim() && styles.buttonDisabled]}
             onPress={handleSaveUsername}
@@ -382,7 +401,20 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
         )}
 
         {/* Loading state */}
-        {isLoading && tab === 'contacts' ? (
+        {!isLoggedIn ? (
+          <View style={styles.tabContent}>
+            <Ionicons name="lock-closed" size={48} color="#94A3B8" />
+            <Text style={[styles.subtitle, { marginTop: 16 }]}>
+              Log in to use the Buddy System
+            </Text>
+            <Text style={[styles.hint, { marginBottom: 20, textAlign: 'center' }]}>
+              Add emergency contacts, share your live location while walking, and get notified when friends arrive safely.
+            </Text>
+            <Pressable style={styles.button} onPress={() => { onClose(); onLoginPress(); }}>
+              <Text style={styles.buttonText}>Log In</Text>
+            </Pressable>
+          </View>
+        ) : isLoading && tab === 'contacts' ? (
           <View style={styles.loading}>
             <ActivityIndicator size="large" color="#6366F1" />
           </View>
@@ -705,5 +737,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#15803D',
+  },
+  // Validation
+  inputError: {
+    borderColor: '#EF4444',
+  },
+  validationError: {
+    fontSize: 12,
+    color: '#EF4444',
+    fontWeight: '500',
   },
 });
