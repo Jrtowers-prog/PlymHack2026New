@@ -65,6 +65,13 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
 
   const currentUsername = username || initialUsername;
 
+  // Refresh contacts every time the modal opens
+  useEffect(() => {
+    if (visible) {
+      refresh();
+    }
+  }, [visible, refresh]);
+
   // Reset scan state when switching tabs
   useEffect(() => {
     if (tab === 'scan') setHasScanned(false);
