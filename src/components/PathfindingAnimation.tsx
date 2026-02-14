@@ -110,20 +110,38 @@ function buildMaze(): Seg[] {
   return out;
 }
 
-export const PathfindingAnimation: React.FC = () => {
+interface Props {
+  duration?: number;
+  loop?: boolean;
+  opacity?: number;
+}
+
+export const PathfindingAnimation: React.FC<Props> = ({ 
+  duration = 2800, 
+  loop = false,
+  opacity = 0.3,
+}) => {
   const segs = useMemo(() => buildMaze(), []);
   const prog = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(prog, {
-      toValue: 1,
-      duration: 2800,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    const animate = () => {
+      prog.setValue(0);
+      Animated.timing(prog, {
+        toValue: 1,
+        duration,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished && loop) {
+          animate();
+        }
+      });
+    };
+    animate();
+  }, [duration, loop, prog]);
 
   return (
-    <View style={st.wrap} pointerEvents="none">
+    <View style={[st.wrap, { pointerEvents: 'none' }]}>
       {segs.map((sg, i) => (
         <Animated.View
           key={i}
@@ -137,7 +155,7 @@ export const PathfindingAnimation: React.FC = () => {
             backgroundColor: '#94A3B8',
             opacity: prog.interpolate({
               inputRange: [Math.max(0, sg.t - 0.008), sg.t + 0.002],
-              outputRange: [0, 0.3],
+              outputRange: [0, opacity],
               extrapolate: 'clamp',
             }),
           }}
