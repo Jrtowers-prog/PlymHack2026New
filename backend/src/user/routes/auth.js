@@ -48,8 +48,8 @@ router.post('/magic-link', async (req, res, next) => {
     });
 
     if (error) {
-      console.error('[auth] Magic link error:', error.message);
-      return res.status(400).json({ error: 'Failed to send magic link' });
+      console.error('[auth] Magic link error:', error.message, error.status, JSON.stringify(error));
+      return res.status(400).json({ error: error.message || 'Failed to send magic link' });
     }
 
     res.json({ message: 'Magic link sent — check your email' });
