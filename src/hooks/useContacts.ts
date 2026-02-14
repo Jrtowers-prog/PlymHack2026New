@@ -136,10 +136,13 @@ export function useContacts(enabled: boolean = true) {
     async (contactId: string) => {
       try {
         await contactsApi.remove(contactId);
+        // Optimistic remove from local state
         setState((s) => ({
           ...s,
           contacts: s.contacts.filter((c) => c.id !== contactId),
         }));
+        // Then refresh from server to ensure consistency
+        await refresh();
         return true;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to remove';
@@ -147,7 +150,7 @@ export function useContacts(enabled: boolean = true) {
         return false;
       }
     },
-    [],
+    [refresh],
   );
 
   const clearError = useCallback(() => {
