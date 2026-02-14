@@ -345,8 +345,11 @@ export function useAuth() {
           : s,
       );
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to accept disclaimer';
+      setState((s) => ({ ...s, error: msg }));
+      console.error('[auth] Disclaimer accept error:', err);
+      throw err;
     }
   }, []);
 

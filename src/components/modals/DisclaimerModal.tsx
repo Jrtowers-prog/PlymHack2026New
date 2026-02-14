@@ -7,7 +7,7 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Modal,
@@ -70,9 +70,17 @@ export default function DisclaimerModal({ visible, onAccept }: Props) {
   const insets = useSafeAreaInsets();
   const [hasScrolledToEnd, setHasScrolledToEnd] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const contentH = useRef(0);
   const layoutH = useRef(0);
+
+  // Clear error when modal opens/closes
+  useEffect(() => {
+    if (!visible) {
+      setAcceptError(null);
+    }
+  }, [visible]);
 
   // Check whether content is short enough that no scrolling is needed
   const checkIfNoScrollNeeded = useCallback(() => {
@@ -113,8 +121,12 @@ export default function DisclaimerModal({ visible, onAccept }: Props) {
 
   const handleAccept = useCallback(async () => {
     setIsAccepting(true);
+    setAcceptError(null);
     try {
       await onAccept();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to accept disclaimer. Please try again.';
+      setAcceptError(msg);
     } finally {
       setIsAccepting(false);
     }
@@ -194,11 +206,14 @@ export default function DisclaimerModal({ visible, onAccept }: Props) {
           )}
         </Pressable>
 
-        {!hasScrolledToEnd && (
+        {/* Error message or disabled hint */}
+        {acceptError ? (
+          <Text style={styles.errorHint}>{acceptError}</Text>
+        ) : !hasScrolledToEnd ? (
           <Text style={styles.disabledHint}>
             You must read the full disclaimer before accepting
           </Text>
-        )}
+        ) : null}
       </View>
     </Modal>
   );
@@ -306,5 +321,12 @@ const styles = StyleSheet.create({
     color: '#98A2B3',
     textAlign: 'center',
     marginTop: 6,
+  },
+  errorHint: {
+    fontSize: 12,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginTop: 8,
+    fontWeight: '500',
   },
 });
