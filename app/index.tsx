@@ -18,7 +18,6 @@ import { AndroidOverlayHost } from '@/src/components/android/AndroidOverlayHost'
 import RouteMap from '@/src/components/maps/RouteMap';
 import { AIExplanationModal } from '@/src/components/modals/AIExplanationModal';
 import { DownloadAppModal } from '@/src/components/modals/DownloadAppModal';
-import LoginModal from '@/src/components/modals/LoginModal';
 import { OnboardingModal } from '@/src/components/modals/OnboardingModal';
 import { NavigationOverlay } from '@/src/components/navigation/NavigationOverlay';
 import { RouteList } from '@/src/components/routes/RouteList';
@@ -29,6 +28,7 @@ import { DraggableSheet, SHEET_DEFAULT, SHEET_MIN } from '@/src/components/sheet
 import { AndroidDownloadBanner } from '@/src/components/ui/AndroidDownloadBanner';
 import { BuddyButton } from '@/src/components/ui/BuddyButton';
 import { JailLoadingAnimation } from '@/src/components/ui/JailLoadingAnimation';
+import { ProfileMenu } from '@/src/components/ui/ProfileMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useContacts } from '@/src/hooks/useContacts';
 import { useHomeScreen } from '@/src/hooks/useHomeScreen';
@@ -40,7 +40,6 @@ export default function HomeScreen() {
   const h = useHomeScreen();
   const auth = useAuth();
   const [showDownloadModal, setShowDownloadModal] = useState(false);
-  const [showLoginModal, setShowLoginModal] = useState(false);
 
   // Only load contacts when logged in
   const { liveContacts } = useContacts(auth.isLoggedIn);
@@ -172,15 +171,24 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* ── Buddy button (QR / contacts) ── */}
+        {/* ── Profile / Logout button ── */}
+        {!h.isNavActive && auth.isLoggedIn && (
+          <View style={{ position: 'absolute', top: insets.top + 190, right: 12, zIndex: 110 }}>
+            <ProfileMenu
+              name={auth.user?.name ?? auth.user?.username ?? null}
+              email={auth.user?.email ?? null}
+              onLogout={auth.logout}
+            />
+          </View>
+        )}
+
+        {/* ── Safety Circle button (right under profile button) ── */}
         {!h.isNavActive && (
-          <View style={{ position: 'absolute', top: insets.top + 120, right: 12, zIndex: 100 }}>
+          <View style={{ position: 'absolute', top: insets.top + 240, right: 12, zIndex: 100 }}>
             <BuddyButton
               username={auth.user?.username ?? null}
               userId={auth.user?.id ?? null}
-              isLoggedIn={auth.isLoggedIn}
               hasLiveContacts={liveContacts.length > 0}
-              onLoginPress={() => setShowLoginModal(true)}
             />
           </View>
         )}
@@ -387,14 +395,6 @@ export default function HomeScreen() {
         <DownloadAppModal
           visible={showDownloadModal}
           onClose={() => setShowDownloadModal(false)}
-        />
-
-        <LoginModal
-          visible={showLoginModal}
-          onClose={() => setShowLoginModal(false)}
-          onSendMagicLink={auth.sendMagicLink}
-          onVerify={auth.verify}
-          error={auth.error}
         />
       </AndroidOverlayHost>
     </View>
