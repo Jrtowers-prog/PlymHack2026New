@@ -11,6 +11,9 @@ node_modules/
 backend/.env
 backend/.env.example
 
+# Database schema files
+backend/src/user/schema.sql
+
 # Summaries / notes
 Summary.txt
 
