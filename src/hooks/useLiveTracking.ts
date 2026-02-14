@@ -18,22 +18,42 @@ import { liveApi, type LiveSession, type WatchResult } from '../services/userApi
 // ─── Push notification setup ─────────────────────────────────────────────────
 // expo-notifications crashes on web at import time (localStorage SSR issue),
 // so we lazy-load it only on native platforms.
+// In Expo Go SDK 53+, the module loads but remote notification features throw.
+// We detect Expo Go and skip entirely to avoid the native error log.
 let Notifications: typeof import('expo-notifications') | null = null;
 
 if (Platform.OS !== 'web') {
-  // Safe to import — we're on iOS or Android
-  Notifications = require('expo-notifications');
+  // Detect Expo Go — push notifications are not supported there in SDK 53+
+  let isExpoGo = false;
+  try {
+    const Constants = require('expo-constants');
+    isExpoGo = Constants.default?.appOwnership === 'expo';
+  } catch {
+    // expo-constants not available — assume not Expo Go
+  }
 
-  // Configure how notifications appear when the app is in the foreground
-  Notifications!.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
+  if (isExpoGo) {
+    console.warn('[push] Running in Expo Go — push notifications disabled. Use a development build.');
+  } else {
+    try {
+      const mod = require('expo-notifications');
+      if (mod && typeof mod.setNotificationHandler === 'function') {
+        mod.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+        Notifications = mod;
+      }
+    } catch {
+      console.warn('[push] expo-notifications not available. Push disabled.');
+      Notifications = null;
+    }
+  }
 }
 
 /** Register for Expo push notifications and return the token */
