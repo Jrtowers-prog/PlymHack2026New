@@ -138,7 +138,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, name, platform, app_version, created_at, last_seen_at')
+      .select('id, name, username, platform, app_version, created_at, last_seen_at')
       .eq('id', req.user.id)
       .single();
 
@@ -162,11 +162,11 @@ router.get('/me', requireAuth, async (req, res, next) => {
 });
 
 // ─── POST /api/auth/update-profile ──────────────────────────────────────────
-// Update name, platform, app_version.
+// Update name, platform, app_version, push_token.
 router.post('/update-profile', requireAuth, async (req, res, next) => {
   try {
     const updates = {};
-    const { name, platform, app_version } = req.body;
+    const { name, platform, app_version, push_token } = req.body;
 
     if (typeof name === 'string') {
       updates.name = name.trim().slice(0, MAX_NAME);
@@ -176,6 +176,9 @@ router.post('/update-profile', requireAuth, async (req, res, next) => {
     }
     if (typeof app_version === 'string' && app_version.length <= 20) {
       updates.app_version = app_version;
+    }
+    if (typeof push_token === 'string' && push_token.length <= 200) {
+      updates.push_token = push_token;
     }
 
     if (Object.keys(updates).length === 0) {
