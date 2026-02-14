@@ -12,7 +12,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -49,43 +48,48 @@ export default function LoginModal({
   const [name, setName] = useState('');
   const [otp, setOtp] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  // Combine hook error and local error
+  const displayError = localError || error;
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const handleSend = useCallback(async () => {
     if (!isEmailValid || !name.trim()) return;
+    setLocalError(null);
     setIsLoading(true);
     const ok = await onSendMagicLink(email.trim().toLowerCase(), name.trim());
     setIsLoading(false);
     if (ok) {
       setStep('otp');
-    } else {
-      Alert.alert('Error', error || 'Failed to send login code. Try again.');
     }
-  }, [email, name, isEmailValid, onSendMagicLink, error]);
+    // error is shown via displayError from the hook
+  }, [email, name, isEmailValid, onSendMagicLink]);
 
   const handleVerify = useCallback(async () => {
     if (otp.length < 6) return;
+    setLocalError(null);
     setIsLoading(true);
     const ok = await onVerify(email.trim().toLowerCase(), otp.trim());
     setIsLoading(false);
     if (ok) {
-      // Reset state and close
       setStep('email');
       setEmail('');
       setName('');
       setOtp('');
+      setLocalError(null);
       onClose();
-    } else {
-      Alert.alert('Error', error || 'Invalid or expired code. Try again.');
     }
-  }, [email, otp, onVerify, error, onClose]);
+    // error is shown via displayError from the hook
+  }, [email, otp, onVerify, onClose]);
 
   const handleClose = useCallback(() => {
     setStep('email');
     setEmail('');
     setName('');
     setOtp('');
+    setLocalError(null);
     onClose();
   }, [onClose]);
 
@@ -97,152 +101,285 @@ export default function LoginModal({
       onRequestClose={dismissable ? handleClose : undefined}
       transparent={false}
     >
-      {/* Web: Background animation */}
-      {Platform.OS === 'web' && (
-        <View style={styles.webBackground}>
-          <PathfindingAnimation duration={18000} loop opacity={0.15} />
-        </View>
-      )}
-
-      <KeyboardAvoidingView
-        style={[
-          styles.container,
-          Platform.OS === 'web' && styles.webContainer,
-        ]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView
-          contentContainerStyle={[
-            styles.scrollContent,
-            Platform.OS === 'web' && styles.webScrollContent,
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={[
-            styles.card,
-            Platform.OS === 'web' && styles.webCard,
-          ]}>
-            {/* Header */}
-            <View style={styles.header}>
-              <Text style={styles.title}>
-                {step === 'email' ? 'Log In' : 'Enter Code'}
-              </Text>
-              {dismissable && (
-                <Pressable onPress={handleClose} style={styles.closeBtn} hitSlop={12}>
-                  <Ionicons name="close" size={24} color="#64748B" />
-                </Pressable>
-              )}
-            </View>
-
-            <View style={styles.content}>
-              {step === 'email' ? (
-            <>
-              <View style={styles.iconWrap}>
-                <Ionicons name="shield-checkmark" size={48} color="#6366F1" />
-              </View>
-              <Text style={styles.heading}>Sign in to SafeNight</Text>
-              <Text style={styles.subtitle}>
-                We'll send a magic link to your email — no password needed.
-              </Text>
-
-              <TextInput
-                style={styles.input}
-                placeholder="Your name"
-                placeholderTextColor="#94A3B8"
-                value={name}
-                onChangeText={setName}
-                autoCapitalize="words"
-                autoCorrect={false}
-                returnKeyType="next"
-              />
-
-              <TextInput
-                style={styles.input}
-                placeholder="Email address"
-                placeholderTextColor="#94A3B8"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="done"
-              />
-
-              <Pressable
-                style={[
-                  styles.button,
-                  (!isEmailValid || !name.trim()) && styles.buttonDisabled,
-                ]}
-                onPress={handleSend}
-                disabled={!isEmailValid || !name.trim() || isLoading}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.buttonText}>Send Login Code</Text>
-                )}
-              </Pressable>
-            </>
-          ) : (
-            <>
-              <View style={styles.iconWrap}>
-                <Ionicons name="mail" size={48} color="#6366F1" />
-              </View>
-              <Text style={styles.heading}>Check your email</Text>
-              <Text style={styles.subtitle}>
-                We sent a 6-digit code to{'\n'}
-                <Text style={styles.emailHighlight}>{email}</Text>
-              </Text>
-
-              <TextInput
-                style={[styles.input, styles.otpInput]}
-                placeholder="000000"
-                placeholderTextColor="#94A3B8"
-                value={otp}
-                onChangeText={(t) => setOtp(t.replace(/[^0-9]/g, ''))}
-                keyboardType="number-pad"
-                maxLength={6}
-                autoFocus
-                textAlign="center"
-              />
-
-              <Pressable
-                style={[
-                  styles.button,
-                  otp.length < 6 && styles.buttonDisabled,
-                ]}
-                onPress={handleVerify}
-                disabled={otp.length < 6 || isLoading}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.buttonText}>Verify</Text>
-                )}
-              </Pressable>
-
-              <Pressable
-                style={styles.linkBtn}
-                onPress={() => {
-                  setStep('email');
-                  setOtp('');
-                }}
-              >
-                <Text style={styles.linkText}>Use a different email</Text>
-              </Pressable>
-            </>
-          )}
-
-          {error && (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
-        </View>
+      {Platform.OS === 'web' ? (
+        /* ─── Web layout: animation bg + centered card ─── */
+        <View style={styles.webRoot}>
+          <View style={styles.webBackground}>
+            <PathfindingAnimation duration={18000} loop opacity={0.15} />
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          <View style={styles.webForeground}>
+            <View style={styles.webCard}>
+              {/* Header */}
+              <View style={styles.header}>
+                <Text style={styles.title}>
+                  {step === 'email' ? 'Log In' : 'Enter Code'}
+                </Text>
+                {dismissable && (
+                  <Pressable onPress={handleClose} style={styles.closeBtn} hitSlop={12}>
+                    <Ionicons name="close" size={24} color="#64748B" />
+                  </Pressable>
+                )}
+              </View>
+
+              <View style={styles.content}>
+                {step === 'email' ? (
+                  <>
+                    <View style={styles.iconWrap}>
+                      <Ionicons name="shield-checkmark" size={48} color="#6366F1" />
+                    </View>
+                    <Text style={styles.heading}>Sign in to SafeNight</Text>
+                    <Text style={styles.subtitle}>
+                      We'll send a magic link to your email — no password needed.
+                    </Text>
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Your name"
+                      placeholderTextColor="#94A3B8"
+                      value={name}
+                      onChangeText={setName}
+                      autoCapitalize="words"
+                      autoCorrect={false}
+                      returnKeyType="next"
+                    />
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Email address"
+                      placeholderTextColor="#94A3B8"
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="done"
+                    />
+
+                    <Pressable
+                      style={[
+                        styles.button,
+                        (!isEmailValid || !name.trim()) && styles.buttonDisabled,
+                      ]}
+                      onPress={handleSend}
+                      disabled={!isEmailValid || !name.trim() || isLoading}
+                    >
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Send Login Code</Text>
+                      )}
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.iconWrap}>
+                      <Ionicons name="mail" size={48} color="#6366F1" />
+                    </View>
+                    <Text style={styles.heading}>Check your email</Text>
+                    <Text style={styles.subtitle}>
+                      We sent a 6-digit code to{'\n'}
+                      <Text style={styles.emailHighlight}>{email}</Text>
+                    </Text>
+
+                    <TextInput
+                      style={[styles.input, styles.otpInput]}
+                      placeholder="000000"
+                      placeholderTextColor="#94A3B8"
+                      value={otp}
+                      onChangeText={(t) => setOtp(t.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      autoFocus
+                      textAlign="center"
+                    />
+
+                    <Pressable
+                      style={[
+                        styles.button,
+                        otp.length < 6 && styles.buttonDisabled,
+                      ]}
+                      onPress={handleVerify}
+                      disabled={otp.length < 6 || isLoading}
+                    >
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Verify</Text>
+                      )}
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.linkBtn}
+                      onPress={() => {
+                        setStep('email');
+                        setOtp('');
+                      }}
+                    >
+                      <Text style={styles.linkText}>Use a different email</Text>
+                    </Pressable>
+                  </>
+                )}
+
+                {displayError && (
+                  <Pressable
+                    style={styles.errorBanner}
+                    onPress={() => setLocalError(null)}
+                  >
+                    <Ionicons
+                      name={displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
+                      size={18}
+                      color="#DC2626"
+                      style={styles.errorIcon}
+                    />
+                    <Text style={styles.errorText}>{displayError}</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          </View>
+        </View>
+      ) : (
+        /* ─── Native layout ─── */
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.card}>
+              {/* Header */}
+              <View style={styles.header}>
+                <Text style={styles.title}>
+                  {step === 'email' ? 'Log In' : 'Enter Code'}
+                </Text>
+                {dismissable && (
+                  <Pressable onPress={handleClose} style={styles.closeBtn} hitSlop={12}>
+                    <Ionicons name="close" size={24} color="#64748B" />
+                  </Pressable>
+                )}
+              </View>
+
+              <View style={styles.content}>
+                {step === 'email' ? (
+                  <>
+                    <View style={styles.iconWrap}>
+                      <Ionicons name="shield-checkmark" size={48} color="#6366F1" />
+                    </View>
+                    <Text style={styles.heading}>Sign in to SafeNight</Text>
+                    <Text style={styles.subtitle}>
+                      We'll send a magic link to your email — no password needed.
+                    </Text>
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Your name"
+                      placeholderTextColor="#94A3B8"
+                      value={name}
+                      onChangeText={setName}
+                      autoCapitalize="words"
+                      autoCorrect={false}
+                      returnKeyType="next"
+                    />
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Email address"
+                      placeholderTextColor="#94A3B8"
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="done"
+                    />
+
+                    <Pressable
+                      style={[
+                        styles.button,
+                        (!isEmailValid || !name.trim()) && styles.buttonDisabled,
+                      ]}
+                      onPress={handleSend}
+                      disabled={!isEmailValid || !name.trim() || isLoading}
+                    >
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Send Login Code</Text>
+                      )}
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.iconWrap}>
+                      <Ionicons name="mail" size={48} color="#6366F1" />
+                    </View>
+                    <Text style={styles.heading}>Check your email</Text>
+                    <Text style={styles.subtitle}>
+                      We sent a 6-digit code to{'\n'}
+                      <Text style={styles.emailHighlight}>{email}</Text>
+                    </Text>
+
+                    <TextInput
+                      style={[styles.input, styles.otpInput]}
+                      placeholder="000000"
+                      placeholderTextColor="#94A3B8"
+                      value={otp}
+                      onChangeText={(t) => setOtp(t.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      autoFocus
+                      textAlign="center"
+                    />
+
+                    <Pressable
+                      style={[
+                        styles.button,
+                        otp.length < 6 && styles.buttonDisabled,
+                      ]}
+                      onPress={handleVerify}
+                      disabled={otp.length < 6 || isLoading}
+                    >
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Verify</Text>
+                      )}
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.linkBtn}
+                      onPress={() => {
+                        setStep('email');
+                        setOtp('');
+                      }}
+                    >
+                      <Text style={styles.linkText}>Use a different email</Text>
+                    </Pressable>
+                  </>
+                )}
+
+                {displayError && (
+                  <Pressable
+                    style={styles.errorBanner}
+                    onPress={() => setLocalError(null)}
+                  >
+                    <Ionicons
+                      name={displayError.includes('Server is down') ? 'cloud-offline-outline' : 'alert-circle-outline'}
+                      size={18}
+                      color="#DC2626"
+                      style={styles.errorIcon}
+                    />
+                    <Text style={styles.errorText}>{displayError}</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      )}
     </Modal>
   );
 }
@@ -252,28 +389,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  webBackground: {
-    ...StyleSheet.absoluteFillObject,
+  /* ─── Web-only styles ─── */
+  webRoot: {
+    flex: 1,
     backgroundColor: '#F1F5F9',
   },
-  webContainer: {
-    backgroundColor: 'transparent',
+  webBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  scrollContent: {
-    flexGrow: 1,
-  },
-  webScrollContent: {
-    flexGrow: 1,
+  webForeground: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 40,
-    paddingHorizontal: 20,
-  },
-  card: {
-    flex: 1,
+    padding: 20,
   },
   webCard: {
-    flex: 0,
     width: '100%',
     maxWidth: 440,
     backgroundColor: '#FFFFFF',
@@ -285,6 +419,13 @@ const styles = StyleSheet.create({
     elevation: 12,
     overflow: 'hidden',
   } as any,
+  /* ─── Shared / Native styles ─── */
+  scrollContent: {
+    flexGrow: 1,
+  },
+  card: {
+    flex: 1,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -292,9 +433,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 12,
-    borderBottomWidth: Platform.OS === 'web' ? 1 : 0,
-    borderBottomColor: '#E2E8F0',
-  } as any,
+  },
   title: {
     fontSize: 22,
     fontWeight: '700',
@@ -304,13 +443,13 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   content: {
-    flex: Platform.OS === 'web' ? 0 : 1,
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
     paddingTop: 32,
-    paddingBottom: Platform.OS === 'web' ? 32 : 60,
-  } as any,
+    paddingBottom: 60,
+  },
   iconWrap: {
     width: 80,
     height: 80,
@@ -382,16 +521,25 @@ const styles = StyleSheet.create({
   },
   errorBanner: {
     backgroundColor: '#FEF2F2',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
     marginTop: 16,
     width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  errorIcon: {
+    marginRight: 10,
+    flexShrink: 0,
   },
   errorText: {
-    color: '#EF4444',
+    color: '#DC2626',
     fontSize: 13,
     fontWeight: '600',
-    textAlign: 'center',
+    flex: 1,
+    lineHeight: 18,
   },
 });

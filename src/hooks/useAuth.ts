@@ -19,6 +19,26 @@ try {
   // Fallback
 }
 
+/** Detect network vs server errors and return a friendly message */
+function isNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const m = err.message.toLowerCase();
+  return (
+    m.includes('network request failed') ||
+    m.includes('failed to fetch') ||
+    m.includes('econnrefused') ||
+    m.includes('networkerror') ||
+    m.includes('load failed') ||
+    m.includes('timeout')
+  );
+}
+
+function friendlyError(err: unknown, action: 'send' | 'verify'): string {
+  if (isNetworkError(err)) return 'Server is down. Try again in a bit.';
+  if (action === 'verify') return 'Invalid or expired code. Try again.';
+  return 'Something went wrong. Give it another go.';
+}
+
 interface AuthState {
   isLoggedIn: boolean;
   isLoading: boolean;
@@ -88,7 +108,7 @@ export function useAuth() {
       setState((s) => ({ ...s, isLoading: false }));
       return true;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to send magic link';
+      const msg = friendlyError(err, 'send');
       setState((s) => ({ ...s, error: msg, isLoading: false }));
       return false;
     }
@@ -136,7 +156,7 @@ export function useAuth() {
 
       return true;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Verification failed';
+      const msg = friendlyError(err, 'verify');
       setState((s) => ({ ...s, error: msg, isLoading: false }));
       return false;
     }
