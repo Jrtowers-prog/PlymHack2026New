@@ -64,9 +64,11 @@ export default function RootLayout() {
     }
   }, [auth.isLoggedIn, auth.user]);
 
-  const handleWelcomeComplete = useCallback(() => {
+  const handleWelcomeComplete = useCallback(async () => {
+    // Re-fetch profile from server so all hooks see the latest name/username
+    await auth.refreshProfile();
     setShowWelcome(false);
-  }, []);
+  }, [auth.refreshProfile]);
 
   const handleAcceptLocation = useCallback(() => {
     setLocationGranted(true);

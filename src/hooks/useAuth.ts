@@ -382,6 +382,33 @@ export function useAuth() {
     }
   }, []);
 
+  /** Re-fetch the profile from the server and update local state.
+   *  Call this after profile mutations (name, username) to ensure
+   *  all hooks see the latest DB data. */
+  const refreshProfile = useCallback(async () => {
+    try {
+      const profile = await authApi.getProfile();
+      if (!profile) return;
+      setState((s) => ({
+        ...s,
+        isLoggedIn: true,
+        user: {
+          id: profile.id,
+          email: profile.email,
+          name: profile.name,
+          username: profile.username ?? null,
+          platform: profile.platform,
+          app_version: profile.app_version,
+          disclaimer_accepted_at: profile.disclaimer_accepted_at ?? null,
+          subscription: profile.subscription_details?.tier ?? profile.subscription ?? 'free',
+          routeDistanceKm: profile.route_distance_km ?? 1,
+        },
+      }));
+    } catch {
+      // Silent fail — optimistic state is still fine
+    }
+  }, []);
+
   return {
     ...state,
     sendMagicLink,
@@ -390,5 +417,6 @@ export function useAuth() {
     updateName,
     updateUsername,
     acceptDisclaimer,
+    refreshProfile,
   };
 }
