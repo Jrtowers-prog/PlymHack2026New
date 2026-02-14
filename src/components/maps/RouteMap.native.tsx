@@ -49,6 +49,13 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       border:1px solid rgba(255,255,255,0.2);box-shadow:0 2px 8px rgba(0,0,0,.4);
       text-shadow:0 1px 3px rgba(0,0,0,.5);animation:pulse 2s ease-in-out infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}
+    .friend-marker{display:flex;flex-direction:column;align-items:center;pointer-events:none}
+    .friend-dot{width:32px;height:32px;border-radius:50%;background:#7C3AED;border:3px solid #fff;
+      box-shadow:0 2px 8px rgba(124,58,237,.5);display:flex;align-items:center;justify-content:center}
+    .friend-dot svg{width:18px;height:18px}
+    .friend-label{margin-top:2px;background:rgba(124,58,237,.9);color:#fff;padding:2px 8px;
+      border-radius:8px;font-size:10px;font-weight:700;white-space:nowrap;
+      box-shadow:0 1px 4px rgba(0,0,0,.3);max-width:100px;overflow:hidden;text-overflow:ellipsis}
     .maplibregl-ctrl-attrib{font-size:9px!important}
   </style>
 </head>
@@ -67,6 +74,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
     var currentMarkers = [];
     var navMarkerObj = null;
     var hazardMarkers = [];
+    var friendMarkerObjs = [];
     var isNavMode = false;
     var userInteracted = false;
     var lastNavCenter = null;
@@ -390,6 +398,16 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
         map.getSource('range-circle').setData(emptyFC);
       }
 
+      /* — Friend markers — */
+      clearMarkerArray(friendMarkerObjs);
+      (data.friendMarkers||[]).forEach(function(f){
+        var el=document.createElement('div');
+        el.className='friend-marker';
+        el.innerHTML='<div class="friend-dot"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>'
+          +'<div class="friend-label">'+f.name.slice(0,12)+'</div>';
+        friendMarkerObjs.push(new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([f.lng,f.lat]).addTo(map));
+      });
+
       /* — Navigation marker + 3D camera — */
       if(navMarkerObj){navMarkerObj.remove();navMarkerObj=null}
       clearMarkerArray(hazardMarkers);
@@ -496,6 +514,7 @@ export const RouteMap = ({
   navigationHeading,
   mapType = 'roadmap',
   maxDistanceKm,
+  friendMarkers = [],
   onSelectRoute,
   onLongPress,
   onMapPress,
@@ -511,11 +530,13 @@ export const RouteMap = ({
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
     isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
+    friendMarkers,
   });
   propsRef.current = {
     origin, destination, routes, selectedRouteId,
     safetyMarkers, routeSegments, roadLabels, panTo,
     isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
+    friendMarkers,
   };
 
   const mapTypeRef = useRef(mapType);
@@ -590,6 +611,12 @@ export const RouteMap = ({
           : null,
       navHeading: p.navigationHeading,
       maxDistanceKm: p.maxDistanceKm || null,
+      friendMarkers: p.friendMarkers.map((f) => ({
+        userId: f.userId,
+        name: f.name,
+        lat: f.lat,
+        lng: f.lng,
+      })),
     };
 
     const js = `try{updateMap(${JSON.stringify(payload)})}catch(e){}true;`;
@@ -612,6 +639,7 @@ export const RouteMap = ({
     navigationLocation,
     navigationHeading,
     maxDistanceKm,
+    friendMarkers,
     pushUpdate,
   ]);
 

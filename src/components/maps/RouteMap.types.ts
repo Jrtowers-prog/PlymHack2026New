@@ -3,6 +3,15 @@ import type { DirectionsRoute, LatLng } from '@/src/types/google';
 
 export type MapType = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
 
+/** A live friend's position to display on the map */
+export interface FriendMapMarker {
+  userId: string;
+  name: string;
+  lat: number;
+  lng: number;
+  destinationName?: string;
+}
+
 export type RouteMapProps = {
   origin: LatLng | null;
   destination: LatLng | null;
@@ -25,6 +34,8 @@ export type RouteMapProps = {
   highlightCategory?: string | null;
   /** Max navigation distance in km — draws a red boundary circle around origin */
   maxDistanceKm?: number | null;
+  /** Live friend positions to show on the map */
+  friendMarkers?: FriendMapMarker[];
   onSelectRoute?: (routeId: string) => void;
   onLongPress?: (location: LatLng) => void;
   onMapPress?: (location: LatLng) => void;
